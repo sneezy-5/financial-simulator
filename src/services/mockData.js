@@ -3,68 +3,78 @@
 // Données officielles récupérées des sites des banques
 // ══════════════════════════════════════════════════════════════════════════
 
+import bniLogo from '../assets/logos/bni.jpg'
+import sgciLogo from '../assets/logos/sgci.png'
+import nsiaLogo from '../assets/logos/nsia.jpg'
+import ecobankLogo from '../assets/logos/ecobank.png'
+import ubaLogo from '../assets/logos/uba.png'
+import bsicLogo from '../assets/logos/bsic.png'
+import biciciLogo from '../assets/logos/bicici.jpg'
+import sibLogo from '../assets/logos/sib.png'
+import autreBanqueLogo from '../assets/logos/autre_banque.png'
+
 export const BANQUES = [
   {
     id: 1,
     nom: "BNI",
     pays: "CI",
-    logo: "/src/assets/logos/bni.jpg",
+    logo: bniLogo,
     description: "Banque Nationale d'Investissement"
   },
   {
     id: 2,
     nom: "SGCI",
     pays: "CI",
-    logo: "/src/assets/logos/sgci.png",
+    logo: sgciLogo,
     description: "Société Générale Côte d'Ivoire"
   },
   {
     id: 3,
     nom: "NSIA Banque",
     pays: "CI",
-    logo: "/src/assets/logos/nsia.jpg",
+    logo: nsiaLogo,
     description: "NSIA Banque"
   },
   {
     id: 4,
     nom: "Ecobank",
     pays: "CI",
-    logo: "/src/assets/logos/ecobank.png",
+    logo: ecobankLogo,
     description: "La banque panafricaine"
   },
   {
     id: 5,
     nom: "UBA",
     pays: "CI",
-    logo: "/src/assets/logos/uba.png",
+    logo: ubaLogo,
     description: "United Bank for Africa"
   },
   {
     id: 6,
     nom: "BSIC",
     pays: "CI",
-    logo: "/src/assets/logos/bsic.png",
+    logo: bsicLogo,
     description: "Banque Sahélo-Saharienne pour l'Investissement et le Commerce"
   },
   {
     id: 7,
     nom: "BICICI",
     pays: "CI",
-    logo: "/src/assets/logos/bicici.jpg",
+    logo: biciciLogo,
     description: "Banque Internationale pour le Commerce et l'Industrie de la Côte d'Ivoire"
   },
   {
     id: 8,
     nom: "SIB",
     pays: "CI",
-    logo: "/src/assets/logos/sib.png",
+    logo: sibLogo,
     description: "Société Ivoirienne de Banque"
   },
   {
     id: 99,
     nom: "Autre Banque",
     pays: "CI",
-    logo: "/src/assets/logos/autre_banque.png",
+    logo: autreBanqueLogo,
     description: "Simulation générique pour toute autre banque"
   }
 ];
