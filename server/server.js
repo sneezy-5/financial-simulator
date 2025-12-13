@@ -12,6 +12,8 @@ const PORT = 3001;
 // Middleware
 app.use(cors());
 app.use(express.json());
+// Important pour avoir la vraie IP derrière Nginx
+app.set('trust proxy', true);
 
 // Configuration Upload
 const upload = multer({ dest: 'uploads/' });
@@ -41,7 +43,12 @@ app.get('/api/stats', async (req, res) => {
 
 app.post('/api/stats/visit', async (req, res) => {
     try {
-        const ip = req.ip || req.connection.remoteAddress;
+        let ip = req.ip || req.connection.remoteAddress;
+
+        // Nettoyage de l'IP (ex: ::ffff:192.168.1.1 -> 192.168.1.1)
+        if (ip && ip.includes('::ffff:')) {
+            ip = ip.split(':').pop();
+        }
 
         // Recherche de la dernière visite de cette IP
         const lastVisit = await Visit.findOne({
