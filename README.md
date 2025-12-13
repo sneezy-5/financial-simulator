@@ -17,6 +17,10 @@ Une application web moderne et interactive pour simuler des prêts bancaires, é
     *   Retours visuels interactifs (Jauges de quotité, animations de score).
     *   Système de notifications (Toasts) pour la validation des données.
 *   **Tableau d'Amortissement** : Visualisation détaillée de l'échéancier de remboursement.
+*   **Administration & Analytics** :
+    *   Backend Node.js/Express avec base de données SQLite.
+    *   Suivi des visites et statistiques.
+    *   **Accès Admin** : Tableau de bord caché accessible via le raccourci `Ctrl + Shift + A`.
 
 ## 🛠️ Stack Technique
 

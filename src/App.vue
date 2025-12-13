@@ -1,6 +1,8 @@
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { api, LABELS } from './services/mockData'
+import AdminDashboard from './components/AdminDashboard.vue'
+import HRPayroll from './components/HRPayroll.vue'
 
 // ══════════════════════════════════════════════════════════════
 // STATE
@@ -45,6 +47,14 @@ const showFullTable = ref(false)
 
 onMounted(async () => {
   banques.value = await api.getBanques()
+  
+  // Enregistrement de la visite via le Backend Node.js
+  try {
+    await fetch('/api/stats/visit', { method: 'POST' })
+    console.log('📈 Visite enregistrée')
+  } catch (e) {
+    console.warn('Backend non joignable (Analytics désactivé)')
+  }
 })
 
 watch(selectedBanque, async (banque) => {
@@ -71,7 +81,25 @@ watch(selectedPret, (pret) => {
 // HELPERS
 // ══════════════════════════════════════════════════════════════
 
-const fcfa = (val) => new Intl.NumberFormat('fr-FR').format(Math.round(val)) + ' FCFA'
+// Formatage FCFA avec espace manuel pour être sûr de l'affichage
+const fcfa = (val) => {
+  if (val === undefined || val === null) return '0 FCFA'
+  return Math.round(val).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + ' FCFA'
+}
+
+// Formatage pour INPUT (sans FCFA, juste des espaces)
+const formatInput = (val) => {
+  if (val === 0 || val === '0') return ''
+  return val ? new Intl.NumberFormat('fr-FR').format(val) : ''
+}
+const parseInput = (event) => {
+  const val = event.target.value
+  if (!val) return 0
+  // Solution robuste : On supprime TOUT ce qui n'est pas un chiffre (0-9)
+  const clean = val.toString().replace(/[^0-9]/g, '')
+  // On retourne l'entier ou 0 si vide
+  return clean ? parseInt(clean, 10) : 0
+}
 
 // ══════════════════════════════════════════════════════════════
 // TAUX PERSONNALISABLE (pour toutes les banques)
@@ -270,34 +298,62 @@ const verificationConditions = computed(() => {
 // ══════════════════════════════════════════════════════════════
 
 const decision = computed(() => {
-  let eligible = true
   const raisons = []
-
+  const raisonsQuotite = []
+  const autresRaisons = []
+  
   // Vérification conditions prêt
   if (!verificationConditions.value.ok) {
-    eligible = false
-    raisons.push(...verificationConditions.value.erreurs)
+    autresRaisons.push(...verificationConditions.value.erreurs)
   }
 
-  // Quotité
+  // Quotité - Traitement spécial
   if (quotiteUtilisee.value > 35) {
-    eligible = false
-    raisons.push(`Taux d'endettement: ${quotiteUtilisee.value.toFixed(1)}% (max 35%)`)
+    raisonsQuotite.push(`Taux d'endettement: ${quotiteUtilisee.value.toFixed(1)}% (max 35%)`)
   }
 
   // Reste à vivre
   if (resteAVivre.value < resteAVivreMinimum.value) {
-    eligible = false
-    raisons.push(`Reste à vivre insuffisant: ${fcfa(resteAVivre.value)} (min ${fcfa(resteAVivreMinimum.value)} pour ${client.value.personnesCharge + 1} personne(s))`)
+    autresRaisons.push(`Reste à vivre insuffisant: ${fcfa(resteAVivre.value)} (min ${fcfa(resteAVivreMinimum.value)} pour ${client.value.personnesCharge + 1} personne(s))`)
   }
 
   // Score
   if (scoring.value.score < 40) {
-    eligible = false
-    raisons.push(`Score de crédit: ${scoring.value.score}/100 (min 40)`)
+    autresRaisons.push(`Score de crédit: ${scoring.value.score}/100 (min 40)`)
   }
 
-  return { eligible, raisons, avertissements: verificationConditions.value.avertissements }
+  // Déterminer le statut et le message
+  let statut = 'eligible'
+  let message = ''
+  let typeMessage = 'success' // success, warning, danger
+  
+  if (autresRaisons.length > 0) {
+    // Il y a des raisons autres que la quotité
+    statut = 'non_eligible'
+    typeMessage = 'danger'
+    message = 'Votre dossier ne répond pas aux critères d\'éligibilité de ce prêt.'
+    raisons.push(...autresRaisons, ...raisonsQuotite)
+  } else if (raisonsQuotite.length > 0) {
+    // Seule la quotité pose problème
+    statut = 'en_jeu'
+    typeMessage = 'warning'
+    message = '⚠️ Attention : Votre taux d\'endettement dépasse la norme autorisée'
+    raisons.push(...raisonsQuotite)
+  } else {
+    // Tout est OK
+    statut = 'eligible'
+    typeMessage = 'success'
+    message = 'Félicitations ! Votre profil correspond aux critères de ce prêt.'
+  }
+
+  return { 
+    eligible: statut === 'eligible',
+    statut, 
+    message,
+    typeMessage,
+    raisons, 
+    avertissements: verificationConditions.value.avertissements 
+  }
 })
 
 // ══════════════════════════════════════════════════════════════
@@ -362,11 +418,38 @@ const goToStep = (s) => {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.value = null }
+
+const showAdmin = ref(false)
+const showHR = ref(false)
+
+// Raccourci secret : Ctrl+Maj+A pour toggle admin
+const handleKeydown = (e) => {
+  if (e.ctrlKey && e.shiftKey && e.key === 'A') {
+    showAdmin.value = !showAdmin.value
+  }
+}
+onMounted(() => window.addEventListener('keydown', handleKeydown))
 </script>
 
 <template>
   <div class="app-container">
     
+    <!-- Admin Dashboard Overlay -->
+    <div v-if="showAdmin" style="position: fixed; inset: 0; background: #f1f5f9; z-index: 10000; overflow-y: auto;">
+      <div style="max-width: 1000px; margin: 0 auto; position: relative;">
+        <button @click="showAdmin = false" style="position: absolute; right: 1rem; top: 1rem; padding: 0.5rem 1rem; cursor: pointer;">Fermer ✕</button>
+        <AdminDashboard />
+      </div>
+    </div>
+    
+    <!-- HR Dashboard Overlay -->
+    <div v-if="showHR" style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 10000; overflow-y: auto; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
+      <div style="width: 100%; max-width: 700px; padding: 1rem; position: relative;">
+        <button @click="showHR = false" style="position: absolute; right: 2rem; top: 2rem; background: white; border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1); z-index: 10;">✕</button>
+        <HRPayroll />
+      </div>
+    </div>
+
     <!-- Toast Notification -->
     <div v-if="toast.show" class="toast-notification" :class="toast.type">
       <span class="toast-icon">{{ toast.type === 'error' ? '⚠️' : '✅' }}</span>
@@ -374,9 +457,23 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
       <button class="toast-close" @click="toast.show = false">×</button>
     </div>
     
+    
     <div class="text-center mb-6">
-      <h1 style="color: #1e40af;">🏦 Simulateur de Prêt Bancaire</h1>
-      <p class="text-muted">Évaluez votre éligibilité en toute transparence</p>
+      <div style="display: flex; justify-content: space-between; align-items: center; max-width: 1200px; margin: 0 auto; padding: 0 1rem;">
+        <div style="flex: 1;"></div>
+        <div style="flex: 1; text-align: center;">
+          <h1 style="color: #1e40af; margin: 0;">🏦 Simulateur de Prêt Bancaire</h1>
+          <p class="text-muted" style="margin: 0.5rem 0 0 0;">Évaluez votre éligibilité en toute transparence</p>
+        </div>
+        <div style="flex: 1; display: flex; justify-content: flex-end;">
+          <button @click="showHR = true" class="btn-hr-access">
+            <span class="hr-icon-wrapper">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+            </span>
+            <span class="hr-text">Accès RH</span>
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Bouton Retour Fixe Global (visible sur étapes 2 et 3) -->
@@ -441,7 +538,9 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
             
             <!-- Header du prêt sélectionné -->
             <div class="pret-selected-header">
-              <div class="pret-selected-icon">🎯</div>
+              <div class="pret-selected-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
+              </div>
               <div class="pret-selected-info">
                 <h4>{{ selectedPret.nom }}</h4>
                 <p>{{ selectedPret.description }}</p>
@@ -455,7 +554,9 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
             <!-- Avantages avec animation -->
             <div class="avantages-section">
               <h5 class="section-subtitle">
-                <span class="subtitle-icon">✨</span> Avantages
+                <span class="subtitle-icon">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-yellow-500"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>
+                </span> Avantages
               </h5>
               <div class="avantages-grid">
                 <div 
@@ -464,7 +565,9 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
                   class="avantage-item"
                   :style="{ animationDelay: (index * 0.1) + 's' }"
                 >
-                  <span class="avantage-check">✓</span>
+                  <span class="avantage-check">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </span>
                   <span>{{ av }}</span>
                 </div>
               </div>
@@ -473,12 +576,16 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
             <!-- Critères d'éligibilité avec cartes -->
             <div class="eligibilite-section">
               <h5 class="section-subtitle">
-                <span class="subtitle-icon">📋</span> Critères d'éligibilité
+                <span class="subtitle-icon">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-500"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>
+                </span> Critères d'éligibilité
               </h5>
               <div class="criteres-grid">
                 
                 <div class="critere-card" style="--delay: 0s">
-                  <div class="critere-icon">👤</div>
+                  <div class="critere-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                  </div>
                   <div class="critere-content">
                     <span class="critere-label">Âge requis</span>
                     <span class="critere-value">{{ selectedPret.conditions.age_min }} - {{ selectedPret.conditions.age_max }} ans</span>
@@ -486,7 +593,9 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
                 </div>
                 
                 <div class="critere-card" style="--delay: 0.05s">
-                  <div class="critere-icon">📅</div>
+                  <div class="critere-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                  </div>
                   <div class="critere-content">
                     <span class="critere-label">Ancienneté bancaire min.</span>
                     <span class="critere-value">{{ selectedPret.conditions.anciennete_min }} mois à la banque</span>
@@ -494,7 +603,9 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
                 </div>
                 
                 <div class="critere-card" style="--delay: 0.1s">
-                  <div class="critere-icon">💰</div>
+                  <div class="critere-icon">
+                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                  </div>
                   <div class="critere-content">
                     <span class="critere-label">Revenus minimum</span>
                     <span class="critere-value">{{ fcfa(selectedPret.conditions.revenus_min) }}</span>
@@ -502,7 +613,9 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
                 </div>
                 
                 <div class="critere-card" style="--delay: 0.15s">
-                  <div class="critere-icon">📝</div>
+                  <div class="critere-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                  </div>
                   <div class="critere-content">
                     <span class="critere-label">Contrats acceptés</span>
                     <span class="critere-value contrats-list">{{ selectedPret.conditions.types_contrat.map(c => LABELS.contrats[c]).join(', ') }}</span>
@@ -510,7 +623,9 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
                 </div>
                 
                 <div v-if="selectedPret.conditions.apport_personnel > 0" class="critere-card" style="--delay: 0.2s">
-                  <div class="critere-icon">🏦</div>
+                  <div class="critere-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l8-4 8 4v14"/><path d="M10 9a2 2 0 0 1 4 0v12"/></svg>
+                  </div>
                   <div class="critere-content">
                     <span class="critere-label">Apport personnel</span>
                     <span class="critere-value highlight-warning">{{ selectedPret.conditions.apport_personnel }}% du montant</span>
@@ -518,7 +633,9 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
                 </div>
                 
                 <div v-if="selectedPret.conditions.garantie_requise" class="critere-card" style="--delay: 0.25s">
-                  <div class="critere-icon">🔐</div>
+                  <div class="critere-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                  </div>
                   <div class="critere-content">
                     <span class="critere-label">Garantie requise</span>
                     <span class="critere-value">{{ selectedPret.conditions.types_garantie_acceptes.map(g => LABELS.garanties[g]).join(', ') }}</span>
@@ -526,7 +643,9 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
                 </div>
                 
                 <div v-else-if="selectedPret.conditions.garantie_si_montant_superieur" class="critere-card" style="--delay: 0.25s">
-                  <div class="critere-icon">🔐</div>
+                  <div class="critere-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                  </div>
                   <div class="critere-content">
                     <span class="critere-label">Garantie conditionnelle</span>
                     <span class="critere-value">Si montant > {{ fcfa(selectedPret.conditions.garantie_si_montant_superieur) }}</span>
@@ -534,7 +653,9 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
                 </div>
                 
                 <div v-if="selectedPret.conditions.domiciliation_obligatoire" class="critere-card info" style="--delay: 0.3s">
-                  <div class="critere-icon">🏠</div>
+                  <div class="critere-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+                  </div>
                   <div class="critere-content">
                     <span class="critere-label">Domiciliation</span>
                     <span class="critere-value">Obligatoire</span>
@@ -546,7 +667,9 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
 
             <!-- Note informative -->
             <div class="info-note">
-              <span class="note-icon">💡</span>
+              <span class="note-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+              </span>
               <span>Les conditions définitives seront confirmées après étude de votre dossier par la banque.</span>
             </div>
             
@@ -637,6 +760,15 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
                 <span>{{ selectedPret?.duree_min || 0 }} mois</span>
                 <span>{{ selectedPret?.duree_max || 0 }} mois</span>
               </div>
+              
+              <div v-if="selectedPret && duree > selectedPret.duree_min" class="duration-warning animate-in" style="margin-top: 0.75rem; padding: 0.75rem; background: #fffbeb; border-radius: 6px; border-left: 3px solid #f59e0b; display: flex; gap: 0.75rem; align-items: start;">
+                <span style="flex-shrink: 0; margin-top: 2px;">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                </span>
+                <p style="margin: 0; font-size: 0.8rem; color: #92400e; line-height: 1.4;">
+                  <strong>Attention :</strong> En augmentant la durée, vous réduisez votre mensualité mais <strong>vous augmentez le coût total</strong> de votre crédit.
+                </p>
+              </div>
             </div>
 
             <!-- Taux d'intérêt -->
@@ -683,7 +815,7 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
             <!-- Apport si requis -->
             <div v-if="selectedPret?.conditions.apport_personnel > 0" class="param-group">
               <label>Apport personnel disponible</label>
-              <input type="number" v-model.number="client.apportDisponible" step="100000" placeholder="0" />
+              <input type="text" :value="formatInput(client.apportDisponible)" @input="client.apportDisponible = parseInput($event)" placeholder="0" />
               <p class="text-xs text-muted mt-2">
                 Minimum requis: {{ selectedPret.conditions.apport_personnel }}% = {{ fcfa(montant * selectedPret.conditions.apport_personnel / 100) }}
               </p>
@@ -702,7 +834,19 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
 
             <!-- Mensualité -->
             <div class="mensualite-card">
-              <span class="label"><span class="icon-svg icon-wallet"></span> Mensualité estimée</span>
+              <div class="label" style="display: flex; align-items: center; gap: 0.5rem;">
+                <span class="icon-svg icon-wallet"></span> 
+                Mensualité estimée
+                <div class="tooltip-container">
+                  <span class="info-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                  </span>
+                  <div class="tooltip-content">
+                    C'est ce que vous allez payer chaque mois à la banque.<br>
+                    <small style="opacity: 0.8;">(Capital + Intérêts, hors assurance)</small>
+                  </div>
+                </div>
+              </div>
               <span class="value">{{ fcfa(mensualite) }}</span>
             </div>
           </div>
@@ -742,7 +886,7 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
               </div>
               <div class="param-group" style="margin-bottom: 0;">
                 <label>Revenus mensuels nets</label>
-                <input type="number" v-model.number="client.revenus" step="10000" />
+                <input type="text" :value="formatInput(client.revenus)" @input="client.revenus = parseInput($event)" placeholder="Ex: 500 000" />
               </div>
             </div>
 
@@ -753,15 +897,15 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
               <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem;">
                 <div>
                   <label class="text-xs" style="color: var(--text-muted); font-weight: 400;">Loyer</label>
-                  <input type="number" v-model.number="client.chargesLoyer" step="5000" placeholder="0" />
+                  <input type="text" :value="formatInput(client.chargesLoyer)" @input="client.chargesLoyer = parseInput($event)" placeholder="0" />
                 </div>
                 <div>
                   <label class="text-xs" style="color: var(--text-muted); font-weight: 400;">Crédits en cours</label>
-                  <input type="number" v-model.number="client.chargesCredits" step="5000" placeholder="0" />
+                  <input type="text" :value="formatInput(client.chargesCredits)" @input="client.chargesCredits = parseInput($event)" placeholder="0" />
                 </div>
                 <div>
                   <label class="text-xs" style="color: var(--text-muted); font-weight: 400;">Autres</label>
-                  <input type="number" v-model.number="client.autresCharges" step="5000" placeholder="0" />
+                  <input type="text" :value="formatInput(client.autresCharges)" @input="client.autresCharges = parseInput($event)" placeholder="0" />
                 </div>
               </div>
             </div>
@@ -791,19 +935,67 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
       <div v-if="step === 3" class="card-body animate-in">
         
         <!-- Décision -->
-        <div class="p-6 rounded-lg mb-6 text-center" :style="{ background: decision.eligible ? 'linear-gradient(135deg, #dcfce7, #bbf7d0)' : 'linear-gradient(135deg, #fee2e2, #fecaca)', border: decision.eligible ? '2px solid #22c55e' : '2px solid #ef4444' }">
-          <div style="font-size: 3rem;">
-            <span v-if="decision.eligible" class="icon-svg icon-check" style="width: 48px; height: 48px;"></span>
-            <span v-else class="icon-svg icon-x" style="width: 48px; height: 48px;"></span>
+        <!-- Décision -->
+        <div class="p-6 rounded-lg mb-6 text-center" 
+          :style="{ 
+            background: decision.typeMessage === 'success' ? 'linear-gradient(135deg, #dcfce7, #bbf7d0)' : 
+                       decision.typeMessage === 'warning' ? 'linear-gradient(135deg, #fef3c7, #fde68a)' :
+                       'linear-gradient(135deg, #fee2e2, #fecaca)', 
+            border: decision.typeMessage === 'success' ? '2px solid #22c55e' : 
+                   decision.typeMessage === 'warning' ? '2px solid #f59e0b' :
+                   '2px solid #ef4444' 
+          }">
+          <div style="font-size: 3rem; display: flex; justify-content: center; margin-bottom: 1rem;">
+            <svg v-if="decision.typeMessage === 'success'" xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#166534" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+            <svg v-else-if="decision.typeMessage === 'warning'" xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#92400e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+            <svg v-else xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
           </div>
-          <h2 :style="{ color: decision.eligible ? '#166534' : '#dc2626' }">
-            {{ decision.eligible ? 'Prêt Éligible' : 'Prêt Non Éligible' }}
+          <h2 :style="{ 
+            color: decision.typeMessage === 'success' ? '#166534' : 
+                   decision.typeMessage === 'warning' ? '#92400e' :
+                   '#dc2626' 
+          }">
+            {{ decision.message }}
           </h2>
           <p class="text-muted">{{ selectedPret?.nom }} — {{ selectedBanque?.nom }}</p>
           
-          <div v-if="!decision.eligible" class="mt-4 text-left p-4 rounded" style="background: rgba(255,255,255,0.8);">
+          <!-- Avertissement spécial pour quotité (s'affiche si > 35% peu importe le statut) -->
+          <div v-if="quotiteUtilisee > 35" class="mt-4 text-left p-4 rounded" style="background: rgba(255,255,255,0.9); border-left: 4px solid #ef4444;">
+            <div style="display: flex; align-items: start; gap: 0.75rem;">
+              <span style="flex-shrink: 0; color: #dc2626;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"></polygon><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+              </span>
+              <div>
+                <strong style="color: #991b1b; font-size: 1.1rem; display: block; margin-bottom: 0.5rem;">
+                  ADRESSEZ-VOUS A VOTRE BANQUIER : Vous risquez d'être surendetté
+                </strong>
+                <p style="color: #7f1d1d; margin: 0; line-height: 1.6;">
+                  Votre taux d'endettement actuel atteint <strong>{{ quotiteUtilisee.toFixed(1) }}%</strong> (limite conseillée : 35%). 
+                </p>
+                <p style="color: #7f1d1d; margin: 0.5rem 0 0 0; line-height: 1.6;">
+                  En contractant ce prêt, vous mettez dangereusement en péril votre équilibre budgetaire. Les banques refusent généralement les dossiers présentant un tel risque pour vous protéger.
+                </p>
+                
+                <div style="margin-top: 1rem; padding: 0.75rem; background: #fee2e2; border-radius: 6px;">
+                  <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#991b1b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+                     <strong style="color: #991b1b;">Pour éviter le surendettement :</strong>
+                  </div>
+                  <ul style="margin: 0 0 0 1.5rem; color: #7f1d1d; font-size: 0.95rem;">
+                    <li>Diminuez le montant emprunté</li>
+                    <li>Allongez la durée de remboursement</li>
+                    <li>Remboursez vos autres crédits avant d'en prendre un nouveau</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Raisons du refus (autres cas) -->
+          <div v-if="decision.statut === 'non_eligible' && decision.raisons.length" class="mt-4 text-left p-4 rounded" style="background: rgba(255,255,255,0.8);">
             <strong style="color: #dc2626; display: flex; align-items: center; gap: 0.5rem;">
-                <span class="icon-svg icon-x" style="width:16px;height:16px;"></span> Raisons du refus :
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
+                 Raisons du refus :
             </strong>
             <ul style="margin: 0.5rem 0 0 1.25rem; color: #7f1d1d; font-size: 0.9rem;">
               <li v-for="(r, i) in decision.raisons" :key="i">{{ r }}</li>
@@ -812,7 +1004,7 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
 
           <div v-if="decision.avertissements.length" class="avertissement-box">
             <div class="avertissement-header">
-              <span class="icon-svg icon-warning" style="width:18px;height:18px;"></span>
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
               <strong>À noter :</strong>
             </div>
             <ul class="avertissement-list">
@@ -826,18 +1018,22 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
           <div class="key-stat-card highlight">
              <div class="label">Mensualité</div>
              <div class="value">{{ fcfa(mensualite) }}</div>
+             <div class="stat-desc">Ce que vous paierez chaque mois à la banque</div>
           </div>
           <div class="key-stat-card">
               <div class="label">Montant</div>
               <div class="value">{{ fcfa(montant) }}</div>
+              <div class="stat-desc">Capital emprunté (Frais de dossier non inclus)</div>
           </div>
           <div class="key-stat-card">
               <div class="label">Coût total</div>
               <div class="value">{{ fcfa(coutTotal) }}</div>
+              <div class="stat-desc">Montant total remboursé (Capital + Intérêts)</div>
           </div>
           <div class="key-stat-card">
               <div class="label">Intérêts</div>
               <div class="value text-warning">{{ fcfa(totalInterets) }}</div>
+              <div class="stat-desc">Coût du crédit (ce que gagne la banque)</div>
           </div>
         </div>
 
@@ -970,8 +1166,8 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
 
     </div>
 
-    <div class="text-center mt-6 text-sm text-muted">
-      Simulation indicative. Les conditions définitives dépendent de l'étude de votre dossier.
+    <div class="text-center mt-6 text-sm text-muted p-4">
+      <p>Simulation indicative. Les conditions définitives dépendent de l'étude de votre dossier.</p>
     </div>
   </div>
 </template>
@@ -1101,4 +1297,160 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
   from { transform: translateX(100%); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
 }
+
+/* Bouton Accès RH */
+.btn-hr-access {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-hr-access::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+  transition: left 0.5s;
+}
+
+.btn-hr-access:hover::before {
+  left: 100%;
+}
+
+.btn-hr-access:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+}
+
+.btn-hr-access:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+}
+
+.hr-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hr-icon-wrapper svg {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.hr-text {
+  font-size: 1rem;
+  letter-spacing: 0.3px;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+/* Responsive pour mobile */
+@media (max-width: 768px) {
+  .btn-hr-access {
+    padding: 0.6rem 1rem;
+    font-size: 0.85rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .btn-hr-access .hr-text {
+    display: none;
+  }
+  
+  .btn-hr-access {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    justify-content: center;
+    border-radius: 50%;
+  }
+}
+/* Tooltip Mensualité */
+.tooltip-container {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: help;
+  margin-left: 0.5rem;
+}
+
+.info-icon {
+  display: flex;
+  align-items: center;
+  color: #64748b;
+  transition: color 0.2s;
+}
+
+.tooltip-container:hover .info-icon {
+  color: #2563eb;
+}
+
+.tooltip-content {
+  visibility: hidden;
+  opacity: 0;
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-8px);
+  background: #1e293b;
+  color: white;
+  padding: 0.75rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  width: 220px;
+  pointer-events: none;
+  transition: all 0.2s;
+  z-index: 50;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  font-weight: 400;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.tooltip-content::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-left: -6px;
+  border-width: 6px;
+  border-style: solid;
+  border-color: #1e293b transparent transparent transparent;
+}
+
+.tooltip-container:hover .tooltip-content {
+  visibility: visible;
+  opacity: 1;
+  transform: translateX(-50%) translateY(-12px);
+}
+.stat-desc {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-top: 0.5rem;
+  font-weight: 400;
+  line-height: 1.4;
+}
+.key-stat-card.highlight .stat-desc {
+  color: rgba(255, 255, 255, 0.9);
+}
 </style>
+
