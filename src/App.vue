@@ -462,7 +462,10 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
       <div style="display: flex; justify-content: space-between; align-items: center; max-width: 1200px; margin: 0 auto; padding: 0 1rem;">
         <div style="flex: 1;"></div>
         <div style="flex: 1; text-align: center;">
-          <h1 style="color: #1e40af; margin: 0;">🏦 Simulateur de Prêt Bancaire</h1>
+          <h1 style="color: #1e40af; margin: 0; display: flex; align-items: center; justify-content: center; gap: 1rem;">
+            <!-- <img src="./assets/logo.png" alt="Logo" style="height: 50px; width: auto;" /> -->
+            Simulateur de Prêt Bancaire
+          </h1>
           <p class="text-muted" style="margin: 0.5rem 0 0 0;">Évaluez votre éligibilité en toute transparence</p>
         </div>
         <div style="flex: 1; display: flex; justify-content: flex-end;">
