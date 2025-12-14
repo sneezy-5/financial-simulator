@@ -4,7 +4,9 @@ const path = require('path');
 // Initialisation de SQLite (Fichier database.sqlite à la racine du serveur)
 const sequelize = new Sequelize({
     dialect: 'sqlite',
-    storage: path.join(__dirname, 'database.sqlite'),
+    dialect: 'sqlite',
+    // Utilisation d'un nouveau fichier pour éviter les conflits de permissions avec l'ancien fichier git-tracké
+    storage: process.env.DB_PATH || path.join(__dirname, 'financial_db.sqlite'),
     logging: false // Mettre à true pour voir les requêtes SQL dans la console
 });
 
