@@ -43,12 +43,15 @@ const processPayroll = async () => {
       body: formData
     })
 
-    if (!response.ok) throw new Error('Erreur lors du traitement')
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Erreur lors du traitement');
+    }
 
     const data = await response.json()
     result.value = data
   } catch (e) {
-    error.value = "Une erreur est survenue lors du traitement."
+    error.value = e.message
     console.error(e)
   } finally {
     uploading.value = false

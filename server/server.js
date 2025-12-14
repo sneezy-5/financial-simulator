@@ -43,7 +43,13 @@ app.get('/api/stats', async (req, res) => {
 
 app.post('/api/stats/visit', async (req, res) => {
     try {
-        let ip = req.ip || req.connection.remoteAddress;
+        // Détection robuste de l'IP (supporte Nginx, Proxies, etc.)
+        let ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress || req.ip;
+
+        // Si plusieurs IPs dans x-forwarded-for (ex: "client, proxy1, proxy2"), on prend la première
+        if (ip && ip.indexOf(',') > -1) {
+            ip = ip.split(',')[0].trim();
+        }
 
         // Nettoyage de l'IP (ex: ::ffff:192.168.1.1 -> 192.168.1.1)
         if (ip && ip.includes('::ffff:')) {
@@ -138,7 +144,7 @@ app.post('/api/rh/generate-pay-slips', cpUpload, async (req, res) => {
 
     } catch (error) {
         console.error("Erreur RH:", error);
-        res.status(500).json({ error: "Erreur lors du traitement" });
+        res.status(500).json({ error: error.message || "Erreur lors du traitement" });
     }
 });
 

@@ -80,8 +80,8 @@ function calculateSalaryRules(employee) {
 
     // IGR - Barème progressif mensuel CI
     let parts = 1;
-    if (employee['situation_matrimoniale']?.toLowerCase() === 'marie' ||
-        employee['situation_matrimoniale']?.toLowerCase() === 'marié') parts += 1;
+    const situation = String(employee['situation_matrimoniale'] || '').toLowerCase();
+    if (situation === 'marie' || situation === 'marié') parts += 1;
     parts += (parseFloat(employee['nombre_enfants'] || employee['enfants'] || 0) * 0.5);
 
     const baseIGR = (brutImposable - is - cn - cnpsSal) * 0.85;
@@ -174,10 +174,10 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
 
     // Données employé
     const emp = {
-        matricule: employee.matricule || '00020',
-        nom: (employee.nom || 'GBALOU').toUpperCase(),
-        prenom: employee.prenom || 'SERI GASPARD',
-        emploi: (employee.poste || employee.fonction || 'OPERATEUR DE SAISIES').toUpperCase(),
+        matricule: String(employee.matricule || '00020'),
+        nom: String(employee.nom || 'GBALOU').toUpperCase(),
+        prenom: String(employee.prenom || 'SERI GASPARD'),
+        emploi: String(employee.poste || employee.fonction || 'OPERATEUR DE SAISIES').toUpperCase(),
         categorie: employee.categorie || 'M2',
         parts: calc.parts.toFixed(2),
         dateEmbauche: employee.date_embauche || '01/07/2018',
@@ -475,8 +475,27 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null) =
                 return s ? XLSX.utils.sheet_to_json(s) : [];
             };
 
-            const employesList = getSheetData('EMPLOYES');
-            if (employesList.length === 0) return reject(new Error("Feuille EMPLOYES vide"));
+            // Recherche flexible de la feuille employés
+            let employesSheetName = workbook.SheetNames.find(n =>
+                n.toUpperCase() === 'EMPLOYES' ||
+                n.toUpperCase() === 'EMPLOYES' || // Doublon intentionnel pour clarté
+                n.toUpperCase() === 'EMPLOYES' ||
+                n.toUpperCase() === 'EMPLOYÉS'
+            );
+
+            if (!employesSheetName && workbook.SheetNames.length > 0) {
+                // Fallback: Si une seule feuille, on l'utilise
+                if (workbook.SheetNames.length === 1) {
+                    employesSheetName = workbook.SheetNames[0];
+                }
+            }
+
+            if (!employesSheetName) {
+                return reject(new Error("Feuille 'EMPLOYES' introuvable dans le fichier Excel."));
+            }
+
+            const employesList = getSheetData(employesSheetName);
+            if (employesList.length === 0) return reject(new Error(`La feuille ${employesSheetName} est vide`));
 
             // Lecture des données d'entreprise depuis INFORMATIONS_ENTREPRISE
             let entrepriseList = getSheetData('INFORMATIONS_ENTREPRISE');
@@ -510,7 +529,8 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null) =
             fullEmployees.forEach((emp, index) => {
                 try {
                     const calculs = calculateSalaryRules(emp);
-                    const safeName = (emp['nom'] || `Emp${index}`).replace(/[^a-z0-9]/gi, '_');
+                    const rawName = String(emp['nom'] || `Emp${index}`);
+                    const safeName = rawName.replace(/[^a-z0-9]/gi, '_');
 
                     if (isDocxMode) {
                         const viewData = { ...emp, ...calculs, date_jour: new Date().toLocaleDateString() };
