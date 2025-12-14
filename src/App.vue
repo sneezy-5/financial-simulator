@@ -505,18 +505,32 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
            ═══════════════════════════════════════════════════════════════ -->
       <div v-if="step === 1" class="card-body animate-in">
         
-        <div class="mb-6">
-          <label style="font-size: 1rem; margin-bottom: 1rem;">Choisissez votre banque</label>
+        <div v-if="!selectedBanque" class="mb-6 animate-in">
+          <label style="font-size: 1rem; margin-bottom: 1rem;">1. Choisissez votre banque</label>
           <div class="bank-grid">
-            <div v-for="b in banques" :key="b.id" class="bank-card" :class="{ selected: selectedBanque?.id === b.id }" @click="selectedBanque = b">
+            <div v-for="b in banques" :key="b.id" class="bank-card" @click="selectedBanque = b">
               <img :src="b.logo" :alt="b.nom" />
               <div class="name">{{ b.nom }}</div>
             </div>
           </div>
         </div>
 
-        <div v-if="selectedBanque" class="animate-in">
-          <label style="font-size: 1rem; margin-bottom: 1rem;">Prêts disponibles</label>
+        <div v-else class="animate-in">
+          <div class="flex items-center justify-between mb-4 p-4 bg-blue-50 rounded-lg border border-blue-100">
+             <div class="flex items-center gap-4">
+                 <img :src="selectedBanque.logo" :alt="selectedBanque.nom" style="height: 40px; width: auto;" />
+                 <div>
+                     <div class="text-sm text-muted">Banque sélectionnée</div>
+                     <div class="font-bold text-lg">{{ selectedBanque.nom }}</div>
+                 </div>
+             </div>
+             <button @click="selectedBanque = null; selectedPret = null" class="btn btn-outline" style="padding: 0.4rem 0.8rem; font-size: 0.85rem; border-radius: 20px; gap: 0.4rem;">
+                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path><polyline points="9 9 9 20"></polyline><polyline points="15 20 15 15"></polyline></svg>
+                 Choisir une autre banque
+             </button>
+          </div>
+
+          <label style="font-size: 1rem; margin-bottom: 1rem;">2. Choisissez un prêt</label>
           
           <div class="loan-list">
             <div v-for="p in prets" :key="p.id" class="loan-card" :class="{ selected: selectedPret?.id === p.id }" @click="selectedPret = p">
