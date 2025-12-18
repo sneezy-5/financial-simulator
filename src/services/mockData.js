@@ -11,6 +11,7 @@ import ubaLogo from '../assets/logos/uba.png'
 import bsicLogo from '../assets/logos/bsic.png'
 import biciciLogo from '../assets/logos/bicici.jpg'
 import sibLogo from '../assets/logos/sib.png'
+import bbgLogo from '../assets/logos/bbg.png'
 import autreBanqueLogo from '../assets/logos/autre_banque.png'
 
 export const BANQUES = [
@@ -69,6 +70,13 @@ export const BANQUES = [
     pays: "CI",
     logo: sibLogo,
     description: "Société Ivoirienne de Banque"
+  },
+  {
+    id: 9,
+    nom: "Bridge Bank Group",
+    pays: "CI",
+    logo: bbgLogo,
+    description: "BBG - The Bridge to your success"
   },
   {
     id: 99,
@@ -133,10 +141,139 @@ export const BANQUE_QUOTITE_MAP = {
   6: "bsic",      // BSIC (grille spécifique)
   7: "standard",  // BICICI
   8: "etendue",   // SIB (jusqu'à 60% du salaire)
+  9: "standard",  // BBG (Bridge Bank Group)
   99: "standard"  // Autre
 };
 
 export const TYPES_PRETS = [
+  // ═══════════════════════════════════════════════════════════════
+  // BRIDGE BANK GROUP (BBG)
+  // ═══════════════════════════════════════════════════════════════
+
+  // BRIDGE PRÊT CONSO
+  {
+    id: 901,
+    banque_id: 9,
+    nom: "Bridge Prêt Conso",
+    taux: 8.5,
+    taux_min: 8.5,
+    montant_min: 500000,
+    montant_max: 40000000,
+    duree_min: 6,
+    duree_max: 72,
+    frais_dossier: 1, // Standard estimé
+    assurance: 0.35, // Standard estimé
+    description: "Solution pour financer divers besoins personnels (rénovations, équipements, imprévus) sans puiser dans votre épargne.",
+    avantages: [
+      "Montant jusqu'à 40 millions FCFA",
+      "Durée jusqu'à 72 mois (6 ans)",
+      "Possibilité de rachat de crédit"
+    ],
+    documents: [
+      "Demande de prêt",
+      "Justificatifs de revenus",
+      "Facture proforma (si applicable)",
+      "Relevés bancaires"
+    ],
+    conditions: {
+      age_min: 21,
+      age_max: 60,
+      revenus_min: 100000, // Estimé
+      types_contrat: ["cdi", "fonctionnaire"],
+      domiciliation_obligatoire: true,
+      compte_cheque_obligatoire: true
+    }
+  },
+
+  // BRIDGE PRÊT IMMO
+  {
+    id: 902,
+    banque_id: 9,
+    nom: "Bridge Prêt Immo",
+    taux: 8.5,
+    montant_min: 5000000,
+    montant_max: 150000000, // Max absolu (Acquisition/Refinancement)
+    duree_min: 60,
+    duree_max: 240, // 20 ans
+    frais_dossier: 1,
+    assurance: 0.35,
+    description: "Formule pour l'acquisition, l'aménagement, la construction ou le refinancement d'un bien immobilier.",
+    avantages: [
+      "Durée jusqu'à 20 ans",
+      "Option de différé possible",
+      "Taux avantageux avec PEL",
+      "Financement Acquisition (150M), Construction (125M), Rénovation (100M)"
+    ],
+    conditions: {
+      age_min: 21,
+      age_max: 60,
+      revenus_min: 500000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: true,
+      types_garantie_acceptes: ["hypotheque"],
+      domiciliation_obligatoire: true,
+      zone_geographique: ["Abidjan", "Grand Abidjan", "San Pedro"]
+    }
+  },
+
+  // BRIDGE PRÊT EXPRESS (Urgence)
+  {
+    id: 903,
+    banque_id: 9,
+    nom: "Bridge Prêt Express",
+    taux: 12.0,
+    montant_min: 50000,
+    montant_max: 1000000, // Sera plafonné dynamiquement à 1 mois de salaire
+    duree_min: 1,
+    duree_max: 6,
+    frais_dossier: 10000, // Forfait estimé ou %
+    assurance: 0.35,
+    description: "Prêt d'urgence pour besoins courants, sans justificatifs particuliers (factures).",
+    avantages: [
+      "Réponse rapide pour urgences",
+      "Pas de justificatifs d'utilisation requis",
+      "Jusqu'à 100% du salaire net domicilié"
+    ],
+    conditions: {
+      age_min: 21,
+      revenus_min: 100000,
+      types_contrat: ["cdi", "fonctionnaire", "cdd"],
+      domiciliation_obligatoire: true,
+      plafond_salaire: 1 // 1 mois de salaire max
+    }
+  },
+
+  // AVANCE SUR SALAIRE (Découvert)
+  {
+    id: 904,
+    banque_id: 9,
+    nom: "Avance sur Salaire (Découvert)",
+    type: "decouvert",
+    taux: 12.0, // Taux annuel
+    taux_mensuel: 1.0, // ~1% par mois
+    montant_min: 150000, // 30% de 500k
+    montant_max: 5000000, // Plafonné à 30% du salaire
+    duree_min: 12, // Durée du contrat (renouvelable)
+    duree_max: 12,
+    frais_dossier: 2, // 2% HT
+    assurance: 10000, // Forfait min (varie 10k-40k)
+    description: "Découvert permanent renouvelable pour faire face aux dépenses imprévues. Utilisable par chèque ou carte.",
+    avantages: [
+      "Découvert autorisé de 30% du salaire net",
+      "Pas d'intérêts si non utilisé",
+      "Renouvellement par tacite reconduction",
+      "Assurance Décès/Invalidité incluse"
+    ],
+    conditions: {
+      salaire_min: 500000,
+      anciennete_min: 6,
+      types_contrat: ["cdi", "fonctionnaire"],
+      domiciliation_obligatoire: true,
+      employeur_agree: true, // Employeur doit être agréé par BBG
+      plafond_salaire_pct: 30 // 30% du salaire
+    }
+  },
+
   // ═══════════════════════════════════════════════════════════════
   // BNI - BANQUE NATIONALE D'INVESTISSEMENT (Données officielles bni.ci)
   // ═══════════════════════════════════════════════════════════════
