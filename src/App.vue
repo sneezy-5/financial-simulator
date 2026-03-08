@@ -443,9 +443,9 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
     </div>
     
     <!-- HR Dashboard Overlay -->
-    <div v-if="showHR" style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 10000; overflow-y: auto; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
-      <div style="width: 100%; max-width: 700px; padding: 1rem; position: relative;">
-        <button @click="showHR = false" style="position: absolute; right: 2rem; top: 2rem; background: white; border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1); z-index: 10;">✕</button>
+    <div v-if="showHR" style="position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10000; overflow-y: auto; display: flex; align-items: flex-start; justify-content: center; backdrop-filter: blur(5px); padding: 2rem 1rem 2rem;">
+      <div style="width: 100%; max-width: 1000px; position: relative;">
+        <button @click="showHR = false" style="position: absolute; right: -0.5rem; top: -0.5rem; background: white; border: none; width: 34px; height: 34px; border-radius: 50%; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 10; font-size: 1rem; font-weight: bold; display: flex; align-items: center; justify-content: center;">✕</button>
         <HRPayroll />
       </div>
     </div>

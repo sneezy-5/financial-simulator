@@ -119,6 +119,36 @@ app.post('/api/rh/generate-pay-slips', cpUpload, async (req, res) => {
     }
 });
 
+// ─── Génération bulletin individuel (Simulateur manuel) ───────────────────
+app.post('/api/rh/generate-single-payslip', async (req, res) => {
+    try {
+        const { employee } = req.body;
+        if (!employee || !employee.nom) {
+            return res.status(400).json({ error: 'Données employé manquantes' });
+        }
+
+        const calculs = payrollService.calculateSinglePayroll(employee);
+        const companyInfo = {
+            nom_entreprise: employee.nom_entreprise,
+            adresse: employee.adresse,
+            siege_social: employee.siege_social,
+            email_entreprise: employee.email_entreprise,
+            tel_entreprise: employee.tel_entreprise,
+            numero_cnps: employee.numero_cnps,
+            numero_contribuable: employee.numero_contribuable,
+        };
+
+        const pdfBuffer = await payrollService.generateSinglePdf(employee, calculs, companyInfo);
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="bulletin_${employee.nom}.pdf"`);
+        res.send(pdfBuffer);
+    } catch (error) {
+        console.error('Erreur génération bulletin individuel:', error);
+        res.status(500).json({ error: error.message || 'Erreur lors de la génération' });
+    }
+});
+
 const scrapingService = require('./scrapingService');
 
 app.post('/api/loans/scrape', async (req, res) => {
