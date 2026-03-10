@@ -116,11 +116,21 @@ const calc = computed(() => {
   let itsFinal = 0, ricf = 0
   let is = 0, cn = 0, igr = 0
 
-  let parts = 1.0
+  let n = Math.min(Number(emp.value.nombre_enfants) || 0, 4)
+  let parts = 1
   const sit = String(emp.value.situation_matrimoniale || '').toLowerCase()
-  if (sit === 'marie' || sit === 'marié' || sit === 'm' || sit === 'veuf' || sit === 'veuve' || sit === 'v') parts += 0.5
-  parts += Math.min(Number(emp.value.nombre_enfants) || 0, 4) * 0.5
-  if (parts > 5.0) parts = 5.0
+
+  if (sit.includes('mari')) {
+    // Marié : Base 2 + 0.5 par enfant
+    parts = 2 + (n * 0.5)
+  } else if (sit.includes('veuf') || sit.includes('veuv')) {
+    // Veuf : 1 part si sans enfant, sinon Base 2 + 0.5 par enfant (comme marié)
+    parts = (n > 0) ? (2 + (n * 0.5)) : 1
+  } else {
+    // Célibataire, Divorcé : 1 part si sans enfant, sinon Base 1.5 + 0.5 par enfant
+    parts = (n > 0) ? (1.5 + (n * 0.5)) : 1
+  }
+  parts = Math.min(parts, 5.0)
 
     if (emp.value.regime !== 'ancien') {
       // ---- RÉFORME 2024 (ITS UNIQUE) ----
@@ -248,11 +258,18 @@ const calculerBrutDepuisNet = () => {
     const cmuSal = 1000
     let impots = 0
 
-    let parts = 1.0
+    let n = Math.min(Number(emp.value.nombre_enfants) || 0, 4)
+    let parts = 1
     const sit = String(emp.value.situation_matrimoniale || '').toLowerCase()
-    if (sit === 'marie' || sit === 'marié' || sit === 'm' || sit === 'veuf' || sit === 'veuve' || sit === 'v') parts += 0.5
-    parts += Math.min(Number(emp.value.nombre_enfants) || 0, 4) * 0.5
-    if (parts > 5.0) parts = 5.0
+
+    if (sit.includes('mari')) {
+      parts = 2 + (n * 0.5)
+    } else if (sit.includes('veuf') || sit.includes('veuv')) {
+      parts = (n > 0) ? (2 + (n * 0.5)) : 1
+    } else {
+      parts = (n > 0) ? (1.5 + (n * 0.5)) : 1
+    }
+    parts = Math.min(parts, 5.0)
 
     if (emp.value.regime !== 'ancien') {
       const salImposable = Math.max(0, brutTest - cnpsSal - cmuSal)

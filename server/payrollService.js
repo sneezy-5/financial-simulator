@@ -74,11 +74,21 @@ function calculateSalaryRules(employee) {
     let itsFinal = 0, ricf = 0, baseTaxableITS = 0;
     let is = 0, cn = 0, igr = 0;
 
-    let parts = 1.0;
-    const situation = String(employee['situation_matrimoniale'] || '').toLowerCase()
-    if (situation === 'marie' || situation === 'marié' || situation === 'm' || situation === 'veuf' || situation === 'veuve' || situation === 'v') parts += 0.5;
-    parts += Math.min(parseFloat(employee['nombre_enfants'] || employee['enfants'] || 0), 4) * 0.5;
-    if (parts > 5.0) parts = 5.0;
+    let n = Math.min(parseFloat(employee['nombre_enfants'] || employee['enfants'] || 0), 4);
+    let parts = 1;
+    const situation = String(employee['situation_matrimoniale'] || '').toLowerCase();
+
+    if (situation.includes('mari')) {
+        // Marié : Base 2 + 0.5 par enfant
+        parts = 2 + (n * 0.5);
+    } else if (situation.includes('veuf') || situation.includes('veuv')) {
+        // Veuf : 1 part si sans enfant, sinon Base 2 + 0.5 par enfant (comme marié)
+        parts = (n > 0) ? (2 + (n * 0.5)) : 1;
+    } else {
+        // Célibataire, Divorcé : 1 part si sans enfant, sinon Base 1.5 + 0.5 par enfant
+        parts = (n > 0) ? (1.5 + (n * 0.5)) : 1;
+    }
+    parts = Math.min(parts, 5.0);
 
     const regime = employee['regime'] || 'ancien';
 
