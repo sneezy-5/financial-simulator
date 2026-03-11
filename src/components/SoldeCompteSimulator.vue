@@ -46,13 +46,24 @@ const calc = computed(() => {
   const salaireDeBase = +emp.value.salaire_de_base || 0;
 
   // ─── ANCIENNETÉ ────────────────────────────
-  let moisTotal = (ds.getFullYear() - de.getFullYear()) * 12 + (ds.getMonth() - de.getMonth());
-  if (ds.getDate() < de.getDate()) {
-    moisTotal--;
+  let diffAns = ds.getFullYear() - de.getFullYear();
+  let diffMois = ds.getMonth() - de.getMonth();
+  let diffJours = ds.getDate() - de.getDate();
+
+  if (diffJours < 0) {
+    diffMois--;
+    const previousMonth = new Date(ds.getFullYear(), ds.getMonth(), 0);
+    diffJours += previousMonth.getDate();
   }
-  moisTotal = Math.max(0, moisTotal);
-  const ans = Math.floor(moisTotal / 12);
-  const moisResto = moisTotal % 12;
+  if (diffMois < 0) {
+    diffAns--;
+    diffMois += 12;
+  }
+  
+  const ans = Math.max(0, diffAns);
+  const moisResto = Math.max(0, diffMois);
+  const joursResto = Math.max(0, diffJours);
+  const moisTotal = (ans * 12) + moisResto;
 
   // ─── PREVIS ────────────────────────────────
   // Art. 16.11 : < 1 an = 8 jours, 1-5 ans = 1 mois, > 5 ans = 2 mois
@@ -277,7 +288,7 @@ const calc = computed(() => {
   })
 
   return {
-    ans, moisTotal, moisResto,
+    ans, moisTotal, moisResto, joursResto,
     preavisLabel, preavisMoisTotal, preavisMoisReliquat, moisEffectues,
     preavisPayable, preavisDeduction, preavisApplique, montantPreavis,
     dateDebutReferenceConge, moisPeriode, totalJoursCP, montantConges,
@@ -294,10 +305,13 @@ const calc = computed(() => {
 // ══════════════════════════════════════════════
 const fcfa = v => v ? Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') : '0'
 const showRefs = ref(false)
-const ancLabel = (a, m) => {
+const ancLabel = (a, m, j = 0) => {
   const r = m % 12
-  if (a === 0) return `${m} mois`
-  return `${a} an${a > 1 ? 's' : ''}${r > 0 ? ` et ${r} mois` : ''}`
+  let label = ""
+  if (a > 0) label += `${a} an${a > 1 ? 's' : ''}`
+  if (r > 0) label += (label ? ', ' : '') + `${r} mois`
+  if (j > 0) label += (label ? ' et ' : '') + `${j} jour${j > 1 ? 's' : ''}`
+  return label || "0 jour"
 }
 
 const motifLabels = {
@@ -397,7 +411,7 @@ const reset = () => { generated.value = false; downloadUrl.value = null; errorMs
           <div class="auto-badge" v-if="calc">
             <span class="badge-icon">⏱</span>
             <span>Ancienneté calculée automatiquement : </span>
-            <strong>{{ ancLabel(calc.ans, calc.moisTotal) }}</strong>
+            <strong>{{ ancLabel(calc.ans, calc.moisTotal, calc.joursResto) }}</strong>
           </div>
 
           <div class="field-row">
@@ -652,7 +666,7 @@ const reset = () => { generated.value = false; downloadUrl.value = null; errorMs
               <span class="sep">•</span>
               <span>{{ motifLabels[emp.motif_rupture] }}</span>
               <span class="sep">•</span>
-              <span>Ancienneté : <strong>{{ ancLabel(calc.ans, calc.moisTotal) }}</strong></span>
+              <span>Ancienneté : <strong>{{ ancLabel(calc.ans, calc.moisTotal, calc.joursResto) }}</strong></span>
             </div>
           </div>
 
@@ -1181,7 +1195,7 @@ const reset = () => { generated.value = false; downloadUrl.value = null; errorMs
 }
 :global(.refs-close:hover) { background: rgba(255,255,255,0.35); }
 :global(.refs-modal-body) {
-  overflow-y: auto; padding: 0; flex: 1;
+  overflow-y: auto; overflow-x: auto; padding: 0; flex: 1;
 }
 :global(.refs-modal .refs-table) { width: 100%; border-collapse: collapse; font-size: 0.77rem; }
 :global(.refs-modal .refs-table th) {
@@ -1232,7 +1246,14 @@ const reset = () => { generated.value = false; downloadUrl.value = null; errorMs
 }
 
 @media (max-width: 820px) {
-  .stc-body { grid-template-columns: 1fr; }
-  .stc-form { border-right: none; border-bottom: 1px solid #e2e8f0; max-height: none; }
+  .stc-body { grid-template-columns: 1fr; display: block; }
+  .stc-form { border-right: none; border-bottom: 2px solid #eef2ff; max-height: none; padding: 1rem; }
+  .stc-preview { max-height: none; padding: 1rem; }
+  .field-row { grid-template-columns: 1fr; }
+  .stc-header { padding: 1rem; }
+  .stc-header-icon { font-size: 1.5rem; }
+  .ci-badge { display: none; }
+  :global(.refs-modal) { width: 95%; height: auto; max-height: 85vh; }
+  :global(.refs-modal .refs-table) { font-size: 0.65rem; }
 }
 </style>

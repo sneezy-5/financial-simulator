@@ -23,13 +23,35 @@ const printer = new PdfPrinter(fonts);
 function calculateSalaryRules(employee) {
     const salaireBaseMensuel = parseFloat(employee['salaire_base'] || 0);
     const joursDansLeMois = 30;
-    // Jours effectivement payés = jours travaillés - absences
-    const joursTrav = Math.max(0, parseFloat(employee['jours_travailles'] || 26) - parseFloat(employee['absences_jours'] || 0));
+    const joursBasePaie = parseFloat(employee['jours_travailles'] || 26);
+    const joursAbsences = parseFloat(employee['absences_jours'] || 0);
+    const autoConges = !!employee['auto_conges'];
+    let joursConges = parseFloat(employee['jours_conges_pris'] || 0);
+
+    if (autoConges) {
+        const dateRefStr = employee['date_dernier_conge'] || employee['date_embauche'];
+        if (dateRefStr) {
+            const dRef = new Date(dateRefStr);
+            const paieMois = parseInt(employee['mois'] || new Date().getMonth() + 1);
+            const paieAnnee = parseInt(employee['annee'] || new Date().getFullYear());
+            const dNow = new Date(paieAnnee, paieMois - 1, 1);
+            const diffMois = (dNow.getFullYear() - dRef.getFullYear()) * 12 + (dNow.getMonth() - dRef.getMonth());
+            if (diffMois > 0) {
+                joursConges = Math.min(30, Math.floor(diffMois * 2.2));
+            }
+        }
+    }
+
+    // Jours effectivement travaillés (salaire de base)
+    const joursTrav = Math.max(0, joursBasePaie - joursAbsences - joursConges);
+    const joursCP = joursConges;
 
     const salaireBase = Math.round((salaireBaseMensuel / joursDansLeMois) * joursTrav);
     const sursalaireTotal = parseFloat(employee['sursalaire'] || 0);
     const sursalaire = Math.round((sursalaireTotal / joursDansLeMois) * joursTrav);
-    const primeTransport = parseFloat(employee['prime_transport'] || 0);
+    const primeTransportMensuel = parseFloat(employee['prime_transport'] || 0);
+    const bulletinType = employee['bulletin_type'] || 'habituel';
+    const primeTransport = bulletinType === 'conges' ? 0 : Math.round((primeTransportMensuel / joursBasePaie) * joursTrav);
     const primeLogement = parseFloat(employee['prime_logement'] || 0);
 
     const nbHeuresSup = parseFloat(employee['heures_sup_nb'] || 0);
@@ -63,7 +85,6 @@ function calculateSalaryRules(employee) {
             primeAnciennete = Math.round(salaireBaseMensuel * (tauxAnc / 100));
         }
     }
-    const joursCP = parseFloat(employee['jours_conges_pris'] || 0);
 
     let allocationConges = 0;
     if (joursCP > 0) {
@@ -623,10 +644,13 @@ exports.generateStcPdf = (employee, calculs) => {
 
             const formatDate = (d) => d ? new Date(d).toLocaleDateString('fr-FR') : '—';
             const fcfaFmt = (v) => v ? Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') : '0';
-            const ancLabel = (ans, moisTotal) => {
+            const ancLabel = (ans, moisTotal, joursResto = 0) => {
                 const m = moisTotal % 12;
-                if (ans === 0) return `${moisTotal} mois`;
-                return `${ans} an${ans > 1 ? 's' : ''}${m > 0 ? ` et ${m} mois` : ''}`;
+                let label = "";
+                if (ans > 0) label += `${ans} an${ans > 1 ? 's' : ''}`;
+                if (m > 0) label += (label ? ", " : "") + `${m} mois`;
+                if (joursResto > 0) label += (label ? " et " : "") + `${joursResto} jour${joursResto > 1 ? 's' : ''}`;
+                return label || "0 jour";
             };
 
             const motifLabels = {
@@ -722,7 +746,7 @@ exports.generateStcPdf = (employee, calculs) => {
                                         [{ text: 'Motif :', fontSize: 7.5, bold: true, border: [false, false, false, false] }, { text: motifLabels[emp.motif_rupture] || emp.motif_rupture, fontSize: 7.5, border: [false, false, false, false] }],
                                         [{ text: 'Date entrée :', fontSize: 7.5, bold: true, border: [false, false, false, false] }, { text: formatDate(emp.date_embauche), fontSize: 7.5, border: [false, false, false, false] }],
                                         [{ text: 'Date sortie :', fontSize: 7.5, bold: true, border: [false, false, false, false] }, { text: formatDate(emp.date_sortie), fontSize: 7.5, border: [false, false, false, false] }],
-                                        [{ text: 'Ancienneté :', fontSize: 7.5, bold: true, border: [false, false, false, false] }, { text: ancLabel(c.ans, c.moisTotal), fontSize: 7.5, bold: true, color: purple, border: [false, false, false, false] }],
+                                        [{ text: 'Ancienneté :', fontSize: 7.5, bold: true, border: [false, false, false, false] }, { text: ancLabel(c.ans, c.moisTotal, c.joursResto), fontSize: 7.5, bold: true, color: purple, border: [false, false, false, false] }],
                                         [{ text: 'Salaire ref. :', fontSize: 7.5, bold: true, border: [false, false, false, false] }, { text: `${fcfaFmt(c.brut)} FCFA/mois`, fontSize: 7.5, border: [false, false, false, false] }],
                                     ]
                                 },

@@ -1,6 +1,14 @@
 <script setup>
 import { ref, computed } from 'vue'
 
+// Prop optionnel pour pré-sélectionner le type depuis le composant parent
+const props = defineProps({
+  initialType: {
+    type: String,
+    default: 'habituel' // 'habituel' | 'conges'
+  }
+})
+
 // ══════════════════════════════════════════════
 // DONNÉES DE L'EMPLOYÉ
 // ══════════════════════════════════════════════
@@ -29,7 +37,7 @@ const emp = ref({
   nombre_enfants: 0,
   date_embauche: '',
   // Temps de travail (basé sur le modèle Excel)
-  jours_travailles: 26,   // Jours réellement travaillés ce mois
+  jours_travailles: 30,   // Jours réellement travaillés ce mois (Standard 30j en CI)
   absences_jours: 0,      // Jours d'absence (déduits automatiquement)
   heures_sup_nb: 0,       // Nombre d'heures supplémentaires
   heures_sup_coef: 1.15,  // Coefficient de majoration (1.15 = +15%, 1.50 = +50%...)
@@ -52,16 +60,18 @@ const emp = ref({
   autres_retenues: 0,
   // Cotisations
   auto_anciennete: true,
+  auto_conges: props.initialType === 'conges',
+  date_dernier_conge: '',
   taux_at: 0.02,
   ayants_droit_cmu: 0,
   // Régime fiscal
   regime: '2024',
   // Période
-  mois: new Date().getMonth() + 1,
-  annee: new Date().getFullYear(),
   // Paiement
   virement: true,
-  rib: ''
+  rib: '',
+  // Type de bulletin
+  bulletin_type: props.initialType // 'habituel' | 'conges'
 })
 
 const moisLabels = [
@@ -74,6 +84,15 @@ const generated = ref(false)
 const downloadUrl = ref(null)
 const errorMsg = ref(null)
 const activeTab = ref('employe') // 'entreprise' | 'employe' | 'remuneration'
+
+const goToTab = (tabId) => {
+  activeTab.value = tabId
+  // Petit délai pour laisser le DOM se mettre à jour
+  setTimeout(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, 50)
+}
+
 const showHelp = ref(false)
 
 const explanations = {
@@ -120,14 +139,41 @@ const explanations = {
 // ══════════════════════════════════════════════
 const calc = computed(() => {
   const salaireBaseMensuel = +emp.value.salaire_base || 0
-  const joursDansLeMois = 30 // Standard paie ivoirienne
-  // Jours effectivement payés = jours travaillés - absences
-  const joursTrav = Math.max(0, (+emp.value.jours_travailles || 26) - (+emp.value.absences_jours || 0))
+  const joursDansLeMois = 30 
+  
+  // -- CALCUL AUTO CONGÉS --
+  let joursConges = +emp.value.jours_conges_pris || 0
+  let diffMoisConge = 0
+  if (emp.value.bulletin_type === 'conges' || emp.value.auto_conges) {
+    const dateRef = emp.value.date_dernier_conge || emp.value.date_embauche
+    if (dateRef) {
+      const dRef = new Date(dateRef)
+      const dNow = new Date(emp.value.annee, emp.value.mois - 1, 1)
+      diffMoisConge = (dNow.getFullYear() - dRef.getFullYear()) * 12 + (dNow.getMonth() - dRef.getMonth())
+      if (diffMoisConge > 0 && emp.value.auto_conges) {
+        joursConges = Math.min(30, Math.floor(diffMoisConge * 2.2))
+      }
+    }
+  } else {
+    joursConges = 0 // Pas de congés en bulletin habituel sauf si forcé
+  }
+  const joursAbsences = +emp.value.absences_jours || 0
+  const joursBasePaie = +emp.value.jours_travailles || 26
+  
+  // Les jours travaillés "réellement" sont ceux qui restent après congés et absences
+  const joursTrav = Math.max(0, joursBasePaie - joursAbsences - joursConges)
   
   const salaireBase = Math.round((salaireBaseMensuel / joursDansLeMois) * joursTrav)
   const sursalaire = Math.round((+emp.value.sursalaire || 0) / joursDansLeMois * joursTrav)
-  const primeTransport = +emp.value.prime_transport || 0
+  
+  const primeTransportMensuel = +emp.value.prime_transport || 0
   const primeLogement = +emp.value.prime_logement || 0
+  
+  // La prime de transport est liée à la présence effective (jours travaillés)
+  // En mode Bulletin de Congés, elle est strictement à 0.
+  const primeTransport = emp.value.bulletin_type === 'conges' 
+    ? 0 
+    : Math.round((primeTransportMensuel / joursBasePaie) * joursTrav)
   
   // Heures supplémentaires : taux horaire = salaire mensuel / 173.33h
   // Montant HS = nb heures × taux horaire × coefficient majoration
@@ -171,10 +217,9 @@ const calc = computed(() => {
 
   // -- CALCUL ALLOOCATION CONGÉS PAYÉS --
   let allocationConges = 0;
-  const joursCP = +(emp.value.jours_conges_pris) || 0;
-  if (joursCP > 0) {
+  if (joursConges > 0) {
      const baseCP = salaireBaseMensuel + (+emp.value.sursalaire || 0) + primeAnciennete
-     allocationConges = Math.round((baseCP / joursDansLeMois) * joursCP);
+     allocationConges = Math.round((baseCP / joursDansLeMois) * joursConges);
   }
 
   // Le brut imposable (Ordre LOGIPAIE)
@@ -289,7 +334,8 @@ const calc = computed(() => {
   ricf = Math.max(0, (parts - 1) * 11000)
   const impots = emp.value.regime !== 'ancien' ? itsFinal : (is + cn + igr)
   const totalRetenues = impots + cnpsSal + cmuSal + acompte + avance + opposition + autresRetenues
-  const netAPayer = gainsTotaux - totalRetenues
+  const netAPayerRaw = gainsTotaux - totalRetenues
+  const netAPayer = Math.max(0, netAPayerRaw)
 
   // Détail des tranches pour l'affichage
   const detailTranches = []
@@ -318,7 +364,7 @@ const calc = computed(() => {
   return {
     salaireBase, salaireBaseMensuel, joursDansLeMois, joursTrav,
     sursalaire, primeTransport, primeLogement,
-    primeAnciennete, ansAnciennete, ancienneteTxt, allocationConges, joysCP: joursCP,
+    primeAnciennete, ansAnciennete, ancienneteTxt, allocationConges, joursCP: joursConges, moisConge: diffMoisConge,
     primesImposables, primesNonImposablesRub,
     montantHeuresSup, nbHeuresSup, coefHS, tauxHoraire,
     salaireBrut, brutImposable, baseFiscale, baseCNPS, baseCNPS_PfAtAm, tauxAT, nbAyantsDroitCMU,
@@ -342,7 +388,8 @@ const calc = computed(() => {
       totalSocial: totalSocialEmployeur,
       grandTotal: totalPatronal
     },
-    netAPayer
+    netAPayer,
+    netAPayerRaw
   }
 })
 
@@ -497,16 +544,18 @@ const computedFileName = computed(() => {
   return `BULLETIN DE PAIE - ${ent} - ${nomStr} - ${moisNom} ${emp.value.annee}.pdf`;
 });
 
+const activeTabIndex = computed(() => tabs.findIndex(t => t.id === activeTab.value))
+
 const tabs = [
-  { id: 'entreprise', label: 'Entreprise', icon: '🏢' },
-  { id: 'employe', label: 'Employé', icon: '👤' },
-  { id: 'remuneration', label: 'Rémunération', icon: '💰' },
-  { id: 'reglement', label: 'Règlement', icon: '💳' },
+  { id: 'entreprise', label: 'Entr.', title: 'Informations Entreprise', icon: 'M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' },
+  { id: 'employe', label: 'Emp.', title: 'Fiche du Salarié', icon: 'M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2 M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z' },
+  { id: 'remuneration', label: 'Paie', title: 'Calcul de la Rémunération', icon: 'M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6' },
+  { id: 'reglement', label: 'Règl.', title: 'Mode de Paiement', icon: 'M21 4H3a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z M1 10h22' },
 ]
 </script>
 
 <template>
-  <div class="paysim-wrapper">
+  <div class="paysim-wrapper" id="paysim-top">
 
     <!-- HEADER -->
     <div class="paysim-header">
@@ -523,282 +572,350 @@ const tabs = [
 
       <!-- COLONNE GAUCHE: Formulaire -->
       <div class="paysim-form">
+        
+        <!-- Progress Stepper (Mobile View) -->
+        <div class="mobile-stepper-header">
+          <div class="stepper-progress">
+            <div v-for="(t, idx) in tabs" :key="t.id" class="step-progress-item" :class="{ active: idx === activeTabIndex, completed: idx < activeTabIndex }">
+              <div class="step-circle">{{ idx + 1 }}</div>
+              <span class="step-dot-label">{{ t.label }}</span>
+            </div>
+            <div class="progress-line">
+              <div class="progress-line-fill" :style="{ width: (activeTabIndex / (tabs.length - 1)) * 100 + '%' }"></div>
+            </div>
+          </div>
+          <div class="active-step-info">
+            <h2>{{ tabs[activeTabIndex].title }}</h2>
+          </div>
+        </div>
 
-        <!-- Onglets -->
+        <!-- Onglets (Desktop View) -->
         <div class="form-tabs">
           <button
-            v-for="tab in tabs"
-            :key="tab.id"
+            v-for="t in tabs"
+            :key="t.id"
             class="form-tab"
-            :class="{ active: activeTab === tab.id }"
-            @click="activeTab = tab.id"
+            :class="{ active: activeTab === t.id }"
+            @click="goToTab(t.id)"
           >
-            {{ tab.icon }} {{ tab.label }}
+            <span class="tab-icon-wrapper">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path :d="t.icon" />
+              </svg>
+            </span>
+            <span class="tab-label-text">{{ t.label }}</span>
           </button>
         </div>
 
         <!-- ONGLET ENTREPRISE -->
         <div v-show="activeTab === 'entreprise'" class="tab-content">
-          <div class="field-group">
-            <label>Nom de l'entreprise</label>
-            <input v-model="emp.nom_entreprise" type="text" placeholder="Ex: Côte d'Ivoire PAIE" />
-          </div>
-          <div class="field-group">
-            <label>Adresse</label>
-            <input v-model="emp.adresse" type="text" placeholder="Ex: Abidjan, Plateau" />
-          </div>
-          <div class="field-group">
-            <label>Siège Social</label>
-            <input v-model="emp.siege_social" type="text" placeholder="Ex: BINGERVILLE-CITEE FDFP-VILLA 67" />
-          </div>
-          <div class="field-row">
+          <div class="form-bloc">
+            <div class="bloc-title"><span class="bloc-num">1</span> Coordonnées Société</div>
             <div class="field-group">
-              <label>E-mail Entreprise</label>
-              <input v-model="emp.email_entreprise" type="email" placeholder="infos@entreprise.ci" />
+              <label>Nom de l'entreprise</label>
+              <input v-model="emp.nom_entreprise" type="text" placeholder="Ex: Côte d'Ivoire PAIE" />
             </div>
             <div class="field-group">
-              <label>Téléphone Employeur</label>
-              <input v-model="emp.tel_entreprise" type="text" placeholder="+225 ..." />
+              <label>Adresse</label>
+              <input v-model="emp.adresse" type="text" placeholder="Ex: Abidjan, Plateau" />
+            </div>
+            <div class="field-group">
+              <label>Siège Social</label>
+              <input v-model="emp.siege_social" type="text" placeholder="Ex: BINGERVILLE-CITEE FDFP-VILLA 67" />
+            </div>
+            <div class="field-row">
+              <div class="field-group">
+                <label>E-mail Entreprise</label>
+                <input v-model="emp.email_entreprise" type="email" placeholder="infos@entreprise.ci" />
+              </div>
+              <div class="field-group">
+                <label>Téléphone Employeur</label>
+                <input v-model="emp.tel_entreprise" type="text" placeholder="+225 ..." />
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field-group">
+                <label>N° CNPS</label>
+                <input v-model="emp.numero_cnps" type="text" placeholder="Numéro CNPS" />
+              </div>
+              <div class="field-group">
+                <label>N° Contribuable (RCCM)</label>
+                <input v-model="emp.numero_contribuable" type="text" placeholder="N° Contribuable" />
+              </div>
             </div>
           </div>
-          <div class="field-row">
-            <div class="field-group">
-              <label>N° CNPS</label>
-              <input v-model="emp.numero_cnps" type="text" placeholder="Numéro CNPS" />
-            </div>
-            <div class="field-group">
-              <label>N° Contribuable (RCCM)</label>
-              <input v-model="emp.numero_contribuable" type="text" placeholder="N° Contribuable" />
-            </div>
-          </div>
-          <div class="field-row">
-            <div class="field-group">
-              <label>Mois de paie</label>
-              <select v-model.number="emp.mois">
-                <option v-for="m in 12" :key="m" :value="m">{{ moisLabels[m] }}</option>
-              </select>
-            </div>
-            <div class="field-group">
-              <label>Année</label>
-              <input v-model.number="emp.annee" type="number" :min="2020" :max="2030" />
+
+          <div class="form-bloc">
+            <div class="bloc-title"><span class="bloc-num">2</span> Période de paie</div>
+            <div class="field-row">
+              <div class="field-group">
+                <label>Mois de paie</label>
+                <select v-model.number="emp.mois">
+                  <option v-for="m in 12" :key="m" :value="m">{{ moisLabels[m] }}</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label>Année</label>
+                <input v-model.number="emp.annee" type="number" :min="2020" :max="2030" />
+              </div>
             </div>
           </div>
         </div>
 
         <!-- ONGLET EMPLOYÉ -->
         <div v-show="activeTab === 'employe'" class="tab-content">
-          <div class="field-row">
-            <div class="field-group">
-              <label>Matricule</label>
-              <input v-model="emp.matricule" type="text" placeholder="00001" />
+          <div class="form-bloc">
+            <div class="bloc-title"><span class="bloc-num">1</span> Identité & Poste</div>
+            <div class="field-row">
+              <div class="field-group">
+                <label>Nom <span class="required">*</span></label>
+                <input v-model="emp.nom" type="text" placeholder="NOM" />
+              </div>
+              <div class="field-group">
+                <label>Prénom(s)</label>
+                <input v-model="emp.prenom" type="text" placeholder="Prénoms" />
+              </div>
             </div>
-            <div class="field-group">
-              <label>Catégorie</label>
-              <input v-model="emp.categorie" type="text" placeholder="Ex: I1, M2" />
+            <div class="field-row">
+              <div class="field-group">
+                <label>Matricule</label>
+                <input v-model="emp.matricule" type="text" placeholder="00001" />
+              </div>
+              <div class="field-group">
+                <label>Catégorie</label>
+                <input v-model="emp.categorie" type="text" placeholder="Ex: I1, M2" />
+              </div>
             </div>
-          </div>
-          <div class="field-row">
-            <div class="field-group">
-              <label>Nom <span class="required">*</span></label>
-              <input v-model="emp.nom" type="text" placeholder="NOM" />
-            </div>
-            <div class="field-group">
-              <label>Prénom(s)</label>
-              <input v-model="emp.prenom" type="text" placeholder="Prénoms" />
-            </div>
-          </div>
-          <div class="field-row">
-            <div class="field-group">
-              <label>Poste / Fonction</label>
-              <input v-model="emp.poste" type="text" placeholder="Ex: Responsable Comptable" />
-            </div>
-            <div class="field-group">
-              <label>Qualification</label>
-              <input v-model="emp.qualification" type="text" placeholder="Ex: Ingénieur, Technicien..." />
-            </div>
-          </div>
-          <div class="field-row">
-            <div class="field-group">
-              <label>Situation familiale</label>
-              <select v-model="emp.situation_matrimoniale">
-                <option value="celibataire">Célibataire</option>
-                <option value="marie">Marié(e)</option>
-                <option value="divorce">Divorcé(e)</option>
-                <option value="veuf">Veuf/Veuve</option>
-              </select>
-            </div>
-            <div class="field-group">
-              <label>Nombre d'enfants</label>
-              <input v-model.number="emp.nombre_enfants" type="number" min="0" max="20" />
+            <div class="field-row">
+              <div class="field-group">
+                <label>Poste / Fonction</label>
+                <input v-model="emp.poste" type="text" placeholder="Ex: Responsable Comptable" />
+              </div>
+              <div class="field-group">
+                <label>Qualification</label>
+                <input v-model="emp.qualification" type="text" placeholder="Ex: Ingénieur, Technicien..." />
+              </div>
             </div>
           </div>
-          <div class="field-row">
-            <div class="field-group">
-              <label>Date d'embauche</label>
-              <input v-model="emp.date_embauche" type="date" />
+
+          <div class="form-bloc">
+            <div class="bloc-title"><span class="bloc-num">2</span> Situation Personnelle</div>
+            <div class="field-row">
+              <div class="field-group">
+                <label>Situation familiale</label>
+                <select v-model="emp.situation_matrimoniale">
+                  <option value="celibataire">Célibataire</option>
+                  <option value="marie">Marié(e)</option>
+                  <option value="divorce">Divorcé(e)</option>
+                  <option value="veuf">Veuf/Veuve</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label>Nombre d'enfants</label>
+                <input v-model.number="emp.nombre_enfants" type="number" min="0" max="20" />
+              </div>
             </div>
-            <div class="field-group">
-              <label>N° SECU (Sociale)</label>
-              <input v-model="emp.num_secu" type="text" placeholder="N° Sécurité Sociale" />
+            <div class="field-row">
+              <div class="field-group">
+                <label>Date d'embauche</label>
+                <input v-model="emp.date_embauche" type="date" />
+              </div>
+              <div class="field-group">
+                <label>N° SECU (Sociale)</label>
+                <input v-model="emp.num_secu" type="text" placeholder="N° Sécurité Sociale" />
+              </div>
             </div>
-          </div>
-          <div class="parts-badge">
-            <span class="parts-label">Parts fiscales calculées :</span>
-            <span class="parts-value">{{ calc.parts.toFixed(2) }}</span>
+            <div class="parts-badge">
+              <span class="parts-label">Parts fiscales calculées :</span>
+              <span class="parts-value">{{ calc.parts.toFixed(2) }}</span>
+            </div>
           </div>
         </div>
 
         <!-- ONGLET RÉMUNÉRATION -->
         <div v-show="activeTab === 'remuneration'" class="tab-content">
-          <div class="field-row">
-            <div class="field-group">
-              <label>Régime Fiscal</label>
-              <select v-model="emp.regime">
-                <option value="2024">Nouvelle Réforme 2024 (ITS UNIQUE)</option>
-                <option value="ancien">Ancienne Loi (IS, CN, IGR)</option>
-              </select>
+          <div class="form-bloc">
+            <div class="bloc-title"><span class="bloc-num">1</span> Salaire de Base & Fiscalité</div>
+            <div class="field-row">
+              <div class="field-group">
+                <label>Régime Fiscal</label>
+                <select v-model="emp.regime">
+                  <option value="2024">Nouvelle Réforme 2024 (ITS UNIQUE)</option>
+                  <option value="ancien">Ancienne Loi (IS, CN, IGR)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="field-row">
+              <div class="field-group">
+                <label>
+                  Salaire Catégoriel (FCFA) <span class="required">*</span>
+                  <span class="field-hint">Rémunération pour 173.33 h/mois.</span>
+                </label>
+                <input v-model.number="emp.salaire_base" type="number" min="0" step="1" placeholder="Ex: 200 000" />
+              </div>
+              <div class="field-group">
+                <label>
+                  Sursalaire (FCFA)
+                  <span class="field-hint">Montant négocié au-delà du catégoriel.</span>
+                </label>
+                <input v-model.number="emp.sursalaire" type="number" min="0" step="1" placeholder="0" />
+              </div>
             </div>
           </div>
 
-          <div class="field-row">
-            <div class="field-group">
-              <label>
-                Salaire Catégoriel (FCFA) <span class="required">*</span>
-                <span class="field-hint">Rémunération pour 173.33 h/mois. Sert de base de calcul.</span>
-              </label>
-              <input v-model.number="emp.salaire_base" type="number" min="0" step="1" placeholder="Ex: 200 000" />
+          <div class="form-bloc">
+            <div class="bloc-title"><span class="bloc-num">2</span> Temps de Travail & Absences</div>
+            <div class="field-row">
+              <div class="field-group">
+                <label>
+                  Jours payés (Base)
+                  <span class="field-hint">Standard mensuel = 30 jours</span>
+                </label>
+                <input v-model.number="emp.jours_travailles" type="number" min="0" max="31" />
+              </div>
+              <div class="field-group">
+                <label>
+                  Jours d'absence
+                  <span class="field-hint">Déduits automatiquement</span>
+                </label>
+                <input v-model.number="emp.absences_jours" type="number" min="0" max="31" />
+              </div>
             </div>
-            <div class="field-group">
-              <label>
-                Sursalaire (FCFA)
-                <span class="field-hint">Montant négocié au-delà du catégoriel.</span>
-              </label>
-              <input v-model.number="emp.sursalaire" type="number" min="0" step="1" placeholder="0" />
+
+            <div class="info-calc" v-if="calc.joursTrav >= 0">
+              📅 Période payée : 
+              <strong v-if="calc.joursCP > 0">{{ calc.joursTrav }}j trav. + {{ calc.joursCP }}j congés</strong>
+              <strong v-else>{{ calc.joursTrav }} jours</strong>
+              &rarr; Base imposable : <strong>{{ fcfa(calc.salaireBase + (calc.allocationConges || 0)) }} FCFA</strong>
+            </div>
+
+            <div class="field-row mt-4">
+              <div class="field-group">
+                <label>H. Supplémentaires (nombre)</label>
+                <input v-model.number="emp.heures_sup_nb" type="number" min="0" placeholder="0" />
+              </div>
+              <div class="field-group">
+                <label>
+                  Coefficient de majoration
+                  <span class="field-hint">Fixé par le Code du Travail</span>
+                </label>
+                <select v-model.number="emp.heures_sup_coef">
+                  <option :value="1.15">+15% (Heures de jour 41h-48h)</option>
+                  <option :value="1.50">+50% (Heures de nuit / Dimanche)</option>
+                  <option :value="1.75">+75% (De nuit un jour au-delà de 48h)</option>
+                  <option :value="2.0">+100% (De jour un Férié)</option>
+                </select>
+              </div>
+            </div>
+            <div class="info-calc" v-if="emp.heures_sup_nb > 0">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px; vertical-align: middle;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              {{ emp.heures_sup_nb }}h × {{ fcfa(calc.tauxHoraire) }} FCFA/h × {{ emp.heures_sup_coef }} = <strong>{{ fcfa(calc.montantHeuresSup) }} FCFA</strong>
+            </div>
+
+            <div class="field-row mt-4" v-if="emp.bulletin_type === 'conges'">
+              <div class="field-group">
+                <label style="display: flex; align-items: center; justify-content: space-between;">
+                  Calcul automatique des jours
+                  <div class="toggle-container active disabled" title="Obligatoire en mode Bulletin de Congés">
+                    <div class="toggle-handle"></div>
+                  </div>
+                </label>
+                
+                <div style="margin-top: 10px;">
+                   <label class="text-xs">Date du dernier retour de congés</label>
+                   <input v-model="emp.date_dernier_conge" type="date" class="inp" />
+                   
+                   <div class="field-hint" v-if="calc.joursCP > 0">
+                      Droit acquis : <strong>{{ calc.joursCP }} jours</strong> ({{ calc.moisConge }} mois de service).
+                   </div>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div class="separator-label">⏱ Temps de Travail</div>
+          <div class="form-bloc">
+            <div class="bloc-title">
+              <span class="bloc-num">3</span> 
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+              Primes &amp; Indemnités
+            </div>
 
-          <div class="field-row">
-            <div class="field-group">
-              <label>
-                Jours travaillés ce mois
-                <span class="field-hint">Standard = 26 jours (5j/sem)</span>
-              </label>
-              <input v-model.number="emp.jours_travailles" type="number" min="0" max="31" />
+            <div class="field-row" v-if="emp.bulletin_type !== 'conges'">
+              <div class="field-group">
+                <label>Prime de Transport</label>
+                <input v-model.number="emp.prime_transport" type="number" min="0" placeholder="30 000" />
+              </div>
+              <div class="field-group">
+                <label>Prime de Logement</label>
+                <input v-model.number="emp.prime_logement" type="number" min="0" placeholder="0" />
+              </div>
             </div>
-            <div class="field-group">
-              <label>
-                Jours d'absence
-                <span class="field-hint">Déduits automatiquement</span>
-              </label>
-              <input v-model.number="emp.absences_jours" type="number" min="0" max="31" />
-            </div>
-          </div>
 
-          <div class="info-calc" v-if="calc.joursTrav >= 0">
-            📅 Jours payés effectifs : <strong>{{ calc.joursTrav }} j</strong> &rarr; Salaire de base : <strong>{{ fcfa(calc.salaireBase) }} FCFA</strong>
-          </div>
-
-          <div class="field-row">
-            <div class="field-group">
-              <label>H. Supplémentaires (nombre)</label>
-              <input v-model.number="emp.heures_sup_nb" type="number" min="0" placeholder="0" />
+            <div v-for="(prime, index) in emp.primes" :key="prime.id" class="prime-item-grid">
+              <input v-model="prime.label" type="text" placeholder="Nom de la prime" class="prime-label-input" />
+              <input v-model.number="prime.montant" type="number" placeholder="Montant FCFA" class="prime-amount-input" />
+              
+              <div class="prime-status-actions">
+                <label class="prime-checkbox-label">
+                  <input v-model="prime.imposable" type="checkbox" />
+                  <span>Impos.</span>
+                </label>
+                
+                <button class="btn-remove-prime" @click="emp.primes.splice(index, 1)" title="Supprimer">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                </button>
+              </div>
             </div>
-            <div class="field-group">
-              <label>
-                Coefficient de majoration
-                <span class="field-hint">Fixé par le Code du Travail (15%, 50%, 75% ou 100%)</span>
-              </label>
-              <select v-model.number="emp.heures_sup_coef">
-                <option :value="1.15">+15% (Heures de jour 41h-48h)</option>
-                <option :value="1.50">+50% (Heures de nuit / Dimanche)</option>
-                <option :value="1.75">+75% (De nuit un jour au-delà de 48h)</option>
-                <option :value="2.0">+100% (De jour un Férié)</option>
-              </select>
-            </div>
-          </div>
-          <div class="info-calc" v-if="emp.heures_sup_nb > 0">
-            ⏳ {{ emp.heures_sup_nb }}h × {{ fcfa(calc.tauxHoraire) }} FCFA/h × {{ emp.heures_sup_coef }} = <strong>{{ fcfa(calc.montantHeuresSup) }} FCFA</strong>
-          </div>
-
-          <div class="field-row">
-            <div class="field-group">
-              <label>Jours de Congés payés pris</label>
-              <input v-model.number="emp.jours_conges_pris" type="number" min="0" max="30" />
-            </div>
-          </div>
-
-          <div class="separator-label">💰 Primes &amp; Indemnités</div>
-
-          <div class="field-row">
-            <div class="field-group">
-              <label>Prime de Transport (Non imposable)</label>
-              <input v-model.number="emp.prime_transport" type="number" min="0" placeholder="30 000" />
-            </div>
-            <div class="field-group">
-              <label>Prime de Logement (Non imposable)</label>
-              <input v-model.number="emp.prime_logement" type="number" min="0" placeholder="0" />
-            </div>
-          </div>
-
-          <div v-for="(prime, index) in emp.primes" :key="prime.id" class="field-row prime-row" style="align-items: flex-end;">
-            <div class="field-group" style="flex: 2;">
-              <input v-model="prime.label" type="text" placeholder="Nom de la prime" />
-            </div>
-            <div class="field-group" style="flex: 1;">
-              <input v-model.number="prime.montant" type="number" placeholder="Montant FCFA" />
-            </div>
-            <div style="display: flex; align-items: center; gap: 5px; margin-bottom: 8px;">
-              <input v-model="prime.imposable" type="checkbox" :id="'imp-' + prime.id" />
-              <label :for="'imp-' + prime.id" style="margin: 0; font-size: 11px;">Impos.</label>
-            </div>
-            <button class="btn-remove-prime" @click="emp.primes.splice(index, 1)" title="Supprimer">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+            <button class="btn-add-prime" @click="emp.primes.push({ id: Date.now(), label: '', montant: 0, imposable: true })" style="width: 100%; padding: 8px; background: #f8fafc; border: 2px dashed #94a3b8; color: #475569; font-weight: 600; border-radius: 8px; cursor: pointer; margin-top: 5px; transition: all 0.2s;">
+              + Ajouter une prime
             </button>
           </div>
-          <button class="btn-add-prime" @click="emp.primes.push({ id: Date.now(), label: '', montant: 0, imposable: true })" style="width: 100%; padding: 8px; background: #f8fafc; border: 2px dashed #94a3b8; color: #475569; font-weight: 600; border-radius: 8px; cursor: pointer; margin-top: 5px; transition: all 0.2s;">
-            + Ajouter une prime / indemnité
-          </button>
 
-          <div class="separator-label">✂️ Retenues Salariales</div>
-
-          <div class="field-row">
-            <div class="field-group">
-              <label>Acompte sur salaire</label>
-              <input v-model.number="emp.acompte" type="number" min="0" />
-            </div>
-            <div class="field-group">
-              <label>Avance / Prêt</label>
-              <input v-model.number="emp.avance" type="number" min="0" />
+          <div class="form-bloc">
+            <div class="bloc-title"><span class="bloc-num">4</span> Retenues Salariales</div>
+            <div class="field-row">
+              <div class="field-group">
+                <label>Acompte sur salaire</label>
+                <input v-model.number="emp.acompte" type="number" min="0" />
+              </div>
+              <div class="field-group">
+                <label>Avance / Prêt</label>
+                <input v-model.number="emp.avance" type="number" min="0" />
+              </div>
             </div>
           </div>
         </div>
 
         <!-- ONGLET RÈGLEMENT -->
         <div v-show="activeTab === 'reglement'" class="tab-content">
-          <div class="field-row">
-            <div class="field-group">
-              <label>Mode de règlement</label>
-              <select v-model="emp.virement">
-                <option :value="true">VIREMENT BANCAIRE</option>
-                <option :value="false">ESPÈCES / CHÈQUE</option>
-              </select>
+          <div class="form-bloc">
+            <div class="bloc-title"><span class="bloc-num">1</span> Mode de Paiement</div>
+            <div class="field-row">
+              <div class="field-group">
+                <label>Mode de règlement</label>
+                <select v-model="emp.virement">
+                  <option :value="true">VIREMENT BANCAIRE</option>
+                  <option :value="false">ESPÈCES / CHÈQUE</option>
+                </select>
+              </div>
             </div>
-          </div>
-          <div v-if="emp.virement" class="field-group animate-slide-down">
-            <label>RIB (Coordonnées Bancaires)</label>
-            <input v-model="emp.rib" type="text" placeholder="Ex: CI000 0000 0000000000 00" />
-            <span class="field-hint">Le RIB apparaîtra sur le bulletin en bas à gauche du mode de règlement.</span>
+            <div v-if="emp.virement" class="field-group animate-slide-down">
+              <label>RIB (Coordonnées Bancaires)</label>
+              <input v-model="emp.rib" type="text" placeholder="Ex: CI000 0000 0000000000 00" />
+              <span class="field-hint">Le RIB apparaîtra sur le bulletin.</span>
+            </div>
           </div>
         </div>
 
         <div class="tab-nav">
-          <button v-if="activeTab !== tabs[0].id" class="tab-prev" @click="activeTab = tabs[tabs.findIndex(t => t.id === activeTab) - 1].id">
-            ← Précédent
+          <button v-if="activeTab !== tabs[0].id" class="tab-prev" @click="goToTab(tabs[tabs.findIndex(t => t.id === activeTab) - 1].id)">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+            Précédent
           </button>
-          <button v-if="activeTab !== tabs[tabs.length - 1].id" class="tab-next" @click="activeTab = tabs[tabs.findIndex(t => t.id === activeTab) + 1].id">
-            Suivant →
+          <button v-if="activeTab !== tabs[tabs.length - 1].id" class="tab-next" @click="goToTab(tabs[tabs.findIndex(t => t.id === activeTab) + 1].id)">
+            Suivant
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
           </button>
         </div>
 
@@ -807,11 +924,13 @@ const tabs = [
             <svg v-if="generating" class="spin-icon" viewBox="0 0 24 24" fill="none" width="16" height="16">
               <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-dasharray="31 31"></circle>
             </svg>
-            {{ generating ? 'Génération...' : '⬇️ Générer PDF' }}
+            <svg v-else xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            {{ generating ? 'Génération...' : 'Générer PDF' }}
           </button>
 
-          <div v-if="errorMsg" class="error-alert mt-4 text-sm text-red-600 bg-red-50 p-2 rounded">
-            🚨 {{ errorMsg }}
+          <div v-if="errorMsg" class="error-alert mt-4">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            {{ errorMsg }}
           </div>
           
           <div v-if="downloadUrl" class="success-alert mt-4">
@@ -1114,21 +1233,29 @@ const tabs = [
 
         </div>
       </div>
-
     </div>
-    
-    <!-- Section Explications (Hors du composant form pour la clarté) -->
+
+    <!-- Section Explications (Centrée et épurée) -->
     <div class="education-section">
-      <h3 class="edu-title">Comprendre les rubriques du bulletin de paie 🇨🇮</h3>
-      <div class="edu-grid">
-        <div v-for="(edu, key) in explanations" :key="key" class="edu-card">
-          <h4>{{ edu.title }}</h4>
-          <p>{{ edu.text }}</p>
+      <div class="edu-container">
+        <h3 class="edu-title">
+          Comprendre le Bulletin Ivoirien
+          <div class="edu-flag">
+            <svg width="24" height="16" viewBox="0 0 3 2"><rect width="3" height="2" fill="#009A44"/><rect width="2" height="2" fill="#FFF"/><rect width="1" height="2" fill="#FF8200"/></svg>
+          </div>
+        </h3>
+        <p class="edu-intro">Quelques clés pour mieux décrypter vos rubriques de paie</p>
+        
+        <div class="edu-grid">
+          <div v-for="(edu, key) in explanations" :key="key" class="edu-card">
+            <div class="edu-card-icon">💡</div>
+            <h4>{{ edu.title }}</h4>
+            <p>{{ edu.text }}</p>
+          </div>
         </div>
       </div>
     </div>
   </div>
-
 </template>
 
 <style scoped>
@@ -1157,14 +1284,20 @@ const tabs = [
 .paysim-header p { margin: 0.2rem 0 0; font-size: 0.8rem; opacity: 0.8; }
 
 .paysim-body {
-  display: grid;
-  grid-template-columns: minmax(300px, 360px) 1fr;
-  min-height: 580px;
+  display: block;
+}
+
+@media (min-width: 1024px) {
+  .paysim-body {
+    display: grid;
+    grid-template-columns: 360px 1fr;
+    min-height: 580px;
+    padding-bottom: 0;
+  }
 }
 
 /* BOUTONS D'ACTION */
 .btn-remove-prime {
-  margin-bottom: 8px;
   padding: 6px;
   border-radius: 6px;
   border: 1px solid #ffccd5;
@@ -1196,33 +1329,250 @@ const tabs = [
 }
 
 .form-tabs {
-  display: flex;
+  display: none;
   border-bottom: 1px solid #e2e8f0;
   background: white;
 }
+
+@media (min-width: 1024px) {
+  .form-tabs {
+    display: flex;
+  }
+}
 .form-tab {
   flex: 1;
-  padding: 0.75rem 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 600;
+  padding: 0.85rem 0.25rem;
+  font-size: 0.7rem;
+  font-weight: 700;
   border: none;
   background: none;
   cursor: pointer;
   color: #64748b;
-  border-bottom: 2px solid transparent;
+  border-bottom: 3px solid transparent;
   transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
 }
+
 .form-tab.active {
   color: #2563eb;
   border-bottom-color: #2563eb;
   background: #f0f7ff;
 }
 
+@media (min-width: 400px) {
+  .form-tab {
+    flex-direction: row;
+    justify-content: center;
+    font-size: 0.75rem;
+    gap: 8px;
+  }
+}
+
+.tab-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+}
+
+.form-tab.active .tab-icon-wrapper {
+  opacity: 1;
+}
+
+/* Mobile Stepper Header */
+.mobile-stepper-header {
+  background: white;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+@media (min-width: 1024px) {
+  .mobile-stepper-header {
+    display: none;
+  }
+}
+
+.stepper-progress {
+  display: flex;
+  justify-content: space-between;
+  position: relative;
+  margin-bottom: 1.25rem;
+  padding: 0 5px;
+}
+
+.progress-line {
+  position: absolute;
+  top: 15px;
+  left: 20px;
+  right: 20px;
+  height: 2px;
+  background: #e2e8f0;
+  z-index: 1;
+}
+
+.progress-line-fill {
+  height: 100%;
+  background: #2563eb;
+  transition: width 0.3s ease;
+}
+
+.step-progress-item {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.step-circle {
+  width: 32px;
+  height: 32px;
+  background: white;
+  border: 2px solid #e2e8f0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: #64748b;
+  transition: all 0.3s;
+}
+
+.step-progress-item.active .step-circle {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: white;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.15);
+}
+
+.step-progress-item.completed .step-circle {
+  background: #22c55e;
+  border-color: #22c55e;
+  color: white;
+}
+
+.step-dot-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+}
+
+.step-progress-item.active .step-dot-label {
+  color: #2563eb;
+}
+
+.active-step-info h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  color: #1e293b;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
 .tab-content {
   padding: 1.25rem;
   flex: 1;
   overflow-y: auto;
-  max-height: 440px;
+}
+
+/* Floating Summary Bar Premium */
+.mobile-floating-summary {
+  position: sticky;
+  bottom: 0px;
+  margin: 1rem -1.25rem -1.25rem -1.25rem; /* Offset parent padding */
+  background: #1e293b;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 12px 18px env(safe-area-inset-bottom);
+  z-index: 999999;
+  box-shadow: 0 -10px 25px rgba(0, 0, 0, 0.2);
+}
+
+.warning-negative {
+  background: #450a0a;
+  border-top-color: #ef4444;
+}
+
+.mfs-warning-text {
+  font-size: 0.65rem;
+  color: #fecaca;
+  text-align: center;
+  margin-top: 8px;
+  font-weight: 500;
+}
+
+@media (min-width: 480px) {
+  .mobile-floating-summary {
+    position: fixed;
+    bottom: 15px;
+    left: 15px;
+    right: 15px;
+    margin: 0;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+}
+
+@media (min-width: 1024px) {
+  .mobile-floating-summary {
+    display: none;
+  }
+}
+
+.mfs-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.mfs-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.mfs-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.mfs-value {
+  font-size: 1.35rem;
+  font-weight: 900;
+  color: #f8fafc;
+  line-height: 1;
+}
+
+.mfs-value small {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #94a3b8;
+  margin-left: 2px;
+}
+
+.mfs-btn {
+  background: #2563eb;
+  color: white;
+  border: none;
+  padding: 10px 18px;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.mfs-btn:active {
+  transform: scale(0.95);
 }
 
 .field-group { margin-bottom: 0.9rem; }
@@ -1260,22 +1610,126 @@ const tabs = [
 
 .field-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr; /* Stack mobile */
   gap: 0.75rem;
   margin-bottom: 0;
 }
-.field-row .field-group { margin-bottom: 0.9rem; }
+
+@media (min-width: 480px) {
+  .field-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+/* Bulletin Type Nav Mobile Optimization */
+.bulletin-type-nav {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 12px;
+  background: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.bt-btn {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 10px;
+  background: white;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.bt-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: #475569;
+}
+
+.bt-btn.active {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: white;
+  box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
+}
+
+.bt-btn.active .bt-content {
+  color: white;
+}
+
+@media (min-width: 1024px) {
+  .bulletin-type-nav {
+    display: block;
+    padding: 1.5rem;
+    background: none;
+    border-bottom: none;
+  }
+  .bt-btn {
+    justify-content: flex-start;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+  }
+}
 
 .separator-label {
+  display: flex;
+  align-items: center;
   font-size: 0.75rem;
   font-weight: 700;
   color: #6b7280;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin: 0.75rem 0 0.5rem;
+  margin: 0.75rem 0 1rem;
   padding-bottom: 0.4rem;
   border-bottom: 1px solid #e2e8f0;
 }
+
+/* Form Blocs */
+.form-bloc {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.form-bloc:hover {
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08);
+}
+
+.bloc-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #1e293b;
+  margin-bottom: 1.5rem;
+  letter-spacing: -0.01em;
+}
+
+.bloc-num {
+  width: 28px;
+  height: 28px;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: white;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 900;
+  flex-shrink: 0;
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
+}
+
 
 .hs-result {
   padding: 0.5rem 0.75rem;
@@ -1296,6 +1750,66 @@ const tabs = [
 .tax-info-box.imposable { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
 .tax-info-box.non-imposable { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
 
+
+
+/* Primes & Indemnités Layout */
+.prime-item-grid {
+  display: grid;
+  grid-template-columns: 2fr 1.2fr;
+  gap: 8px;
+  margin-bottom: 15px;
+  padding: 12px;
+  background: white;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 12px;
+  align-items: center;
+}
+
+.prime-status-actions {
+  grid-column: span 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid #f1f5f9;
+  padding-top: 10px;
+  margin-top: 2px;
+}
+
+.prime-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #475569;
+  cursor: pointer;
+  user-select: none;
+}
+
+.prime-checkbox-label input[type="checkbox"] {
+  width: 16px !important;
+  height: 16px !important;
+  margin: 0;
+}
+
+@media (min-width: 640px) {
+  .prime-item-grid {
+    grid-template-columns: 3fr 1.5fr auto;
+    gap: 12px;
+    padding: 0;
+    background: none;
+    border: none;
+    margin-bottom: 10px;
+  }
+  .prime-status-actions {
+    grid-column: auto;
+    border-top: none;
+    padding-top: 0;
+    margin-top: 0;
+    gap: 12px;
+  }
+}
+
 .tax-badge {
   display: inline-block;
   font-weight: 800;
@@ -1304,6 +1818,31 @@ const tabs = [
   border-radius: 4px;
   margin-right: 0.4rem;
 }
+
+/* Toggle Switch Styles */
+.toggle-container {
+  width: 40px;
+  height: 20px;
+  background: #cbd5e1;
+  border-radius: 10px;
+  position: relative;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.toggle-container.active { background: #2563eb; }
+.toggle-container.disabled { cursor: not-allowed; opacity: 0.7; }
+.toggle-handle {
+  width: 16px;
+  height: 16px;
+  background: white;
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: all 0.2s;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+.toggle-container.active .toggle-handle { left: 22px; }
 .tax-badge.imposable { background: #ef4444; color: white; }
 .tax-badge.non-imposable { background: #22c55e; color: white; }
 
@@ -1357,7 +1896,7 @@ const tabs = [
 
 /* PRÉVISUALISATION PREMIUM LOGIPAIE */
 .paysim-preview {
-  padding: 1.5rem;
+  padding: 0.5rem; /* Mobile padding */
   overflow-y: auto;
   background: #f1f5f9;
   display: flex;
@@ -1365,17 +1904,31 @@ const tabs = [
   align-items: flex-start;
 }
 
+@media (min-width: 640px) {
+  .paysim-preview {
+    padding: 1.5rem;
+  }
+}
+
 .preview-container {
   background: white;
   width: 100%;
-  max-width: 1050px; /* Plus grand pour accommoder 7 colonnes sans déborder */
-  padding: 30px;
+  max-width: 1050px;
+  padding: 15px; /* Mobile padding */
   border-radius: 4px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
   font-family: 'Inter', system-ui, sans-serif;
   color: #1e293b;
-  border-top: 10px solid #1e3a8a;
+  border-top: 6px solid #1e3a8a;
   box-sizing: border-box;
+}
+
+@media (min-width: 768px) {
+  .preview-container {
+    padding: 30px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
+    border-top-width: 10px;
+  }
 }
 
 /* --- Header --- */
@@ -1449,9 +2002,16 @@ const tabs = [
 /* --- Header Logipaie Grid --- */
 .logipaie-header-grid {
   display: grid;
-  grid-template-columns: 1.4fr 1fr;
-  gap: 20px;
+  grid-template-columns: 1fr; /* Mobile stack */
+  gap: 15px;
   margin-bottom: 20px;
+}
+
+@media (min-width: 768px) {
+  .logipaie-header-grid {
+    grid-template-columns: 1.4fr 1fr;
+    gap: 20px;
+  }
 }
 
 .lph-box {
@@ -1479,9 +2039,15 @@ const tabs = [
 /* --- Footer Logipaie Grid --- */
 .logipaie-footer-grid {
   display: grid;
-  grid-template-columns: 1.4fr 1fr 1fr;
+  grid-template-columns: 1fr; /* Mobile stack */
   gap: 15px;
   align-items: stretch;
+}
+
+@media (min-width: 800px) {
+  .logipaie-footer-grid {
+    grid-template-columns: 1.4fr 1fr 1fr;
+  }
 }
 
 .lp-cumuls-container {
@@ -1718,6 +2284,25 @@ const tabs = [
   padding: 9px 15px;
   background: #f1f5f9;
   border-radius: 6px;
+}
+
+.net-pay-box {
+  display: flex;
+  flex-direction: column; /* Mobile stack */
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  background: white;
+  border: 4px solid #000;
+  text-align: center;
+}
+
+@media (min-width: 640px) {
+  .net-pay-box {
+    flex-direction: row;
+    justify-content: space-between;
+    text-align: right;
+  }
 }
 
 .total-item .label {
@@ -1981,16 +2566,149 @@ const tabs = [
   margin-top: 5px;
 }
 
-/* --- Responsive --- */
-@media (max-width: 900px) {
-  .paysim-body { grid-template-columns: 1fr; }
-  .paysim-form { border-right: none; border-bottom: 1px solid #e2e8f0; }
-  .tab-content { max-height: 300px; }
-  .paysim-preview { padding: 1rem; }
-  .preview-container { padding: 20px; }
-  .emp-period-box { grid-template-columns: 1fr; gap: 15px; }
-  .summary-section { grid-template-columns: 1fr; }
-  .net-value { font-size: 1.4rem; }
+/* --- Responsive adjustments (Desktop specific) --- */
+@media (min-width: 1024px) {
+  .paysim-form { 
+    border-right: 1px solid #e2e8f0;
+    max-height: 800px;
+    overflow-y: auto;
+  }
+  .preview-container {
+    position: sticky;
+    top: 20px;
+  }
 }
 
+@media (max-width: 640px) {
+  .paysim-header {
+    flex-direction: column;
+    text-align: center;
+    padding: 1rem;
+  }
+  .preview-container {
+    padding: 10px;
+  }
+  .logipaie-table {
+    font-size: 0.65rem;
+  }
+}
+
+
+
+/* ══════════════════════════════════════════
+   SECTION EDUCATION (CENTRÉE)
+══════════════════════════════════════════ */
+.education-section {
+  padding: 3rem 1.25rem;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+}
+
+.edu-container {
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.edu-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 1.35rem;
+  font-weight: 850;
+  color: #0f172a;
+  margin-bottom: 0.5rem;
+  letter-spacing: -0.02em;
+  text-align: center;
+}
+
+.edu-intro {
+  color: #64748b;
+  font-size: 0.9rem;
+  margin-bottom: 2.5rem;
+  text-align: center;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.5;
+}
+
+.edu-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+}
+
+.edu-card {
+  background: white;
+  padding: 1.75rem 1.25rem;
+  border-radius: 20px;
+  border: 1px solid #e2e8f0;
+  transition: all 0.3s ease;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.edu-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 10px 20px -5px rgba(0, 0, 0, 0.08);
+  border-color: #3b82f6;
+}
+
+.edu-card-icon {
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+  background: #f0f9ff;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+}
+
+.edu-card h4 {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #1e293b;
+}
+
+.edu-card p {
+  margin: 0;
+  font-size: 0.88rem;
+  color: #475569;
+  line-height: 1.6;
+}
+
+.edu-flag {
+  display: flex;
+  align-items: center;
+  border-radius: 3px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+@media (max-width: 640px) {
+  .education-section {
+    padding: 2.5rem 1rem;
+  }
+  .edu-title {
+    font-size: 1.25rem;
+    flex-wrap: wrap;
+  }
+  .edu-intro {
+    font-size: 0.85rem;
+    margin-bottom: 2rem;
+  }
+  .edu-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  .edu-card {
+    padding: 1.5rem 1.15rem;
+  }
+}
 </style>

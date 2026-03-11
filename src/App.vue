@@ -442,10 +442,35 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
       </div>
     </div>
     
-    <!-- HR Dashboard Overlay -->
-    <div v-if="showHR" style="position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10000; overflow-y: auto; display: flex; align-items: flex-start; justify-content: center; backdrop-filter: blur(5px); padding: 2rem 1rem 2rem;">
-      <div style="width: 100%; max-width: 1300px; position: relative;">
-        <button @click="showHR = false" style="position: absolute; right: -0.5rem; top: -0.5rem; background: white; border: none; width: 34px; height: 34px; border-radius: 50%; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 10; font-size: 1rem; font-weight: bold; display: flex; align-items: center; justify-content: center;">✕</button>
+    <!-- HR Page (Full Page - replaces modal) -->
+    <div v-if="showHR" class="hr-page animate-in">
+      <!-- HR Page Header -->
+      <div class="hr-page-header">
+        <div class="hr-page-header-inner">
+          <!-- Back Button (Left) -->
+          <div class="hr-header-left">
+            <button @click="showHR = false" class="hr-back-button" title="Retour au simulateur">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+              <span>Simulateur</span>
+            </button>
+          </div>
+          
+          <!-- Center Title (Mobile Optimized) -->
+          <div class="hr-header-center">
+             <div class="hr-app-badge">
+               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+               <span>Espace RH</span>
+             </div>
+          </div>
+
+          <!-- Right Action (Empty for balance or User Initials) -->
+          <div class="hr-header-right">
+             <div class="hr-user-avatar">RH</div>
+          </div>
+        </div>
+      </div>
+      <!-- HR Page Content -->
+      <div class="hr-page-content">
         <HRPayroll />
       </div>
     </div>
@@ -458,6 +483,8 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
     </div>
     
     
+    <!-- Main Loan Simulator (hidden when HR page is open) -->
+    <div v-if="!showHR">
     <div class="text-center mb-6">
       <div style="display: flex; justify-content: space-between; align-items: center; max-width: 1200px; margin: 0 auto; padding: 0 1rem;">
         <div style="flex: 1;"></div>
@@ -1186,10 +1213,158 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
     <div class="text-center mt-6 text-sm text-muted p-4">
       <p>Simulation indicative. Les conditions définitives dépendent de l'étude de votre dossier.</p>
     </div>
+    </div><!-- end v-if !showHR -->
   </div>
 </template>
 
 <style scoped>
+/* ─── HR FULL PAGE ─────────────────────────────────────────── */
+.hr-page {
+  min-height: 100vh;
+  background-color: #f1f5f9;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+.hr-page-header {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.5);
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  height: 64px;
+  display: flex;
+  align-items: center;
+}
+
+.hr-page-header-inner {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 1rem;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+
+.hr-back-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.5rem 0.75rem;
+  background: transparent;
+  color: #64748b;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.hr-back-button:hover {
+  background: #f1f5f9;
+  color: #1e293b;
+  transform: translateX(-2px);
+}
+
+.hr-back-button span {
+  display: inline-block;
+}
+
+.hr-header-center {
+  display: flex;
+  justify-content: center;
+}
+
+@keyframes badgePulse {
+  0% { transform: scale(1); box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
+  50% { transform: scale(1.02); box-shadow: 0 4px 12px rgba(37, 99, 235, 0.1); }
+  100% { transform: scale(1); box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
+}
+
+.hr-app-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #ffffff;
+  padding: 0.5rem 1.25rem;
+  border-radius: 30px;
+  border: 1px solid #e2e8f0;
+  color: #0f172a;
+  font-weight: 800;
+  font-size: 1rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+  transition: all 0.3s ease;
+}
+
+.hr-app-badge:hover {
+  border-color: #3b82f6;
+  background: #f0f9ff;
+}
+
+.hr-app-badge svg {
+  color: #2563eb;
+  filter: drop-shadow(0 0 8px rgba(37, 99, 235, 0.3));
+}
+
+.hr-header-right {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.hr-user-avatar {
+  width: 36px;
+  height: 36px;
+  background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%);
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 800;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+  border: 2px solid white;
+}
+
+.hr-page-content {
+  padding: 1.5rem 1rem;
+  max-width: 1400px;
+  margin: 0 auto;
+  opacity: 0;
+  animation: fadeIn 0.5s ease-out forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Mobile Adjustments */
+@media (max-width: 640px) {
+  .hr-back-button span {
+    display: none;
+  }
+  .hr-app-badge {
+    padding: 0.4rem 0.85rem;
+    font-size: 0.9rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .hr-page-header-inner {
+    grid-template-columns: 50px 1fr 50px;
+  }
+  .hr-header-right {
+    display: none;
+  }
+  .hr-page-header-inner {
+    grid-template-columns: 50px 1fr;
+  }
+}
+
 /* Responsive grids */
 .charges-grid {
   display: grid;
