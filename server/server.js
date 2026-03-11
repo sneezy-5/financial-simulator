@@ -140,11 +140,34 @@ app.post('/api/rh/generate-single-payslip', async (req, res) => {
 
         const pdfBuffer = await payrollService.generateSinglePdf(employee, calculs, companyInfo);
 
+        const moisNoms = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+        const moisNom = moisNoms[parseInt(employee.mois || 1) - 1] || 'Mois';
+        const entrepriseNom = (employee.nom_entreprise || 'ENTREPRISE').toUpperCase();
+        const employeNom = (employee.nom || 'Salarie').toUpperCase();
+        const fileName = `BULLETIN DE PAIE - ${entrepriseNom} - ${employeNom} - ${moisNom} ${employee.annee || ''}.pdf`;
+
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="bulletin_${employee.nom}.pdf"`);
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
         res.send(pdfBuffer);
     } catch (error) {
         console.error('Erreur génération bulletin individuel:', error);
+        res.status(500).json({ error: error.message || 'Erreur lors de la génération' });
+    }
+});
+
+// ─── Génération Solde de Tout Compte (PDF) ────────────────────────────────
+app.post('/api/rh/generate-stc', async (req, res) => {
+    try {
+        const { employee, calculs } = req.body;
+        if (!employee || !employee.nom) {
+            return res.status(400).json({ error: 'Données employé manquantes' });
+        }
+        const pdfBuffer = await payrollService.generateStcPdf(employee, calculs);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="STC_${employee.nom}_${employee.prenom || ''}.pdf"`);
+        res.send(pdfBuffer);
+    } catch (error) {
+        console.error('Erreur génération STC:', error);
         res.status(500).json({ error: error.message || 'Erreur lors de la génération' });
     }
 });

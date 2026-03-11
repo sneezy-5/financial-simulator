@@ -6,50 +6,62 @@ import { ref, computed } from 'vue'
 // ══════════════════════════════════════════════
 const emp = ref({
   // Entreprise
-  nom_entreprise: "Mon Entreprise",
+  nom_entreprise: '',
   adresse: "Abidjan, Côte d'Ivoire",
-  siege_social: "BINGERVILLE-CITEE FDFP-VILLA 67",
-  email_entreprise: "infos@monentreprise.ci",
-  tel_entreprise: "+225 0758474646",
-  numero_cnps: '0001122',
-  numero_contribuable: '025555',
+  siege_social: '',
+  email_entreprise: '',
+  tel_entreprise: '',
+  numero_cnps: '',
+  numero_contribuable: '',
+  numero_rc: '',
   // Employé
-  matricule: '00001',
+  matricule: '',
   nom: '',
   prenom: '',
   poste: '',
-  date_naissance: '1977-01-01',
-  num_secu: '1770718XXXX',
+  date_naissance: '',
+  num_secu: '',
   ville: 'ABIDJAN',
-  categorie: 'I1',
+  categorie: '',
+  qualification: '',
+  type_contrat: 'CDI',
   situation_matrimoniale: 'celibataire',
   nombre_enfants: 0,
   date_embauche: '',
-  // Règlement
-  mode_reglement: 'Virement',
-  banque_compte: '01001 1234567890 00',
-  banque_nom: 'XXXX',
-  // Rémunération
+  // Temps de travail (basé sur le modèle Excel)
+  jours_travailles: 26,   // Jours réellement travaillés ce mois
+  absences_jours: 0,      // Jours d'absence (déduits automatiquement)
+  heures_sup_nb: 0,       // Nombre d'heures supplémentaires
+  heures_sup_coef: 1.15,  // Coefficient de majoration (1.15 = +15%, 1.50 = +50%...)
+  jours_conges_pris: 0,   // Jours de congés payés pris ce mois
+  // Rémunération de base
   salaire_base: 0,
-  heures_mensuelles: 173.33,
   sursalaire: 0,
   prime_transport: 30000,
-  autres_primes: 0,
-  primes_non_imposables: 0, 
-  heures_sup_nb: 0,
-  heures_sup_taux: 0,
+  prime_logement: 0,
+  // Primes libres (imposables ou non)
+  primes: [
+    { id: 1, label: 'Prime de fonction', montant: 0, imposable: true },
+    { id: 2, label: 'Prime de responsabilité', montant: 0, imposable: true },
+    { id: 3, label: 'Autres indemnités', montant: 0, imposable: false }
+  ],
+  // Retenues salariales
   acompte: 0,
   avance: 0,
   opposition: 0,
   autres_retenues: 0,
-  // CNPS paramétrable
-  taux_at: 0.02, // Taux Accident du Travail (2% à 5% selon le secteur)
-  ayants_droit_cmu: 0, // Nombre d'ayants droit CMU (conjoint + enfants < 21 ans)
-  // Régime
+  // Cotisations
+  auto_anciennete: true,
+  taux_at: 0.02,
+  ayants_droit_cmu: 0,
+  // Régime fiscal
   regime: '2024',
   // Période
   mois: new Date().getMonth() + 1,
   annee: new Date().getFullYear(),
+  // Paiement
+  virement: true,
+  rib: ''
 })
 
 const moisLabels = [
@@ -62,30 +74,115 @@ const generated = ref(false)
 const downloadUrl = ref(null)
 const errorMsg = ref(null)
 const activeTab = ref('employe') // 'entreprise' | 'employe' | 'remuneration'
+const showHelp = ref(false)
+
+const explanations = {
+  salaire_base: {
+    title: "Salaire de Base",
+    text: "C'est la rémunération convenue au contrat pour 173.33 heures le mois. Si vous travaillez moins d'heures, il est réduit au prorata. C'est la base de calcul pour la plupart des primes et indemnités."
+  },
+  heures_sup: {
+    title: "Heures Supplémentaires",
+    text: "Toute heure travaillée au-delà de 40h/semaine. En Côte d'Ivoire, elles sont majorées (15%, 50%, 75% ou 100% selon le moment). Elles augmentent votre brut imposable et donc votre net, mais aussi vos impôts."
+  },
+  its_2024: {
+    title: "ITS Unique (Réforme 2024)",
+    text: "Depuis janvier 2024, l'IS, la CN et l'IGR sont fusionnés en un Impôt Unique (ITS). Le calcul est progressif par tranches. Plus votre salaire est élevé, plus le taux appliqué sur la tranche supérieure augmente."
+  },
+  cnps: {
+    title: "CNPS (Retraite)",
+    text: "Une part de 6.3% est retenue sur votre salaire brut (plafonné à 3.375.000 FCFA) pour financer votre future retraite. L'employeur paie aussi 7.7% de son côté."
+  },
+  cmu: {
+    title: "CMU (Assurance Maladie)",
+    text: "Cotisation de 1000 FCFA par personne (vous et vos ayants droit). Elle permet d'accéder aux soins à prix réduit dans les centres conventionnés."
+  },
+  ricf: {
+    title: "Réduction RICF",
+    text: "C'est un cadeau fiscal ! Plus vous avez de parts (marié, enfants), plus votre impôt ITS est réduit. Chaque part supplémentaire après la première réduit l'impôt de 11.000 FCFA par mois."
+  },
+  transport: {
+    title: "Prime de Transport",
+    text: "C'est une indemnité pour vos frais de déplacement. Contrairement au salaire, elle n'est pas imposable (jusqu'à 30.000 FCFA généralement) : vous recevez 100% du montant sans retenue."
+  },
+  anciennete: {
+    title: "Prime d'Ancienneté",
+    text: "Générée automatiquement si vous avez plus de 2 ans de service (basé sur la date d'embauche). Le taux commence à 2% après 2 ans et gagne +1% par an, plafonné à 25%."
+  },
+  conges: {
+    title: "Allocation Congés Payés",
+    text: "Si vous prenez des jours de repos, cette indemnité remplace le salaire des jours correspondants. Elle est imposable et soumise à cotisations car elle remplace un revenu."
+  }
+}
 
 // ══════════════════════════════════════════════
 // CALCULS EN TEMPS RÉEL
 // ══════════════════════════════════════════════
 const calc = computed(() => {
   const salaireBaseMensuel = +emp.value.salaire_base || 0
-  const heuresMensuelles = +emp.value.heures_mensuelles || 173.33
+  const joursDansLeMois = 30 // Standard paie ivoirienne
+  // Jours effectivement payés = jours travaillés - absences
+  const joursTrav = Math.max(0, (+emp.value.jours_travailles || 26) - (+emp.value.absences_jours || 0))
   
-  // Calcul du salaire de base effectif au prorata des heures
-  const salaireBase = Math.round((salaireBaseMensuel / 173.33) * heuresMensuelles)
-  
-  const sursalaire = +emp.value.sursalaire || 0
+  const salaireBase = Math.round((salaireBaseMensuel / joursDansLeMois) * joursTrav)
+  const sursalaire = Math.round((+emp.value.sursalaire || 0) / joursDansLeMois * joursTrav)
   const primeTransport = +emp.value.prime_transport || 0
-  // Primes IMPOSABLES : avantages en nature, primes diverses taxables
-  const autresPrimes = +emp.value.autres_primes || 0
-  // Indemnités NON-IMPOSABLES : responsabilité, logement, représentation, etc.
-  const primesNonImposables = +emp.value.primes_non_imposables || 0
+  const primeLogement = +emp.value.prime_logement || 0
+  
+  // Heures supplémentaires : taux horaire = salaire mensuel / 173.33h
+  // Montant HS = nb heures × taux horaire × coefficient majoration
   const nbHeuresSup = +emp.value.heures_sup_nb || 0
-  const tauxHeuresSup = +emp.value.heures_sup_taux || 0
-  const montantHeuresSup = Math.round(nbHeuresSup * tauxHeuresSup)
+  const coefHS = +emp.value.heures_sup_coef || 1.15
+  const tauxHoraire = salaireBaseMensuel > 0 ? Math.round(salaireBaseMensuel / 173.33) : 0
+  const montantHeuresSup = Math.round(nbHeuresSup * tauxHoraire * coefHS)
 
-  // Le brut imposable N'INCLUT PAS les primes non-imposables ni le transport
-  const salaireBrut = salaireBase + sursalaire + autresPrimes + montantHeuresSup
-  const brutImposable = salaireBrut  // = ce sur quoi portent IS, CN, CNPS, IGR
+  const primesImposables = emp.value.primes.filter(p => p.imposable).reduce((acc, p) => acc + (+p.montant || 0), 0)
+  const primesNonImposablesRub = emp.value.primes.filter(p => !p.imposable).reduce((acc, p) => acc + (+p.montant || 0), 0)
+  const gratification = 0
+  const preavisVal = 0
+  const indemLicenciement = 0
+  const indemTransac = 0
+  const fraisFuneraires = 0
+
+  // -- CALCUL AUTO ANCIENNETÉ --
+  let primeAnciennete = 0
+  let ansAnciennete = 0
+  let ancienneteTxt = "0 ans 00 mois"
+  if (emp.value.auto_anciennete && emp.value.date_embauche) {
+    const embauche = new Date(emp.value.date_embauche)
+    const datePaie = new Date(emp.value.annee, emp.value.mois - 1, 1)
+    
+    let diffAns = datePaie.getFullYear() - embauche.getFullYear()
+    let diffMois = datePaie.getMonth() - embauche.getMonth()
+    if (diffMois < 0) {
+      diffAns--
+      diffMois += 12
+    }
+    ansAnciennete = Math.max(0, diffAns)
+    ancienneteTxt = `${ansAnciennete} ans ${String(Math.max(0, diffMois)).padStart(2, '0')} mois`
+    
+    // Taux: 2% après 2 ans, +1% par an, avec un plafond max de 25%
+    let tauxAnciennete = 0
+    if (ansAnciennete >= 2) {
+      tauxAnciennete = Math.min(25, 2 + (ansAnciennete - 2))
+    }
+    primeAnciennete = Math.round(salaireBaseMensuel * (tauxAnciennete / 100))
+  }
+
+  // -- CALCUL ALLOOCATION CONGÉS PAYÉS --
+  let allocationConges = 0;
+  const joursCP = +(emp.value.jours_conges_pris) || 0;
+  if (joursCP > 0) {
+     const baseCP = salaireBaseMensuel + (+emp.value.sursalaire || 0) + primeAnciennete
+     allocationConges = Math.round((baseCP / joursDansLeMois) * joursCP);
+  }
+
+  // Le brut imposable (Ordre LOGIPAIE)
+  // Inclut : Salaire base + Sursalaire + HS + Ancienneté + Congés + Primes Imposables + Gratif + Préavis
+  const salaireBrut = salaireBase + sursalaire + primeAnciennete + allocationConges + montantHeuresSup + primesImposables
+  const brutImposable = salaireBrut
+  // Total Gains (inclut le brut + éléments non imposables)
+  const gainsTotaux = salaireBrut + primeTransport + primeLogement + primesNonImposablesRub
 
   // Charges fiscales employeur (sur brut imposable)
   const baseFiscale = brutImposable
@@ -189,12 +286,10 @@ const calc = computed(() => {
   const avance = +emp.value.avance || 0
   const opposition = +emp.value.opposition || 0
   const autresRetenues = +emp.value.autres_retenues || 0
-  
+  ricf = Math.max(0, (parts - 1) * 11000)
   const impots = emp.value.regime !== 'ancien' ? itsFinal : (is + cn + igr)
   const totalRetenues = impots + cnpsSal + cmuSal + acompte + avance + opposition + autresRetenues
-
-  const netIntermediaire = salaireBrut - totalRetenues
-  const netAPayer = netIntermediaire + primeTransport + primesNonImposables
+  const netAPayer = gainsTotaux - totalRetenues
 
   // Détail des tranches pour l'affichage
   const detailTranches = []
@@ -221,21 +316,32 @@ const calc = computed(() => {
   }
 
   return {
-    salaireBase, salaireBaseMensuel, heuresMensuelles, sursalaire, primeTransport, autresPrimes, primesNonImposables, montantHeuresSup,
+    salaireBase, salaireBaseMensuel, joursDansLeMois, joursTrav,
+    sursalaire, primeTransport, primeLogement,
+    primeAnciennete, ansAnciennete, ancienneteTxt, allocationConges, joysCP: joursCP,
+    primesImposables, primesNonImposablesRub,
+    montantHeuresSup, nbHeuresSup, coefHS, tauxHoraire,
     salaireBrut, brutImposable, baseFiscale, baseCNPS, baseCNPS_PfAtAm, tauxAT, nbAyantsDroitCMU,
-    parts,
-    detailTranches, // Pour la transparence du calcul
+    parts, ricf,
+    gainsTotaux,
+    salarial: {
+      its: itsFinal, ricf,
+      is, cn, igr,
+      cnps: cnpsSal,
+      cmu: cmuSal,
+      regime: emp.value.regime,
+      total: totalRetenues,
+      acompte, avance, opposition, autresRetenues
+    },
     patronal: {
-      impotEmployeur, fdfpTA, fdfpFPC, totalFiscal: totalFiscalEmployeur,
-      cnpsPF, cnpsAM, cnpsAT, cnpsRetraite: cnpsRetraitePat, cmu: cmuPat,
-      totalSocial: totalSocialEmployeur, grandTotal: totalPatronal
+      impot: impotEmployeur, fdfpTA, fdfpFPC,
+      totalFiscal: totalFiscalEmployeur,
+      cnpsPF, cnpsAM, cnpsAT,
+      cnpsRetraite: cnpsRetraitePat,
+      cmu: cmuPat,
+      totalSocial: totalSocialEmployeur,
+      grandTotal: totalPatronal
     },
-    salarial: { 
-      its: itsFinal, ricf, is, cn, igr, cnps: cnpsSal, cmu: cmuSal, 
-      acompte, avance, opposition, autres: autresRetenues, 
-      total: totalRetenues, regime: emp.value.regime 
-    },
-    baseTaxableITS: emp.value.regime !== 'ancien' ? brutImposable : 0,
     netAPayer
   }
 })
@@ -383,10 +489,19 @@ const reset = () => {
   errorMsg.value = null
 }
 
+const computedFileName = computed(() => {
+  const moisNoms = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+  const moisNom = moisNoms[emp.value.mois - 1] || 'Mois';
+  const ent = (emp.value.nom_entreprise || 'ENTREPRISE').toUpperCase();
+  const nomStr = (emp.value.nom || 'SALARIE').toUpperCase();
+  return `BULLETIN DE PAIE - ${ent} - ${nomStr} - ${moisNom} ${emp.value.annee}.pdf`;
+});
+
 const tabs = [
   { id: 'entreprise', label: 'Entreprise', icon: '🏢' },
   { id: 'employe', label: 'Employé', icon: '👤' },
   { id: 'remuneration', label: 'Rémunération', icon: '💰' },
+  { id: 'reglement', label: 'Règlement', icon: '💳' },
 ]
 </script>
 
@@ -452,7 +567,7 @@ const tabs = [
               <input v-model="emp.numero_cnps" type="text" placeholder="Numéro CNPS" />
             </div>
             <div class="field-group">
-              <label>N° Contribuable</label>
+              <label>N° Contribuable (RCCM)</label>
               <input v-model="emp.numero_contribuable" type="text" placeholder="N° Contribuable" />
             </div>
           </div>
@@ -484,16 +599,6 @@ const tabs = [
           </div>
           <div class="field-row">
             <div class="field-group">
-              <label>Ville</label>
-              <input v-model="emp.ville" type="text" placeholder="Ex: ABIDJAN" />
-            </div>
-            <div class="field-group">
-              <label>N° SECU (Sociale)</label>
-              <input v-model="emp.num_secu" type="text" placeholder="N° Sécurité Sociale" />
-            </div>
-          </div>
-          <div class="field-row">
-            <div class="field-group">
               <label>Nom <span class="required">*</span></label>
               <input v-model="emp.nom" type="text" placeholder="NOM" />
             </div>
@@ -502,9 +607,15 @@ const tabs = [
               <input v-model="emp.prenom" type="text" placeholder="Prénoms" />
             </div>
           </div>
-          <div class="field-group">
-            <label>Poste / Fonction</label>
-            <input v-model="emp.poste" type="text" placeholder="Ex: Responsable Comptable" />
+          <div class="field-row">
+            <div class="field-group">
+              <label>Poste / Fonction</label>
+              <input v-model="emp.poste" type="text" placeholder="Ex: Responsable Comptable" />
+            </div>
+            <div class="field-group">
+              <label>Qualification</label>
+              <input v-model="emp.qualification" type="text" placeholder="Ex: Ingénieur, Technicien..." />
+            </div>
           </div>
           <div class="field-row">
             <div class="field-group">
@@ -527,8 +638,8 @@ const tabs = [
               <input v-model="emp.date_embauche" type="date" />
             </div>
             <div class="field-group">
-              <label>Date de naissance</label>
-              <input v-model="emp.date_naissance" type="date" />
+              <label>N° SECU (Sociale)</label>
+              <input v-model="emp.num_secu" type="text" placeholder="N° Sécurité Sociale" />
             </div>
           </div>
           <div class="parts-badge">
@@ -549,487 +660,475 @@ const tabs = [
             </div>
           </div>
 
-          <div class="separator-label">1. Éléments Imposables (Cotisables)</div>
           <div class="field-row">
             <div class="field-group">
-              <label class="flex justify-between w-full">
-                <span>Salaire de base (mensuel) <span class="required">*</span></span>
-                <span @click="calculerBrutDepuisNet" class="text-xs text-blue-600 cursor-pointer font-bold hover:underline bg-blue-50 px-2 py-0.5 rounded shadow-sm">🪄 Calculer brut depuis Net</span>
+              <label>
+                Salaire Catégoriel (FCFA) <span class="required">*</span>
+                <span class="field-hint">Rémunération pour 173.33 h/mois. Sert de base de calcul.</span>
               </label>
-              <input v-model.number="emp.salaire_base" type="number" min="0" step="1" placeholder="Ex: 121682" />
+              <input v-model.number="emp.salaire_base" type="number" min="0" step="1" placeholder="Ex: 200 000" />
             </div>
             <div class="field-group">
-              <label>Sursalaire</label>
-              <input v-model.number="emp.sursalaire" type="number" min="0" step="1" placeholder="Ex: 95178" />
-            </div>
-          </div>
-          <div class="field-row">
-            <div class="field-group">
-              <label>Autres Primes Imposables</label>
-              <input v-model.number="emp.autres_primes" type="number" min="0" step="1" placeholder="Ex: Gratification..." />
-            </div>
-            <div class="field-group">
-              <label>Heures travaillées (standard: 173.33)</label>
-              <input v-model.number="emp.heures_mensuelles" type="number" min="0" step="0.01" />
-            </div>
-          </div>
-
-          <div class="separator-label">2. Heures Supplémentaires</div>
-          <div class="field-row">
-            <div class="field-group">
-              <label>Nombre d'heures</label>
-              <input v-model.number="emp.heures_sup_nb" type="number" min="0" />
-            </div>
-            <div class="field-group">
-              <label>Taux horaire (FCFA)</label>
-              <input v-model.number="emp.heures_sup_taux" type="number" min="0" step="100" />
-            </div>
-          </div>
-
-          <div class="separator-label">3. CNPS / Cotisations Sociales</div>
-          <div class="field-row">
-            <div class="field-group">
-              <label>Taux Accident du Travail (AT)
-                <span class="field-hint">Variable selon le secteur d'activité</span>
+              <label>
+                Sursalaire (FCFA)
+                <span class="field-hint">Montant négocié au-delà du catégoriel.</span>
               </label>
-              <select v-model.number="emp.taux_at">
-                <option :value="0.02">2% — Bureau / Administration</option>
-                <option :value="0.03">3% — Commerce / Services</option>
-                <option :value="0.04">4% — Industrie / Transport</option>
-                <option :value="0.05">5% — BTP / Mines / Risque élevé</option>
-              </select>
+              <input v-model.number="emp.sursalaire" type="number" min="0" step="1" placeholder="0" />
             </div>
+          </div>
+
+          <div class="separator-label">⏱ Temps de Travail</div>
+
+          <div class="field-row">
             <div class="field-group">
-              <label>Ayants droit CMU
-                <span class="field-hint">Conjoint sans emploi + enfants &lt;21 ans (max 6)</span>
+              <label>
+                Jours travaillés ce mois
+                <span class="field-hint">Standard = 26 jours (5j/sem)</span>
               </label>
-              <input v-model.number="emp.ayants_droit_cmu" type="number" min="0" max="7" placeholder="0" />
+              <input v-model.number="emp.jours_travailles" type="number" min="0" max="31" />
+            </div>
+            <div class="field-group">
+              <label>
+                Jours d'absence
+                <span class="field-hint">Déduits automatiquement</span>
+              </label>
+              <input v-model.number="emp.absences_jours" type="number" min="0" max="31" />
             </div>
           </div>
 
-          <div class="separator-label">4. Indemnités Exonérées (Non Imposables)</div>
-          <div class="field-row">
-            <div class="field-group">
-              <label>Prime de Transport</label>
-              <input v-model.number="emp.prime_transport" type="number" min="0" step="1" placeholder="30000" />
-            </div>
-            <div class="field-group">
-              <label>Autres Indemnités Non-Taxables</label>
-              <input v-model.number="emp.primes_non_imposables" type="number" min="0" step="1" placeholder="Ex: Logement éxo..." />
-            </div>
+          <div class="info-calc" v-if="calc.joursTrav >= 0">
+            📅 Jours payés effectifs : <strong>{{ calc.joursTrav }} j</strong> &rarr; Salaire de base : <strong>{{ fcfa(calc.salaireBase) }} FCFA</strong>
           </div>
 
-          <div class="separator-label">5. Retenues Diverses & Paiement</div>
           <div class="field-row">
             <div class="field-group">
-              <label>Acomptes (N° 900)</label>
-              <input v-model.number="emp.acompte" type="number" min="0" step="1" />
+              <label>H. Supplémentaires (nombre)</label>
+              <input v-model.number="emp.heures_sup_nb" type="number" min="0" placeholder="0" />
             </div>
             <div class="field-group">
-              <label>Avances (N° 910)</label>
-              <input v-model.number="emp.avance" type="number" min="0" step="1" />
-            </div>
-          </div>
-          <div class="field-row">
-            <div class="field-group">
-              <label>Oppositions / Saisies (N° 920)</label>
-              <input v-model.number="emp.opposition" type="number" min="0" step="1" />
-            </div>
-            <div class="field-group">
-              <label>Autres Retenues</label>
-              <input v-model.number="emp.autres_retenues" type="number" min="0" step="1" />
-            </div>
-          </div>
-          <div class="field-row">
-            <div class="field-group">
-              <label>Mode de Règlement</label>
-              <select v-model="emp.mode_reglement">
-                <option value="Virement">Virement</option>
-                <option value="Espèces">Espèces</option>
-                <option value="Chèque">Chèque</option>
+              <label>
+                Coefficient de majoration
+                <span class="field-hint">Fixé par le Code du Travail (15%, 50%, 75% ou 100%)</span>
+              </label>
+              <select v-model.number="emp.heures_sup_coef">
+                <option :value="1.15">+15% (Heures de jour 41h-48h)</option>
+                <option :value="1.50">+50% (Heures de nuit / Dimanche)</option>
+                <option :value="1.75">+75% (De nuit un jour au-delà de 48h)</option>
+                <option :value="2.0">+100% (De jour un Férié)</option>
               </select>
             </div>
           </div>
-          <div class="field-row" v-if="emp.mode_reglement === 'Virement'">
+          <div class="info-calc" v-if="emp.heures_sup_nb > 0">
+            ⏳ {{ emp.heures_sup_nb }}h × {{ fcfa(calc.tauxHoraire) }} FCFA/h × {{ emp.heures_sup_coef }} = <strong>{{ fcfa(calc.montantHeuresSup) }} FCFA</strong>
+          </div>
+
+          <div class="field-row">
             <div class="field-group">
-              <label>Nom de la Banque</label>
-              <input v-model="emp.banque_nom" type="text" placeholder="Ex: ECOBANK" />
+              <label>Jours de Congés payés pris</label>
+              <input v-model.number="emp.jours_conges_pris" type="number" min="0" max="30" />
+            </div>
+          </div>
+
+          <div class="separator-label">💰 Primes &amp; Indemnités</div>
+
+          <div class="field-row">
+            <div class="field-group">
+              <label>Prime de Transport (Non imposable)</label>
+              <input v-model.number="emp.prime_transport" type="number" min="0" placeholder="30 000" />
             </div>
             <div class="field-group">
-              <label>N° Compte / RIB</label>
-              <input v-model="emp.banque_compte" type="text" placeholder="RIB" />
+              <label>Prime de Logement (Non imposable)</label>
+              <input v-model.number="emp.prime_logement" type="number" min="0" placeholder="0" />
+            </div>
+          </div>
+
+          <div v-for="(prime, index) in emp.primes" :key="prime.id" class="field-row prime-row" style="align-items: flex-end;">
+            <div class="field-group" style="flex: 2;">
+              <input v-model="prime.label" type="text" placeholder="Nom de la prime" />
+            </div>
+            <div class="field-group" style="flex: 1;">
+              <input v-model.number="prime.montant" type="number" placeholder="Montant FCFA" />
+            </div>
+            <div style="display: flex; align-items: center; gap: 5px; margin-bottom: 8px;">
+              <input v-model="prime.imposable" type="checkbox" :id="'imp-' + prime.id" />
+              <label :for="'imp-' + prime.id" style="margin: 0; font-size: 11px;">Impos.</label>
+            </div>
+            <button class="btn-remove-prime" @click="emp.primes.splice(index, 1)" title="Supprimer">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+            </button>
+          </div>
+          <button class="btn-add-prime" @click="emp.primes.push({ id: Date.now(), label: '', montant: 0, imposable: true })" style="width: 100%; padding: 8px; background: #f8fafc; border: 2px dashed #94a3b8; color: #475569; font-weight: 600; border-radius: 8px; cursor: pointer; margin-top: 5px; transition: all 0.2s;">
+            + Ajouter une prime / indemnité
+          </button>
+
+          <div class="separator-label">✂️ Retenues Salariales</div>
+
+          <div class="field-row">
+            <div class="field-group">
+              <label>Acompte sur salaire</label>
+              <input v-model.number="emp.acompte" type="number" min="0" />
+            </div>
+            <div class="field-group">
+              <label>Avance / Prêt</label>
+              <input v-model.number="emp.avance" type="number" min="0" />
             </div>
           </div>
         </div>
 
-        <!-- Navigation onglets -->
+        <!-- ONGLET RÈGLEMENT -->
+        <div v-show="activeTab === 'reglement'" class="tab-content">
+          <div class="field-row">
+            <div class="field-group">
+              <label>Mode de règlement</label>
+              <select v-model="emp.virement">
+                <option :value="true">VIREMENT BANCAIRE</option>
+                <option :value="false">ESPÈCES / CHÈQUE</option>
+              </select>
+            </div>
+          </div>
+          <div v-if="emp.virement" class="field-group animate-slide-down">
+            <label>RIB (Coordonnées Bancaires)</label>
+            <input v-model="emp.rib" type="text" placeholder="Ex: CI000 0000 0000000000 00" />
+            <span class="field-hint">Le RIB apparaîtra sur le bulletin en bas à gauche du mode de règlement.</span>
+          </div>
+        </div>
+
         <div class="tab-nav">
-          <button v-if="activeTab !== 'entreprise'" class="tab-prev" @click="activeTab = tabs[tabs.findIndex(t => t.id === activeTab) - 1].id">
+          <button v-if="activeTab !== tabs[0].id" class="tab-prev" @click="activeTab = tabs[tabs.findIndex(t => t.id === activeTab) - 1].id">
             ← Précédent
           </button>
-          <button v-if="activeTab !== 'remuneration'" class="tab-next" @click="activeTab = tabs[tabs.findIndex(t => t.id === activeTab) + 1].id">
+          <button v-if="activeTab !== tabs[tabs.length - 1].id" class="tab-next" @click="activeTab = tabs[tabs.findIndex(t => t.id === activeTab) + 1].id">
             Suivant →
           </button>
         </div>
 
-      </div>
+        <div class="action-bar-bottom" style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid #e2e8f0; text-align: center;">
+          <button class="btn-generate" @click="generatePDF" :disabled="generating">
+            <svg v-if="generating" class="spin-icon" viewBox="0 0 24 24" fill="none" width="16" height="16">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-dasharray="31 31"></circle>
+            </svg>
+            {{ generating ? 'Génération...' : '⬇️ Générer PDF' }}
+          </button>
 
-      <!-- COLONNE DROITE: Prévisualisation -->
-      <div class="paysim-preview">
-        <div class="preview-title">
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-          Aperçu en temps réel — {{ moisLabels[emp.mois] }} {{ emp.annee }}
+          <div v-if="errorMsg" class="error-alert mt-4 text-sm text-red-600 bg-red-50 p-2 rounded">
+            🚨 {{ errorMsg }}
+          </div>
+          
+          <div v-if="downloadUrl" class="success-alert mt-4">
+            ✅ Génération réussie !
+            <a :href="downloadUrl" :download="computedFileName" class="dl-link" title="Télécharger">⬇️ Télécharger PDF</a>
+            <button @click="reset" class="btn-reset-small ml-4 text-xs text-gray-500 underline">Faire un autre</button>
+          </div>
         </div>
 
-        <!-- Mini bulletin -->
-        <div class="bulletin-preview">
+      </div>
 
-          <!-- En-tête bulletin -->
-          <div class="bulletin-header">
-            <div class="bulletin-company">
-              <div class="company-name">{{ emp.nom_entreprise || 'Mon Entreprise' }}</div>
-              <div class="company-details"><strong>ADRESSE :</strong> {{ emp.adresse }}</div>
-              <div class="company-details"><strong>SIEGE SOCIAL :</strong> {{ emp.siege_social }}</div>
-              <div v-if="emp.numero_cnps" class="company-details"><strong>N° CNPS :</strong> {{ emp.numero_cnps }}</div>
-              <div v-if="emp.numero_contribuable" class="company-details"><strong>N° CONTRIBUABLE :</strong> {{ emp.numero_contribuable }}</div>
-              <div class="company-details"><strong>E-mail :</strong> {{ emp.email_entreprise }}</div>
-              <div class="company-details"><strong>TELEPHONE :</strong> {{ emp.tel_entreprise }}</div>
+      <!-- COLONNE DROITE: Prévisualisation Premium LOGIPAIE -->
+      <div class="paysim-preview">
+        <div class="preview-container">
+          
+          <!-- Header Bulletin Neutre -->
+          <div class="preview-header">
+            <div class="header-left">
+              <div class="company-name-main">{{ (emp.nom_entreprise || 'MON ENTREPRISE').toUpperCase() }}</div>
+              <div class="company-sub">
+                <p>{{ emp.adresse || 'Abidjan, Côte d\'Ivoire' }}</p>
+                <div class="fiscal-ids">
+                  <span v-if="emp.numero_contribuable">N° CC: {{ emp.numero_contribuable }}</span>
+                  <span v-if="emp.numero_rc">RCCM: {{ emp.numero_rc }}</span>
+                  <span v-if="emp.numero_cnps">CNPS: {{ emp.numero_cnps }}</span>
+                </div>
+              </div>
             </div>
-            <div class="bulletin-title-block">
-              <div class="bulletin-title-text">BULLETIN DE PAIE</div>
-              <div class="bulletin-period">{{ moisLabels[emp.mois] }} {{ emp.annee }}</div>
-              <div class="emp-info-grid">
-                <div class="emp-info-row">
-                  <span class="ei-label">Matricule</span>
-                  <span class="ei-value">{{ emp.matricule || '—' }}</span>
-                </div>
-                <div class="emp-info-row">
-                  <span class="ei-label">Nom</span>
-                  <span class="ei-value">{{ emp.nom ? emp.nom.toUpperCase() : '—' }}</span>
-                </div>
-                <div class="emp-info-row">
-                  <span class="ei-label">Prénom(s)</span>
-                  <span class="ei-value">{{ emp.prenom || '—' }}</span>
-                </div>
-                <div class="emp-info-row">
-                  <span class="ei-label">Poste</span>
-                  <span class="ei-value">{{ emp.poste || '—' }}</span>
-                </div>
-                <div class="emp-info-row">
-                  <span class="ei-label">Nbre de Part:</span>
-                  <span class="ei-value highlight">{{ calc.parts.toFixed(2) }}</span>
-                </div>
-                <div class="emp-info-row">
-                  <span class="ei-label">Date d'Embauche:</span>
-                  <span class="ei-value">{{ emp.date_embauche || '—' }}</span>
-                </div>
-                <div class="emp-info-row">
-                  <span class="ei-label">Date de Naissance:</span>
-                  <span class="ei-value">{{ emp.date_naissance || '—' }}</span>
-                </div>
-                <div class="emp-info-row">
-                  <span class="ei-label">Ville:</span>
-                  <span class="ei-value">{{ emp.ville || '—' }}</span>
-                </div>
-                <div class="emp-info-row">
-                  <span class="ei-label">N° SECU:</span>
-                  <span class="ei-value">{{ emp.num_secu || '—' }}</span>
-                </div>
+            <div class="header-right">
+              <div class="bulletin-label">BULLETIN DE PAIE</div>
+              <div class="bulletin-period-badge">{{ moisLabels[emp.mois] || '' }} {{ emp.annee }}</div>
+            </div>
+          </div>
+
+          <!-- Section Employé & Période (Header Logipaie) -->
+          <div class="logipaie-header-grid">
+            <div class="lph-left lph-box">
+              <div class="lph-title text-white bg-slate-700 p-1 text-center font-bold text-xs mb-2">SALARIE</div>
+              <div class="lph-content">
+                <div class="lph-row"><span>Nom :</span> <strong>{{ (emp.nom || '').toUpperCase() }}</strong></div>
+                <div class="lph-row"><span>Prénom(s) :</span> <strong>{{ emp.prenom || '' }}</strong></div>
+                <div class="lph-row"><span>Emploi :</span> <span>{{ emp.poste || '____' }}</span></div>
+                <div class="lph-row"><span>Qualification :</span> <span>{{ emp.qualification || '____' }}</span></div>
+                <div class="lph-row"><span>Catégorie :</span> <span>{{ emp.categorie || '____' }}</span></div>
+              </div>
+            </div>
+            <div class="lph-right lph-box border border-slate-200">
+               <div class="lph-content p-2">
+                <div class="lph-row"><span>N° Matricule :</span> <strong>{{ emp.matricule || '____' }}</strong></div>
+                <div class="lph-row"><span>N° CNPS :</span> <strong>{{ emp.num_secu || '____' }}</strong></div>
+                <div class="lph-row"><span>Parts IGR :</span> <strong>{{ calc.parts?.toFixed(2) }}</strong></div>
+                <div class="lph-row"><span>Type Contrat :</span> <span>{{ emp.type_contrat || 'CDI' }}</span></div>
+                <div class="lph-row"><span>Ancienneté :</span> <span>{{ calc.ancienneteTxt || '____' }}</span></div>
               </div>
             </div>
           </div>
 
-          <!-- Tableau Professionnel 10 Colonnes -->
-          <div class="table-container-responsive">
-            <table class="bulletin-table professional-layout">
+          <!-- Tableau de Paie 7 Colonnes Style Papier -->
+          <div class="table-wrapper">
+            <table class="logipaie-table">
               <thead>
                 <tr>
-                  <th rowspan="2">N°</th>
-                  <th rowspan="2">DÉSIGNATION</th>
-                  <th rowspan="2">NBR</th>
-                  <th rowspan="2">BASE</th>
-                  <th colspan="2" class="text-center">GAINS</th>
-                  <th colspan="2" class="text-center">SALARIAL</th>
-                  <th colspan="2" class="text-center">PATRONAL</th>
+                  <th colspan="2" class="header-group">RUBRIQUES / DESIGNATIONS</th>
+                  <th rowspan="2" class="col-base">BASE</th>
+                  <th colspan="3" class="header-group" style="background: #166534;">PART SALARIALE</th>
+                  <th colspan="2" class="header-group" style="background: #b91c1c;">PART PATRONALE</th>
                 </tr>
                 <tr>
-                  <th class="text-right text-xs">Taux</th>
-                  <th class="text-right text-xs">Montant</th>
-                  <th class="text-right text-xs">Taux</th>
-                  <th class="text-right text-xs">Retenue</th>
-                  <th class="text-right text-xs">Taux</th>
-                  <th class="text-right text-xs">Retenue</th>
+                  <th class="col-n">N°</th>
+                  <th class="col-lib">LIBELLÉS</th>
+                  <th class="col-taux-s">Taux</th>
+                  <th class="col-gain">Gains</th>
+                  <th class="col-ret-s">Retenues</th>
+                  <th class="col-taux-p">Taux</th>
+                  <th class="col-ret-p">Retenues</th>
                 </tr>
               </thead>
               <tbody>
-                <!-- Section Gains -->
-                <tr v-if="calc.salaireBase > 0">
-                  <td class="text-center">380</td>
-                  <td>Salaire de base</td>
-                  <td class="text-center">{{ calc.heuresMensuelles }}</td>
-                  <td class="text-right">{{ fcfa(emp.salaire_base) }}</td>
-                  <td class="text-right">100%</td>
-                  <td class="text-right text-mono gain">{{ fcfa(calc.salaireBase) }}</td>
-                  <td></td><td></td><td></td><td></td>
+                <!-- Salaire & Primes -->
+                <tr>
+                  <td class="code">380</td>
+                  <td class="label">SALAIRE CATEGORIEL</td>
+                  <td class="val">{{ fcfa(calc.salaireBaseMensuel) }}</td>
+                  <td class="val">{{ calc.joursTrav }}/30</td>
+                  <td class="gain">{{ fcfa(calc.salaireBase) }}</td>
+                  <td></td><td></td><td></td>
                 </tr>
                 <tr v-if="calc.sursalaire > 0">
-                  <td class="text-center">385</td>
-                  <td>Sursalaire</td>
+                  <td class="code">385</td>
+                  <td class="label">SURSALAIRE</td>
+                  <td class="val">{{ fcfa(+emp.sursalaire || 0) }}</td>
+                  <td class="val">{{ calc.joursTrav }}/30</td>
+                  <td class="gain">{{ fcfa(calc.sursalaire) }}</td>
                   <td></td><td></td><td></td>
-                  <td class="text-right text-mono gain">{{ fcfa(calc.sursalaire) }}</td>
-                  <td></td><td></td><td></td><td></td>
                 </tr>
-                <tr v-if="calc.autresPrimes > 0">
-                  <td class="text-center">395</td>
-                  <td>Primes imposables</td>
-                  <td></td><td></td><td></td>
-                  <td class="text-right text-mono gain">{{ fcfa(calc.autresPrimes) }}</td>
-                  <td></td><td></td><td></td><td></td>
-                </tr>
-                <tr v-if="calc.montantHeuresSup > 0">
-                  <td class="text-center">315</td>
-                  <td>Heures Supplémentaires</td>
-                  <td></td><td></td><td></td>
-                  <td class="text-right text-mono gain">{{ fcfa(calc.montantHeuresSup) }}</td>
-                  <td></td><td></td><td></td><td></td>
-                </tr>
-                <tr class="row-total bg-gray-50">
+                <tr v-if="calc.primeAnciennete > 0">
+                  <td class="code">390</td>
+                  <td class="label">PRIME D'ANCIENNETE ({{ calc.ansAnciennete }} ans)</td>
+                  <td class="val">{{ fcfa(calc.salaireBase + (calc.sursalaire || 0)) }}</td>
                   <td></td>
-                  <td><strong>TOTAL BRUT</strong></td>
+                  <td class="gain">{{ fcfa(calc.primeAnciennete) }}</td>
                   <td></td><td></td><td></td>
-                  <td class="text-right text-mono"><strong>{{ fcfa(calc.salaireBrut) }}</strong></td>
-                  <td></td><td></td><td></td><td></td>
+                </tr>
+                <tr v-if="calc.allocationConges > 0">
+                  <td class="code">392</td>
+                  <td class="label">ALLOCATION CONGES PAYES ({{ calc.joursCP }} j)</td>
+                  <td></td><td></td>
+                  <td class="gain">{{ fcfa(calc.allocationConges) }}</td>
+                  <td></td><td></td><td></td>
+                </tr>
+                
+                <tr v-for="prime in emp.primes" :key="prime.id">
+                   <td class="code">{{ prime.imposable ? '395' : '700' }}</td>
+                   <td class="label">{{ (prime.label || 'PRIME').toUpperCase() }}</td>
+                   <td></td><td></td>
+                   <td class="gain">{{ fcfa(prime.montant) }}</td>
+                   <td></td><td></td><td></td>
                 </tr>
 
-                <!-- Section Impôts Salariaux (ITS 2024 ou Ancien) -->
-                <template v-if="calc.salarial.regime !== 'ancien'">
+                <tr v-if="calc.montantHeuresSup > 0">
+                  <td class="code">315</td>
+                  <td class="label">HEURES SUPPLEMENTAIRES (x{{ emp.heures_sup_coef }})</td>
+                  <td class="val">{{ fcfa(calc.tauxHoraire) }}</td>
+                  <td class="val">{{ calc.nbHeuresSup }} h</td>
+                  <td class="gain">{{ fcfa(calc.montantHeuresSup) }}</td>
+                  <td></td><td></td><td></td>
+                </tr>
+
+                <tr v-if="calc.primeTransport > 0">
+                  <td class="code">701</td>
+                  <td class="label">PRIME DE TRANSPORT (EXO)</td>
+                  <td></td><td></td>
+                  <td class="gain">{{ fcfa(calc.primeTransport) }}</td>
+                  <td></td><td></td><td></td>
+                </tr>
+
+                <tr v-if="calc.primeLogement > 0">
+                  <td class="code">702</td>
+                  <td class="label">PRIME DE LOGEMENT (EXO)</td>
+                  <td></td><td></td>
+                  <td class="gain">{{ fcfa(calc.primeLogement) }}</td>
+                  <td></td><td></td><td></td>
+                </tr>
+
+                <tr class="brut-fiscal-row">
+                  <td colspan="4" class="label-total">BRUT IMPOSABLE / FISCAL</td>
+                  <td class="total-val">{{ fcfa(calc.salaireBrut) }}</td>
+                  <td></td><td></td><td></td>
+                </tr>
+
+                <!-- Charges Sociales -->
+                <!-- CNPS SALARIALE & PATRONALE -->
+                <tr>
+                  <td class="code">454</td>
+                  <td class="label">CNPS - RETRAITE</td>
+                  <td class="val">{{ fcfa(calc.baseCNPS) }}</td>
+                  <td class="val">6.3%</td>
+                  <td></td>
+                  <td class="retenue">{{ fcfa(calc.salarial.cnps) }}</td>
+                  <td class="val">7.7%</td>
+                  <td class="retenue">{{ fcfa(calc.patronal.cnpsRetraite) }}</td>
+                </tr>
+                <tr>
+                  <td class="code">470</td>
+                  <td class="label">CNPS - PRESTATIONS FAMILIALES</td>
+                  <td class="val">{{ fcfa(calc.baseCNPS_PfAtAm) }}</td>
+                  <td></td><td></td><td></td>
+                  <td class="val">5.0%</td>
+                  <td class="retenue">{{ fcfa(calc.patronal.cnpsPF) }}</td>
+                </tr>
+                <tr>
+                  <td class="code">472</td>
+                  <td class="label">CNPS - ACCIDENT DU TRAVAIL</td>
+                  <td class="val">{{ fcfa(calc.baseCNPS_PfAtAm) }}</td>
+                  <td></td><td></td><td></td>
+                  <td class="val">{{ emp.taux_at || 2 }}%</td>
+                  <td class="retenue">{{ fcfa(calc.patronal.cnpsAT) }}</td>
+                </tr>
+                <tr>
+                  <td class="code">475</td>
+                  <td class="label">CNPS - ASSURANCE MATERNITE</td>
+                  <td class="val">{{ fcfa(calc.baseCNPS_PfAtAm) }}</td>
+                  <td></td><td></td><td></td>
+                  <td class="val">0.75%</td>
+                  <td class="retenue">{{ fcfa(calc.patronal.cnpsAM) }}</td>
+                </tr>
+
+                <!-- Fiscalité -->
+                <template v-if="emp.regime !== 'ancien'">
                   <tr>
-                    <td class="text-center">405</td>
-                    <td>ITS (IMPÔT UNIQUE 2024)</td>
-                    <td></td>
-                    <td class="text-right">{{ fcfa(calc.baseTaxableITS) }}</td>
+                    <td class="code">405</td>
+                    <td class="label">ITS (IMPOT UNIQUE 2024)</td>
+                    <td class="val">{{ fcfa(calc.brutImposable) }}</td>
                     <td></td><td></td>
-                    <td></td>
-                    <td class="text-right text-mono retenue">{{ fcfa(calc.salarial.its + calc.salarial.ricf) }}</td>
+                    <td class="retenue">{{ fcfa((calc.salarial.its || 0) + (calc.salarial.ricf || 0)) }}</td>
                     <td></td><td></td>
                   </tr>
-                  <tr v-if="calc.salarial.ricf > 0">
-                    <td class="text-center">406</td>
-                    <td class="italic text-green-600">Réduction RICF ({{ calc.parts }} parts)</td>
-                    <td></td><td></td><td></td><td></td>
-                    <td></td>
-                    <td class="text-right text-mono text-green-600">- {{ fcfa(calc.salarial.ricf) }}</td>
+                  <tr v-if="calc.salarial.ricf > 0" class="sub-row">
+                    <td class="code">406</td>
+                    <td class="label">&nbsp;&nbsp;dont RED. FAMILIALE (RICF)</td>
                     <td></td><td></td>
-                  </tr>
-                  <tr class="bg-blue-50/30">
-                    <td class="text-center">412</td>
-                    <td>Impôts Patronaux (TA / FPC)</td>
-                    <td></td>
-                    <td class="text-right">{{ fcfa(calc.brutImposable) }}</td>
-                    <td></td><td></td><td></td><td></td>
-                    <td class="text-right">2.20%</td>
-                    <td class="text-right text-mono patronal-val">{{ fcfa(calc.patronal.totalFiscal) }}</td>
+                    <td class="sub-gain">( -{{ fcfa(calc.salarial.ricf) }} )</td>
+                    <td></td><td></td><td></td>
                   </tr>
                 </template>
                 <template v-else>
-                  <!-- Ancien modèle affiché dans le nouveau tableau -->
-                  <tr>
-                    <td class="text-center">405</td>
-                    <td>Retenue I.S (Salarié + Patronal)</td>
-                    <td></td>
-                    <td class="text-right">{{ fcfa(calc.brutImposable) }}</td>
-                    <td></td><td></td>
-                    <td class="text-right">1.20%</td>
-                    <td class="text-right text-mono retenue">{{ fcfa(calc.salarial.is) }}</td>
-                    <td class="text-right">1.20%</td>
-                    <td class="text-right text-mono patronal-val">{{ fcfa(calc.patronal.impotEmployeur) }}</td>
-                  </tr>
-                  <!-- ... autres lignes ancien modèle ... -->
+                  <tr><td class="code">405</td><td class="label">IMPOT SUR SALAIRE (I.S.)</td><td class="val">{{ fcfa(calc.brutImposable) }}</td><td class="val">1.2%</td><td></td><td class="retenue">{{ fcfa(calc.salarial.is) }}</td><td></td><td></td></tr>
+                  <tr><td class="code">410</td><td class="label">CONTRIBUTION NAT. (C.N.)</td><td class="val">{{ fcfa(calc.brutImposable) }}</td><td></td><td></td><td class="retenue">{{ fcfa(calc.salarial.cn) }}</td><td></td><td></td></tr>
+                  <tr><td class="code">415</td><td class="label">I.G.R.</td><td></td><td></td><td></td><td class="retenue">{{ fcfa(calc.salarial.igr) }}</td><td></td><td></td></tr>
                 </template>
 
-                <!-- Section Sociale -->
+                <!-- Fiscalité Patronale -->
                 <tr>
-                  <td class="text-center">430</td>
-                  <td>C.M.U (COUVERTURE MALADIE)</td>
-                  <td class="text-center">{{ (1 + calc.nbAyantsDroitCMU) }}</td>
-                  <td class="text-right">{{ fcfa((1 + calc.nbAyantsDroitCMU) * 1000) }}</td>
+                  <td class="code">600</td>
+                  <td class="label">T.A.S.P (IMPOT EMPLOYEUR)</td>
+                  <td class="val">{{ fcfa(calc.brutImposable) }}</td>
+                  <td></td><td></td><td></td>
+                  <td class="val">1.2%</td>
+                  <td class="retenue">{{ fcfa(calc.patronal.impotEmployeur) }}</td>
+                </tr>
+                <tr>
+                  <td class="code">610</td>
+                  <td class="label">FDFP - APPRENTISSAGE</td>
+                  <td class="val">{{ fcfa(calc.brutImposable) }}</td>
+                  <td></td><td></td><td></td>
+                  <td class="val">0.4%</td>
+                  <td class="retenue">{{ fcfa(calc.patronal.fdfpTA) }}</td>
+                </tr>
+                <tr>
+                  <td class="code">612</td>
+                  <td class="label">FDFP - FORMATION CONTINUE</td>
+                  <td class="val">{{ fcfa(calc.brutImposable) }}</td>
+                  <td></td><td></td><td></td>
+                  <td class="val">0.6%</td>
+                  <td class="retenue">{{ fcfa(calc.patronal.fdfpFPC) }}</td>
+                </tr>
+
+                <!-- CMU -->
+                <tr>
+                  <td class="code">430</td>
+                  <td class="label">CMU (ASSURANCE MALADIE)</td>
+                  <td class="val">1000</td>
                   <td></td><td></td>
-                  <td class="text-right">50.0%</td>
-                  <td class="text-right text-mono retenue">{{ fcfa(calc.salarial.cmu) }}</td>
-                  <td class="text-right">50.0%</td>
-                  <td class="text-right text-mono patronal-val">{{ fcfa(calc.patronal.cmu) }}</td>
-                </tr>
-                <tr>
-                  <td class="text-center">454</td>
-                  <td>C.N.P.S (RETRAITE)</td>
+                  <td class="retenue">{{ fcfa(calc.salarial.cmu) }}</td>
                   <td></td>
-                  <td class="text-right">{{ fcfa(calc.baseCNPS) }}</td>
-                  <td></td><td></td>
-                  <td class="text-right">6.30%</td>
-                  <td class="text-right text-mono retenue">{{ fcfa(calc.salarial.cnps) }}</td>
-                  <td class="text-right">7.70%</td>
-                  <td class="text-right text-mono patronal-val">{{ fcfa(calc.patronal.cnpsRetraite) }}</td>
-                </tr>
-                <tr>
-                  <td class="text-center">450</td>
-                  <td>C.N.P.S (PREST. FAMILIALES)</td>
-                  <td></td>
-                  <td class="text-right">{{ fcfa(calc.baseCNPS_PfAtAm) }}</td>
-                  <td></td><td></td><td></td><td></td>
-                  <td class="text-right">5.00%</td>
-                  <td class="text-right text-mono patronal-val">{{ fcfa(calc.patronal.cnpsPF) }}</td>
-                </tr>
-                <tr>
-                  <td class="text-center">451</td>
-                  <td>C.N.P.S (ASSURANCE MATERNITÉ)</td>
-                  <td></td>
-                  <td class="text-right">{{ fcfa(calc.baseCNPS_PfAtAm) }}</td>
-                  <td></td><td></td><td></td><td></td>
-                  <td class="text-right">0.75%</td>
-                  <td class="text-right text-mono patronal-val">{{ fcfa(calc.patronal.cnpsAM) }}</td>
-                </tr>
-                <tr>
-                  <td class="text-center">452</td>
-                  <td>C.N.P.S (ACCIDENT TRAVAIL)</td>
-                  <td></td>
-                  <td class="text-right">{{ fcfa(calc.baseCNPS_PfAtAm) }}</td>
-                  <td></td><td></td><td></td><td></td>
-                  <td class="text-right">{{ (calc.tauxAT * 100).toFixed(2) }}%</td>
-                  <td class="text-right text-mono patronal-val">{{ fcfa(calc.patronal.cnpsAT) }}</td>
+                  <td class="retenue">{{ fcfa(calc.patronal.cmu) }}</td>
                 </tr>
                 
                 <tr v-if="calc.salarial.acompte > 0">
-                  <td class="text-center">900</td>
-                  <td>ACOMPTES SUR PAIE</td>
-                  <td></td><td></td><td></td><td></td>
-                  <td></td><td class="text-right text-mono retenue">{{ fcfa(calc.salarial.acompte) }}</td>
-                  <td></td><td></td>
-                </tr>
-                <tr v-if="calc.salarial.avance > 0">
-                  <td class="text-center">910</td>
-                  <td>AVANCES / PRÊTS</td>
-                  <td></td><td></td><td></td><td></td>
-                  <td></td><td class="text-right text-mono retenue">{{ fcfa(calc.salarial.avance) }}</td>
-                  <td></td><td></td>
-                </tr>
-                <tr v-if="calc.salarial.opposition > 0">
-                  <td class="text-center">920</td>
-                  <td>OPPOSITIONS / SAISIES</td>
-                  <td></td><td></td><td></td><td></td>
-                  <td></td><td class="text-right text-mono retenue">{{ fcfa(calc.salarial.opposition) }}</td>
-                  <td></td><td></td>
-                </tr>
-                <tr v-if="calc.salarial.autres > 0">
-                  <td class="text-center">950</td>
-                  <td>AUTRES RETENUES DIVERSES</td>
-                  <td></td><td></td><td></td><td></td>
-                  <td></td><td class="text-right text-mono retenue">{{ fcfa(calc.salarial.autres) }}</td>
-                  <td></td><td></td>
-                </tr>
-
-                <tr class="row-total bg-gray-100">
-                  <td></td>
-                  <td><strong>TOTAL DES COTISATIONS</strong></td>
-                  <td></td><td></td><td></td><td></td>
-                  <td></td><td class="text-right text-mono"><strong>{{ fcfa(calc.salarial.total) }}</strong></td>
-                  <td></td><td class="text-right text-mono"><strong>{{ fcfa(calc.patronal.grandTotal) }}</strong></td>
-                </tr>
-
-                <!-- Indemnités Exo -->
-                <tr v-if="calc.primeTransport > 0">
-                  <td class="text-center">630</td>
-                  <td>Indemnité de Transport (EXO)</td>
-                  <td></td><td></td><td></td>
-                  <td class="text-right text-mono gain">{{ fcfa(calc.primeTransport) }}</td>
-                  <td></td><td></td><td></td><td></td>
-                </tr>
-                <tr v-if="calc.primesNonImposables > 0">
-                  <td class="text-center">640</td>
-                  <td>Indemnités non-imposables</td>
-                  <td></td><td></td><td></td>
-                  <td class="text-right text-mono gain">{{ fcfa(calc.primesNonImposables) }}</td>
-                  <td></td><td></td><td></td><td></td>
+                   <td class="code">900</td>
+                   <td class="label">ACOMPTE / AVANCES</td>
+                   <td></td><td></td><td></td>
+                   <td class="retenue">{{ fcfa(calc.salarial.acompte) }}</td>
+                   <td></td><td></td>
                 </tr>
               </tbody>
             </table>
           </div>
 
-          <!-- Pied bulletin -->
-          <div class="bulletin-footer">
-            <div class="footer-cumul">
-              <div class="cumul-title">Cumul de paie</div>
-              <div class="cumul-row">
-                <span>C.N</span><span>{{ fcfa(calc.salarial.cn) }}</span>
-              </div>
-              <div class="cumul-row">
-                <span>I.G.R</span><span>{{ fcfa(calc.salarial.igr) }}</span>
-              </div>
-              <div class="cumul-row">
-                <span>C.N.P.S Salarié</span><span>{{ fcfa(calc.salarial.cnps) }}</span>
-              </div>
-              <div class="cumul-row">
-                <span>Brut Imposable</span><span>{{ fcfa(calc.brutImposable) }}</span>
-              </div>
-              <div class="cumul-row patron-total">
-                <span>Total Patronal</span><span>{{ fcfa(calc.patronal.grandTotal) }}</span>
+          <!-- Zone Totaux et Net (Style Logipaie) -->
+          <div class="logipaie-footer-grid mt-6">
+            <div class="lp-cumuls-container">
+              <div class="lp-cumuls-label">CUMULS</div>
+              <div class="lp-cumuls-data">
+                <div class="cumul-row"><span>Brut imposable</span> <span>{{ fcfa(calc.brutImposable) }}</span></div>
+                <div class="cumul-row"><span>Nombre de jours</span> <span>{{ calc.joursTrav }}</span></div>
+                <div class="cumul-row"><span>ITS</span> <span>{{ fcfa(calc.salarial.its) }}</span></div>
+                <div class="cumul-row"><span>RICF</span> <span>{{ fcfa(calc.salarial.ricf) }}</span></div>
+                <div class="cumul-row"><span>Cnps</span> <span>{{ fcfa(calc.salarial.cnps) }}</span></div>
               </div>
             </div>
-            <div class="footer-net">
-              <div class="net-row">
-                <span>GAINS TOTAUX</span>
-                <span>{{ fcfa(calc.salaireBrut + calc.primeTransport + calc.primesNonImposables) }}</span>
+            
+            <div class="lp-reglement-box">
+              <div class="lp-reglement-title">Mode de règlement</div>
+              <div class="lp-reglement-value">{{ (emp.virement ? 'VIREMENT' : 'ESPECES') }}</div>
+              <div v-if="emp.virement && emp.rib" class="lp-rib-text mt-2 text-[10px] text-slate-500 font-mono">
+                RIB: {{ emp.rib }}
               </div>
-              <div class="net-row">
-                <span>RETENUES</span>
-                <span>{{ fcfa(calc.salarial.total) }}</span>
-              </div>
-              <div class="net-final">
-                <span>NET À PAYER</span>
-                <span class="net-amount">{{ fcfa(calc.netAPayer) }} FCFA</span>
-              </div>
-              <div class="payment-info">
-                <div class="payment-title">REGLEMENT : {{ emp.mode_reglement }}</div>
-                <div class="payment-details">
-                   <span class="bank-name">{{ emp.banque_nom }}</span>
-                   <span class="bank-acc">{{ emp.banque_compte }}</span>
-                </div>
-              </div>
+            </div>
+
+            <div class="lp-net-final">
+              <div class="lp-net-title">NET À PAYER</div>
+              <div class="lp-net-value">{{ fcfa(calc.netAPayer) }} F</div>
+            </div>
+          </div>
+
+          <!-- Zone Signature -->
+          <div class="footer-signatures">
+            <div class="sig-card">
+              <p class="sig-header">L'EMPLOYEUR</p>
+              <div class="sig-space"></div>
+              <p class="sig-meta">Signature & Cachet</p>
+            </div>
+            <div class="sig-card">
+              <p class="sig-header">LE SALARIÉ</p>
+              <div class="sig-space"></div>
+              <p class="sig-meta">Lu et approuvé</p>
             </div>
           </div>
 
         </div>
+      </div>
 
-        <!-- Bouton génération -->
-        <div class="generate-section">
-          <div v-if="errorMsg" class="error-alert">
-            ⚠️ {{ errorMsg }}
-          </div>
-
-          <div v-if="generated" class="success-alert">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-            Bulletin généré avec succès !
-            <a :href="downloadUrl" :download="`bulletin_${emp.nom || 'employe'}_${emp.mois}_${emp.annee}.pdf`" class="dl-link">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              Télécharger le PDF
-            </a>
-            <button class="btn-reset-small" @click="reset">Nouveau bulletin</button>
-          </div>
-
-          <button v-else class="btn-generate" :disabled="generating" @click="generatePDF">
-            <span v-if="generating">
-              <svg class="spin-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-              Génération en cours...
-            </span>
-            <span v-else>
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-              Générer le PDF
-            </span>
-          </button>
+    </div>
+    
+    <!-- Section Explications (Hors du composant form pour la clarté) -->
+    <div class="education-section">
+      <h3 class="edu-title">Comprendre les rubriques du bulletin de paie 🇨🇮</h3>
+      <div class="edu-grid">
+        <div v-for="(edu, key) in explanations" :key="key" class="edu-card">
+          <h4>{{ edu.title }}</h4>
+          <p>{{ edu.text }}</p>
         </div>
-
       </div>
     </div>
   </div>
+
 </template>
 
 <style scoped>
@@ -1061,6 +1160,31 @@ const tabs = [
   display: grid;
   grid-template-columns: minmax(300px, 360px) 1fr;
   min-height: 580px;
+}
+
+/* BOUTONS D'ACTION */
+.btn-remove-prime {
+  margin-bottom: 8px;
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid #ffccd5;
+  background: #fff1f2;
+  color: #e11d48;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  height: 32px;
+  width: 32px;
+}
+
+.btn-remove-prime:hover {
+  background: #ffe4e6;
+  border-color: #fb7185;
+  color: #be123c;
+  transform: scale(1.05);
+  box-shadow: 0 2px 5px rgba(225, 29, 72, 0.1);
 }
 
 /* FORMULAIRE */
@@ -1231,224 +1355,451 @@ const tabs = [
 .tab-next { background: #2563eb; color: white; margin-left: auto; }
 .tab-next:hover { background: #1d4ed8; }
 
-/* PRÉVISUALISATION */
+/* PRÉVISUALISATION PREMIUM LOGIPAIE */
 .paysim-preview {
-  padding: 1.25rem;
+  padding: 1.5rem;
   overflow-y: auto;
-  background: white;
-}
-
-.preview-title {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: #2563eb;
-  margin-bottom: 1rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-/* MINI BULLETIN */
-.bulletin-preview {
-  border: 1.5px solid #e2e8f0;
-  border-radius: 8px;
-  overflow: hidden;
-  font-size: 0.72rem;
-  background: #fff;
-  margin-bottom: 1rem;
-}
-
-.bulletin-header {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-  padding: 0.75rem;
-  border-bottom: 1.5px solid #e2e8f0;
-  background: #f8fafc;
-}
-.company-name { font-weight: 800; font-size: 0.85rem; color: #1e40af; }
-.company-details { color: #6b7280; font-size: 0.7rem; margin-top: 0.15rem; }
-
-.bulletin-title-block { text-align: right; }
-.bulletin-title-text {
-  font-weight: 800;
-  font-size: 0.85rem;
-  background: #e2e8f0;
-  padding: 0.2rem 0.5rem;
-  border-radius: 4px;
-  display: inline-block;
-}
-.bulletin-period { color: #64748b; font-size: 0.7rem; margin-top: 0.25rem; margin-bottom: 0.5rem; }
-
-.emp-info-grid { text-align: left; }
-.emp-info-row {
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 0.15rem;
-}
-.ei-label { color: #6b7280; min-width: 90px; font-size: 0.68rem; }
-.ei-value { font-weight: 600; font-size: 0.72rem; }
-.ei-value.highlight { background: #fef08a; padding: 0 2px; border-radius: 2px; }
-
-/* Tableau bulletin */
-.bulletin-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.75rem;
-  margin-bottom: 1.5rem;
-}
-.professional-layout th {
   background: #f1f5f9;
-  color: #1e293b;
-  font-weight: 800;
-  text-transform: uppercase;
-  font-size: 0.65rem;
-  padding: 0.4rem 0.2rem;
-  border: 1px solid #cbd5e1;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
 }
-.professional-layout td {
-  padding: 0.35rem 0.2rem;
-  border: 1px solid #e2e8f0;
-  font-size: 0.7rem;
-}
-.professional-layout .text-mono {
-  font-family: 'Courier New', Courier, monospace;
-}
-.professional-layout .patronal-val {
-  color: #64748b;
-  font-style: italic;
-}
-.professional-layout .row-total {
-  font-size: 0.75rem;
-}
-.table-container-responsive {
-  width: 100%;
-  overflow-x: auto;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  margin-bottom: 1rem;
-}
-.professional-layout {
-  min-width: 650px; /* Force minimum width to prevent squashing */
-}
-.bulletin-table th {
-  background: #e2e8f0;
-  padding: 0.35rem 0.5rem;
-  font-weight: 700;
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  border: 1px solid #cbd5e1;
-}
-.bulletin-table td {
-  padding: 0.25rem 0.5rem;
-  border: 1px solid #f1f5f9;
-  font-size: 0.68rem;
-}
-.bulletin-table tr:hover td { background: #f8fafc; }
-.text-right { text-align: right; }
-.text-mono { font-family: 'Courier New', monospace; }
-.text-muted { color: #94a3b8; }
-.gain { color: #16a34a; font-weight: 600; }
-.retenue { color: #dc2626; font-weight: 600; }
 
-.row-total td {
-  background: #fef9c3 !important;
-  font-weight: 700;
-  border-top: 1.5px solid #e2e8f0 !important;
-  border-bottom: 1.5px solid #e2e8f0 !important;
+.preview-container {
+  background: white;
+  width: 100%;
+  max-width: 1050px; /* Plus grand pour accommoder 7 colonnes sans déborder */
+  padding: 30px;
+  border-radius: 4px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
+  font-family: 'Inter', system-ui, sans-serif;
+  color: #1e293b;
+  border-top: 10px solid #1e3a8a;
+  box-sizing: border-box;
 }
-.row-separator td { padding: 0.1rem; background: #f8fafc !important; }
-.row-patron-header td {
-  background: #f1f5f9 !important;
+
+/* --- Header --- */
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 25px;
+  border-bottom: 2px solid #f1f5f9;
+  padding-bottom: 20px;
+}
+
+.company-name-main {
+  font-size: 1.5rem;
+  font-weight: 900;
+  color: #1e3a8a;
+  margin-bottom: 5px;
+  letter-spacing: -0.02em;
+}
+
+.company-sub p {
+  margin: 2px 0;
+  font-size: 0.82rem;
   color: #64748b;
-  font-size: 0.65rem;
-  font-style: italic;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+}
+
+.fiscal-ids {
+  margin-top: 6px;
+  display: flex;
+  gap: 12px;
+  font-size: 0.7rem;
+  color: #94a3b8;
   font-weight: 600;
 }
 
-/* Footer bulletin */
-.bulletin-footer {
+.header-right {
+  text-align: right;
+}
+
+.logipaie-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #1e3a8a;
+  color: white;
+  padding: 7px 14px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+
+.lp-symbol {
+  font-weight: 900;
+  font-size: 1.1rem;
+  border-right: 1px solid rgba(255,255,255,0.3);
+  padding-right: 8px;
+}
+
+.lp-text {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.bulletin-label {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #1e3a8a;
+  letter-spacing: 0.12em;
+}
+
+/* --- Header Logipaie Grid --- */
+.logipaie-header-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
-  padding: 0.75rem;
-  border-top: 1.5px solid #e2e8f0;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.lph-box {
+  border: 1px solid #cbd5e1;
+  overflow: hidden;
+  background: white;
+}
+
+.lph-content {
+  padding: 10px 15px;
+}
+
+.lph-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  margin-bottom: 4px;
+  color: #334155;
+}
+
+.lph-row span:first-child {
+  color: #64748b;
+}
+
+/* --- Footer Logipaie Grid --- */
+.logipaie-footer-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 15px;
+  align-items: stretch;
+}
+
+.lp-cumuls-container {
+  display: flex;
+  border: 1.5px solid #cbd5e1;
+  background: #f8fafc;
+  min-height: 100px;
+}
+
+.lp-cumuls-label {
+  background: #cbd5e1;
+  color: #475569;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  padding: 10px 5px;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+}
+
+.lp-cumuls-data {
+  flex: 1;
+  padding: 10px;
+}
+
+.lp-reglement-box {
+  border: 1.5px solid #cbd5e1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background: white;
+}
+
+.lp-reglement-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #64748b;
+  margin-bottom: 8px;
+}
+
+.lp-reglement-value {
+  font-size: 1.3rem;
+  font-weight: 900;
+  color: #1e3a8a;
+  letter-spacing: 0.05em;
+}
+
+.lp-net-final {
+  background: #ffff00;
+  border: 2px solid #000;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 10px;
+}
+
+.lp-net-title {
+  font-size: 0.8rem;
+  font-weight: 900;
+  color: #000;
+}
+
+.lp-net-value {
+  font-size: 1.4rem;
+  font-weight: 900;
+  color: #000;
+}
+
+.data-row strong {
+  color: #64748b;
+  min-width: 120px;
+  display: inline-block;
+  font-weight: 600;
+}
+
+.highlight-emp {
+  font-weight: 800;
+  color: #1e3a8a;
+  font-size: 0.95rem;
+}
+
+/* --- Tableau 7 Colonnes --- */
+.table-wrapper {
+  margin-bottom: 25px;
+  overflow-x: auto;
+}
+
+.logipaie-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  min-width: 600px;
+}
+
+.logipaie-table th {
+  background: #1e3a8a;
+  color: white;
+  padding: 10px 8px;
+  text-align: center;
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+  border: 1px solid #1e3a8a;
+}
+
+.logipaie-table td {
+  padding: 7px 8px;
+  border: 1px solid #e2e8f0;
+  vertical-align: middle;
+}
+
+.logipaie-table tbody tr:hover td {
   background: #f8fafc;
 }
-.cumul-title {
-  font-weight: 700;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  color: #374151;
-  margin-bottom: 0.35rem;
+
+.col-n { width: 30px; text-align: center; }
+.col-lib { width: auto; text-align: left; }
+.col-base { width: 85px; text-align: right; }
+.col-taux-s { width: 60px; text-align: center; background: #f0fdf4; }
+.col-gain { width: 85px; text-align: right; background: #f0fdf4; }
+.col-ret-s { width: 85px; text-align: right; background: #fff1f2; }
+.col-taux-p { width: 60px; text-align: center; background: #f8fafc; }
+.col-ret-p { width: 95px; text-align: right; background: #f8fafc; }
+
+.logipaie-table th.header-group {
+    background: #475569;
+    font-size: 0.65rem;
+    padding: 4px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
 }
+
+.logipaie-table td.code {
+  color: #64748b;
+  font-family: 'Courier New', monospace;
+  text-align: center;
+  font-size: 0.72rem;
+}
+
+.logipaie-table td.label { font-weight: 500; }
+.logipaie-table td.val { text-align: right; color: #475569; }
+
+.logipaie-table td.gain {
+  text-align: right;
+  font-weight: 700;
+  color: #059669;
+}
+
+.logipaie-table td.retenue {
+  text-align: right;
+  font-weight: 700;
+  color: #dc2626;
+}
+
+.brut-fiscal-row td {
+  background: #eff6ff !important;
+  border-top: 2px solid #1e3a8a;
+  font-weight: 800;
+  color: #1e3a8a;
+}
+
+.label-total {
+  text-align: right;
+  padding-right: 20px !important;
+}
+
+.total-val {
+  text-align: right;
+  font-weight: 800;
+  font-size: 0.85rem;
+  color: #059669;
+}
+
+.sub-row td {
+  font-style: italic;
+  font-size: 0.73rem;
+  background: #fefce8 !important;
+}
+
+.sub-gain {
+  color: #92400e;
+  text-align: right;
+  font-weight: 600;
+}
+
+/* --- Zone Totaux --- */
+.summary-section {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 30px;
+  margin-top: 30px;
+}
+
+.cumul-box {
+  background: #f8fafc;
+  padding: 15px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.cumul-title {
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: #64748b;
+  margin-bottom: 10px;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 .cumul-row {
   display: flex;
   justify-content: space-between;
-  font-size: 0.68rem;
-  padding: 0.15rem 0;
-  border-bottom: 1px dashed #e2e8f0;
+  font-size: 0.75rem;
+  margin-bottom: 5px;
+  color: #475569;
 }
-.patron-total { color: #7c3aed; font-weight: 700; }
 
-.footer-net { display: flex; flex-direction: column; gap: 0.25rem; justify-content: center; }
-.net-row {
+.totals-grid {
   display: flex;
-  justify-content: space-between;
-  font-size: 0.68rem;
-  padding: 0.25rem 0.5rem;
-  background: #f1f5f9;
-  border-radius: 4px;
+  flex-direction: column;
+  gap: 10px;
 }
-.net-final {
+
+.total-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 0.5rem;
-  padding: 0.5rem;
-  background: #ffff00;
-  border: 1.5px solid #000;
-  border-radius: 4px;
-  font-weight: 800;
+  padding: 9px 15px;
+  background: #f1f5f9;
+  border-radius: 6px;
 }
-.net-amount { font-size: 0.9rem; color: #000; }
 
-.payment-info {
-  margin-top: 0.5rem;
-  border: 1.5px solid #000;
-  border-radius: 4px;
-  background: #ffff00;
-  padding: 0.3rem 0.5rem;
-  color: #000;
+.total-item .label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
-.payment-title {
-  text-align: center;
+
+.total-item .value {
+  font-size: 1rem;
   font-weight: 800;
-  border-bottom: 2px solid #000;
-  padding-bottom: 0.2rem;
-  margin-bottom: 0.2rem;
-  font-size: 0.75rem;
+  color: #1e293b;
 }
-.payment-details {
+
+.total-item .value.ret-val { color: #dc2626; }
+
+.net-pay-box {
+  background: #ffff00;
+  border: 3px solid #000;
+  padding: 15px 20px;
+  border-radius: 8px;
   display: flex;
   justify-content: space-between;
-  font-size: 0.7rem;
-  font-weight: 700;
-  padding-top: 0.2rem;
+  align-items: center;
+  margin-top: 5px;
 }
-.bank-name { text-transform: uppercase; }
-.bank-acc { font-family: monospace; }
 
-/* Bouton génération */
-.generate-section { margin-top: 0.75rem; }
+.net-label {
+  font-size: 0.95rem;
+  font-weight: 900;
+  color: #000;
+  letter-spacing: 0.03em;
+}
 
+.net-value {
+  font-size: 1.8rem;
+  font-weight: 900;
+  color: #000;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Signatures --- */
+.footer-signatures {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 50px;
+  padding-top: 25px;
+  border-top: 1px dashed #cbd5e1;
+}
+
+.sig-card {
+  width: 220px;
+  text-align: center;
+}
+
+.sig-header {
+  font-weight: 800;
+  font-size: 0.85rem;
+  color: #1e3a8a;
+  margin: 0 0 50px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sig-space {
+  height: 60px;
+  border-bottom: 1.5px solid #1e293b;
+  margin-bottom: 8px;
+}
+
+.sig-meta {
+  font-size: 0.7rem;
+  color: #94a3b8;
+  font-style: italic;
+  margin: 0;
+}
+
+/* --- Bouton PDF (dans colonne gauche) --- */
 .btn-generate {
-  width: 100%;
+  width: calc(100% - 2.5rem);
   padding: 0.875rem;
   background: linear-gradient(135deg, #1e3a5f, #2563eb);
   color: white;
@@ -1463,13 +1814,17 @@ const tabs = [
   gap: 0.5rem;
   transition: all 0.2s;
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+  margin: 1rem auto;
 }
+
 .btn-generate:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
 }
+
 .btn-generate:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 
+/* --- Alertes --- */
 .error-alert {
   padding: 0.75rem 1rem;
   background: #fef2f2;
@@ -1477,8 +1832,9 @@ const tabs = [
   color: #991b1b;
   border-radius: 8px;
   font-size: 0.85rem;
-  margin-bottom: 0.75rem;
+  margin: 0 1.25rem 0.75rem;
 }
+
 .success-alert {
   padding: 0.75rem 1rem;
   background: #f0fdf4;
@@ -1486,11 +1842,13 @@ const tabs = [
   color: #166534;
   border-radius: 8px;
   font-size: 0.85rem;
+  margin: 0 1.25rem 0.75rem;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem;
 }
+
 .dl-link {
   display: inline-flex;
   align-items: center;
@@ -1503,7 +1861,9 @@ const tabs = [
   font-weight: 600;
   font-size: 0.8rem;
 }
+
 .dl-link:hover { background: #15803d; }
+
 .btn-reset-small {
   background: none;
   border: none;
@@ -1513,12 +1873,124 @@ const tabs = [
   font-size: 0.8rem;
 }
 
+/* --- Section éducative --- */
+.education-section {
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  border-radius: 12px;
+  padding: 30px;
+  margin: 30px;
+  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.1);
+}
+
+.edu-title {
+  color: #1e3a8a;
+  font-size: 1.25rem;
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.edu-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.edu-card {
+  background: white;
+  padding: 15px;
+  border-radius: 8px;
+  border-left: 4px solid #3b82f6;
+}
+
+.edu-card h4 {
+  margin: 0 0 10px 0;
+  color: #1e293b;
+  font-size: 0.95rem;
+}
+
+.edu-card p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+/* --- Animations --- */
 .spin-icon { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-@media (max-width: 800px) {
+/* --- Nouveaux éléments --- */
+.field-hint {
+  display: block;
+  font-size: 0.65rem;
+  color: #64748b;
+  font-weight: 400;
+  margin-top: 2px;
+}
+.field-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 10px;
+  margin-left: 5px;
+  cursor: help;
+}
+.field-info:hover {
+  background: #3b82f6;
+  color: white;
+}
+.info-calc {
+  background: #f0fdf4;
+  border: 1px dashed #bbf7d0;
+  color: #166534;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  margin-bottom: 15px;
+}
+.gains-non-imp {
+  padding: 10px 15px;
+  background: #f8fafc;
+  border: 1px dashed #e2e8f0;
+  border-top: none;
+  font-size: 0.75rem;
+}
+.gni-item {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  color: #475569;
+}
+.gni-val {
+  font-weight: 700;
+  color: #059669;
+}
+.bulletin-period-badge {
+  display: inline-block;
+  background: #eff6ff;
+  color: #1e3a8a;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-top: 5px;
+}
+
+/* --- Responsive --- */
+@media (max-width: 900px) {
   .paysim-body { grid-template-columns: 1fr; }
   .paysim-form { border-right: none; border-bottom: 1px solid #e2e8f0; }
   .tab-content { max-height: 300px; }
+  .paysim-preview { padding: 1rem; }
+  .preview-container { padding: 20px; }
+  .emp-period-box { grid-template-columns: 1fr; gap: 15px; }
+  .summary-section { grid-template-columns: 1fr; }
+  .net-value { font-size: 1.4rem; }
 }
+
 </style>

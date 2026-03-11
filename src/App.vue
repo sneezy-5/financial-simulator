@@ -436,7 +436,7 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
     
     <!-- Admin Dashboard Overlay -->
     <div v-if="showAdmin" style="position: fixed; inset: 0; background: #f1f5f9; z-index: 10000; overflow-y: auto;">
-      <div style="max-width: 1000px; margin: 0 auto; position: relative;">
+      <div style="max-width: 1300px; margin: 0 auto; position: relative;">
         <button @click="showAdmin = false" style="position: absolute; right: 1rem; top: 1rem; padding: 0.5rem 1rem; cursor: pointer;">Fermer ✕</button>
         <AdminDashboard />
       </div>
@@ -444,7 +444,7 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
     
     <!-- HR Dashboard Overlay -->
     <div v-if="showHR" style="position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10000; overflow-y: auto; display: flex; align-items: flex-start; justify-content: center; backdrop-filter: blur(5px); padding: 2rem 1rem 2rem;">
-      <div style="width: 100%; max-width: 1000px; position: relative;">
+      <div style="width: 100%; max-width: 1300px; position: relative;">
         <button @click="showHR = false" style="position: absolute; right: -0.5rem; top: -0.5rem; background: white; border: none; width: 34px; height: 34px; border-radius: 50%; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 10; font-size: 1rem; font-weight: bold; display: flex; align-items: center; justify-content: center;">✕</button>
         <HRPayroll />
       </div>
