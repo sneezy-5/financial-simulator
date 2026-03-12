@@ -1331,7 +1331,7 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
 
 .hr-page-content {
   padding: 1.5rem 1rem;
-  max-width: 1400px;
+  max-width: 1600px;
   margin: 0 auto;
   opacity: 0;
   animation: fadeIn 0.5s ease-out forwards;

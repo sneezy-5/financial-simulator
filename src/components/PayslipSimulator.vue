@@ -67,6 +67,8 @@ const emp = ref({
   // Régime fiscal
   regime: '2024',
   // Période
+  annee: new Date().getFullYear(),
+  mois: new Date().getMonth() + 1,
   // Paiement
   virement: true,
   rib: '',
@@ -193,6 +195,7 @@ const calc = computed(() => {
   // -- CALCUL AUTO ANCIENNETÉ --
   let primeAnciennete = 0
   let ansAnciennete = 0
+  let tauxAnciennete = 0
   let ancienneteTxt = "0 ans 00 mois"
   if (emp.value.auto_anciennete && emp.value.date_embauche) {
     const embauche = new Date(emp.value.date_embauche)
@@ -208,7 +211,6 @@ const calc = computed(() => {
     ancienneteTxt = `${ansAnciennete} ans ${String(Math.max(0, diffMois)).padStart(2, '0')} mois`
     
     // Taux: 2% après 2 ans, +1% par an, avec un plafond max de 25%
-    let tauxAnciennete = 0
     if (ansAnciennete >= 2) {
       tauxAnciennete = Math.min(25, 2 + (ansAnciennete - 2))
     }
@@ -245,10 +247,14 @@ const calc = computed(() => {
   const cnpsAM = Math.round(baseCNPS_PfAtAm * 0.0075)     // 0.75% Assurance Maternité
   const cnpsAT = Math.round(baseCNPS_PfAtAm * tauxAT)     // 2-5% Accident Travail
   const cnpsRetraitePat = Math.round(baseCNPS * 0.077)     // 7.7% Retraite Patronale
-  
-  // CMU avec ayants droit
-  const nbAyantsDroitCMU = Math.max(0, +emp.value.ayants_droit_cmu || 0)
-  const cmuPat = 500 * (1 + nbAyantsDroitCMU)
+  const sitCmu = String(emp.value.situation_matrimoniale || '').toLowerCase()
+  const conjointCmu = sitCmu.includes('mari') ? 1 : 0
+  const enfantsCmu = Number(emp.value.nombre_enfants) || 0
+  const nbPersonnesCMUAuto = 1 + conjointCmu + enfantsCmu
+  // Permettre une saisie manuelle si elle existe, sinon utiliser le calcul automatique
+  const nbAyantsDroitCMU = Math.max(0, +emp.value.ayants_droit_cmu > 0 ? +emp.value.ayants_droit_cmu : (nbPersonnesCMUAuto - 1))
+  const totalPersonnesCMU = 1 + nbAyantsDroitCMU
+  const cmuPat = 500 * totalPersonnesCMU
   const totalSocialEmployeur = cnpsPF + cnpsAM + cnpsAT + cnpsRetraitePat + cmuPat
   const totalPatronal = totalFiscalEmployeur + totalSocialEmployeur
 
@@ -326,7 +332,7 @@ const calc = computed(() => {
   }
 
   // CMU salariale avec ayants droit
-  const cmuSal = 500 * (1 + nbAyantsDroitCMU)
+  const cmuSal = 500 * totalPersonnesCMU
   const acompte = +emp.value.acompte || 0
   const avance = +emp.value.avance || 0
   const opposition = +emp.value.opposition || 0
@@ -364,7 +370,7 @@ const calc = computed(() => {
   return {
     salaireBase, salaireBaseMensuel, joursDansLeMois, joursTrav,
     sursalaire, primeTransport, primeLogement,
-    primeAnciennete, ansAnciennete, ancienneteTxt, allocationConges, joursCP: joursConges, moisConge: diffMoisConge,
+    primeAnciennete, ansAnciennete, ancienneteTxt, tauxAnciennete, allocationConges, joursCP: joursConges, moisConge: diffMoisConge,
     primesImposables, primesNonImposablesRub,
     montantHeuresSup, nbHeuresSup, coefHS, tauxHoraire,
     salaireBrut, brutImposable, baseFiscale, baseCNPS, baseCNPS_PfAtAm, tauxAT, nbAyantsDroitCMU,
@@ -408,7 +414,7 @@ const calculerBrutDepuisNet = () => {
     // Simuler un calcul rapide pour ce brutTest
     const baseCNPS = Math.min(brutTest, 3375000)
     const cnpsSal = Math.round(baseCNPS * 0.063)
-    const cmuSal = 1000
+    const cmuSal = calc.value.salarial.cmu // Utilisation de la vraie CMU calculée globalement
     let impots = 0
 
     let n = Math.min(Number(emp.value.nombre_enfants) || 0, 4)
@@ -1029,8 +1035,8 @@ const tabs = [
                 <tr v-if="calc.primeAnciennete > 0">
                   <td class="code">390</td>
                   <td class="label">PRIME D'ANCIENNETE ({{ calc.ansAnciennete }} ans)</td>
-                  <td class="val">{{ fcfa(calc.salaireBase + (calc.sursalaire || 0)) }}</td>
-                  <td></td>
+                  <td class="val">{{ fcfa(calc.salaireBaseMensuel) }}</td>
+                  <td class="val">{{ calc.tauxAnciennete }}%</td>
                   <td class="gain">{{ fcfa(calc.primeAnciennete) }}</td>
                   <td></td><td></td><td></td>
                 </tr>
@@ -1290,7 +1296,7 @@ const tabs = [
 @media (min-width: 1024px) {
   .paysim-body {
     display: grid;
-    grid-template-columns: 360px 1fr;
+    grid-template-columns: 500px 1fr;
     min-height: 580px;
     padding-bottom: 0;
   }
@@ -1755,14 +1761,44 @@ const tabs = [
 /* Primes & Indemnités Layout */
 .prime-item-grid {
   display: grid;
-  grid-template-columns: 2fr 1.2fr;
-  gap: 8px;
-  margin-bottom: 15px;
-  padding: 12px;
-  background: white;
-  border: 1.5px solid #e2e8f0;
+  grid-template-columns: 2fr 100px;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 15px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
   border-radius: 12px;
   align-items: center;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+}
+
+.prime-label-input, 
+.prime-amount-input {
+  padding: 12px 15px !important;
+  border: 1px solid #d1d5db !important;
+  border-radius: 8px !important;
+  font-size: 1rem !important;
+  font-weight: 600 !important;
+  background: #f8fafc !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  color: #0f172a !important;
+}
+
+.prime-label-input:focus, 
+.prime-amount-input:focus {
+  border-color: #2563eb !important;
+  background: white !important;
+  outline: none !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1) !important;
+}
+
+@media (max-width: 500px) {
+  .prime-item-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
 }
 
 .prime-status-actions {
@@ -1773,6 +1809,7 @@ const tabs = [
   border-top: 1px solid #f1f5f9;
   padding-top: 10px;
   margin-top: 2px;
+  width: 100%;
 }
 
 .prime-checkbox-label {
@@ -1794,19 +1831,19 @@ const tabs = [
 
 @media (min-width: 640px) {
   .prime-item-grid {
-    grid-template-columns: 3fr 1.5fr auto;
-    gap: 12px;
+    grid-template-columns: 3.5fr 120px auto;
+    gap: 15px;
     padding: 0;
     background: none;
     border: none;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
   }
   .prime-status-actions {
     grid-column: auto;
     border-top: none;
     padding-top: 0;
     margin-top: 0;
-    gap: 12px;
+    gap: 15px;
   }
 }
 

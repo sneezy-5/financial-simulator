@@ -122,9 +122,15 @@ function calculateSalaryRules(employee) {
     const cnpsAT = Math.round(baseCNPS_PfAtAm * tauxAT);
     const cnpsRetraitePat = Math.round(baseCNPS * 0.077);
 
-    const nbAyantsDroitCMU = Math.max(0, parseInt(employee['ayants_droit_cmu'] || 0));
-    const cmuPat = 500 * (1 + nbAyantsDroitCMU);
-    const cmuSal = 500 * (1 + nbAyantsDroitCMU);
+    const sitCmu = String(employee['situation_matrimoniale'] || '').toLowerCase();
+    const conjointCmu = sitCmu.includes('mari') ? 1 : 0;
+    const enfantsCmu = Number(employee['nombre_enfants']) || 0;
+    const nbPersonnesCMUAuto = 1 + conjointCmu + enfantsCmu;
+    const nbAyantsDroitCMU = Math.max(0, parseInt(employee['ayants_droit_cmu']) > 0 ? parseInt(employee['ayants_droit_cmu']) : (nbPersonnesCMUAuto - 1));
+    const totalPersonnesCMU = 1 + nbAyantsDroitCMU;
+
+    const cmuPat = 500 * totalPersonnesCMU;
+    const cmuSal = 500 * totalPersonnesCMU;
 
     const totalSocialEmployeur = cnpsPF + cnpsAM + cnpsAT + cnpsRetraitePat + cmuPat;
     const totalPatronal = totalFiscalEmployeur + totalSocialEmployeur;
