@@ -118,15 +118,46 @@ const handleNext = () => {
     </div>
 
     <!-- Info Box -->
-    <div v-if="selectedPret" class="p-4 bg-blue-900/20 border border-blue-900/50 rounded-lg text-sm text-blue-200 animate-fade-in">
-        <h4 class="font-bold flex items-center gap-2 mb-2">
-            ℹ️ Conditions du {{ selectedPret.nom }}
+    <div v-if="selectedPret" class="p-5 bg-blue-900/20 border border-blue-900/50 rounded-xl text-sm text-blue-100 animate-fade-in shadow-lg">
+        <h4 class="font-bold text-base flex items-center gap-2 mb-4 text-blue-400">
+            <span class="text-xl">ℹ️</span> Détails du {{ selectedPret.nom }}
         </h4>
-        <ul class="list-disc list-inside space-y-1 opacity-80">
-            <li>Montant: {{ new Intl.NumberFormat('fr-FR').format(selectedPret.montant_min) }} - {{ new Intl.NumberFormat('fr-FR').format(selectedPret.montant_max) }} FCFA</li>
-            <li>Durée: {{ selectedPret.duree_min }} - {{ selectedPret.duree_max }} mois</li>
-            <li>{{ selectedPret.conditions }}</li>
-        </ul>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="space-y-3">
+                <div class="flex flex-col gap-1">
+                    <span class="text-xs text-blue-400 font-semibold uppercase tracking-wider">Montants & Durée</span>
+                    <p class="font-medium">
+                        {{ new Intl.NumberFormat('fr-FR').format(selectedPret.montant_min) }} - 
+                        {{ new Intl.NumberFormat('fr-FR').format(selectedPret.montant_max) }} FCFA
+                        <span class="block text-xs text-muted mt-0.5">Sur {{ selectedPret.duree_min }} à {{ selectedPret.duree_max }} mois</span>
+                    </p>
+                </div>
+
+                <div v-if="selectedPret.frais_dossier_grille || (selectedPret.frais_dossier && selectedPret.frais_dossier > 0)" class="flex flex-col gap-1">
+                    <span class="text-xs text-blue-400 font-semibold uppercase tracking-wider">Frais de Dossier</span>
+                    <div v-if="selectedPret.frais_dossier_grille" class="space-y-1">
+                        <div v-for="(g, idx) in selectedPret.frais_dossier_grille" :key="idx" class="text-xs flex justify-between border-b border-blue-900/30 pb-1">
+                            <span>Jusqu'à {{ new Intl.NumberFormat('fr-FR').format(g.max) }} F</span>
+                            <span class="font-bold">{{ new Intl.NumberFormat('fr-FR').format(g.frais) }} F</span>
+                        </div>
+                    </div>
+                    <p v-else-if="selectedPret.frais_dossier" class="font-medium">
+                        {{ selectedPret.frais_dossier }}% du montant
+                    </p>
+                </div>
+            </div>
+
+            <div class="space-y-3 border-l border-blue-900/20 pl-6">
+                <span class="text-xs text-blue-400 font-semibold uppercase tracking-wider">Avantages Clés</span>
+                <ul class="space-y-2">
+                    <li v-for="(avantage, idx) in selectedPret.avantages" :key="idx" class="flex items-start gap-2 text-xs">
+                        <span class="text-blue-500 mt-0.5">✓</span>
+                        <span>{{ avantage }}</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
     </div>
 
     <div class="pt-6 flex justify-end">

@@ -3,6 +3,9 @@ import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { api, LABELS } from './services/mockData'
 import AdminDashboard from './components/AdminDashboard.vue'
 import HRPayroll from './components/HRPayroll.vue'
+import AppHome from './components/AppHome.vue'
+import TaxCalculatorEntreprise from './components/TaxCalculatorEntreprise.vue'
+import TaxOutilsFinanciers from './components/tax/TaxOutilsFinanciers.vue'
 
 // ══════════════════════════════════════════════════════════════
 // STATE
@@ -143,7 +146,24 @@ const mensualite = computed(() => {
 
 const coutTotal = computed(() => mensualite.value * duree.value)
 const totalInterets = computed(() => coutTotal.value - montant.value)
-const fraisDossier = computed(() => selectedPret.value ? montant.value * (selectedPret.value.frais_dossier / 100) : 0)
+const fraisDossier = computed(() => {
+  if (!selectedPret.value) return 0
+  
+  // Cas 1: Grille de frais fixes (ex: BDU)
+  if (selectedPret.value.frais_dossier_grille) {
+    const grille = selectedPret.value.frais_dossier_grille
+    const palier = grille.find(g => {
+      if (g.max && g.min) return montant.value >= g.min && montant.value <= g.max
+      if (g.max) return montant.value <= g.max
+      if (g.min) return montant.value >= g.min
+      return false
+    })
+    return palier ? palier.frais : (grille[grille.length - 1].frais || 0)
+  }
+  
+  // Cas 2: Pourcentage (standard)
+  return montant.value * (selectedPret.value.frais_dossier / 100)
+})
 const coutAssurance = computed(() => selectedPret.value ? montant.value * (selectedPret.value.assurance / 100) * (duree.value / 12) : 0)
 
 // Charges totales client
@@ -422,6 +442,17 @@ const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.
 const showAdmin = ref(false)
 const showHR = ref(false)
 
+// ── Navigation Modules ──────────────────────────────────────
+// 'home' | 'loan' | 'tax' | 'hr'
+const currentModule = ref('home')
+
+function naviguer(module) {
+  currentModule.value = module
+  if (module === 'hr') { showHR.value = true; currentModule.value = 'home' }
+  else { showHR.value = false }
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
 // Raccourci secret : Ctrl+Maj+A pour toggle admin
 const handleKeydown = (e) => {
   if (e.ctrlKey && e.shiftKey && e.key === 'A') {
@@ -439,6 +470,30 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
       <div style="max-width: 1300px; margin: 0 auto; position: relative;">
         <button @click="showAdmin = false" style="position: absolute; right: 1rem; top: 1rem; padding: 0.5rem 1rem; cursor: pointer;">Fermer ✕</button>
         <AdminDashboard />
+      </div>
+    </div>
+
+    <!-- MODULE : Accueil Dashboard -->
+    <AppHome v-if="!showAdmin && !showHR && currentModule === 'home'" @navigate="naviguer" />
+
+    <!-- MODULE : Calculateur Impôt PME -->
+    <TaxCalculatorEntreprise v-else-if="!showAdmin && !showHR && currentModule === 'tax'" @retour="currentModule = 'home'" />
+    
+    <!-- MODULE : Boîte à Outils Pro -->
+    <div v-else-if="!showAdmin && !showHR && currentModule === 'outils_pro'" class="animate-in" style="background: #f8fafc; min-height: 100vh;">
+      <div style="padding: 1rem; background: white; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: 1rem; position: sticky; top: 0; z-index: 100;">
+        <button @click="currentModule = 'home'" style="display: flex; align-items: center; gap: 0.5rem; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.5rem 1rem; cursor: pointer; font-weight: 600; color: #64748b;">
+          ← Accueil
+        </button>
+        <h2 style="margin: 0; font-size: 1.1rem; font-weight: 800; color: #0f172a;">Boîte à Outils Pro ONDA</h2>
+      </div>
+      <div style="max-width: 1000px; margin: 2rem auto; padding: 0 1rem;">
+        <div style="margin-bottom: 2rem; text-align: center;">
+          <h1 style="font-size: 1.5rem; font-weight: 800; color: #0f172a; margin-bottom: 0.5rem;">Outils de gestion financière</h1>
+          <p style="color: #64748b;">Simulez vos charges, vos prix et votre capacité de développement.</p>
+        </div>
+        <!-- Note: resultats et params sont null ici en mode autonome -->
+        <TaxOutilsFinanciers :resultats="null" :params="{ ca: 0, secteur: 'commerce' }" />
       </div>
     </div>
     
@@ -483,8 +538,14 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
     </div>
     
     
-    <!-- Main Loan Simulator (hidden when HR page is open) -->
-    <div v-if="!showHR">
+    <!-- Main Loan Simulator (visible only in 'loan' module) -->
+    <div v-if="!showHR && currentModule === 'loan'">
+    <!-- Bouton retour au dashboard -->
+    <div style="padding: 0.75rem 1rem; background: white; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center;">
+      <button @click="currentModule = 'home'" style="display: flex; align-items: center; gap: 0.5rem; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.5rem 1rem; cursor: pointer; font-weight: 600; color: #64748b;">
+        ← Accueil
+      </button>
+    </div>
     <div class="text-center mb-6">
       <div style="display: flex; justify-content: space-between; align-items: center; max-width: 1200px; margin: 0 auto; padding: 0 1rem;">
         <div style="flex: 1;"></div>
@@ -495,14 +556,7 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
           </h1>
           <p class="text-muted" style="margin: 0.5rem 0 0 0;">Évaluez votre éligibilité en toute transparence</p>
         </div>
-        <div style="flex: 1; display: flex; justify-content: flex-end;">
-          <button @click="showHR = true" class="btn-hr-access">
-            <span class="hr-icon-wrapper">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-            </span>
-            <span class="hr-text">Accès RH</span>
-          </button>
-        </div>
+        <div style="flex: 1;"></div>
       </div>
     </div>
 
@@ -614,6 +668,27 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
                   </span>
                   <span>{{ av }}</span>
                 </div>
+              </div>
+            </div>
+
+            <!-- Frais de dossier explicites -->
+            <div v-if="selectedPret.frais_dossier_grille || (selectedPret.frais_dossier && selectedPret.frais_dossier > 0)" class="avantages-section" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px dashed #e2e8f0;">
+              <h5 class="section-subtitle">
+                <span class="subtitle-icon">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-500"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                </span> Frais de dossier (Frais engagés)
+              </h5>
+              <div v-if="selectedPret.frais_dossier_grille" class="grid-frais" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+                <div v-for="(g, idx) in selectedPret.frais_dossier_grille" :key="idx" class="frais-pill" style="background: #f0f9ff; border: 1px solid #bae6fd; padding: 0.5rem 1rem; border-radius: 8px; display: flex; justify-content: space-between; font-size: 0.85rem;">
+                  <span class="text-muted">Jusqu'à {{ fcfa(g.max) }}</span>
+                  <strong class="text-blue-600">{{ fcfa(g.frais) }}</strong>
+                </div>
+              </div>
+              <div v-else class="avantage-item">
+                <span class="avantage-check" style="background: #e0f2fe; color: #0369a1;">
+                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                </span>
+                <span>Frais de dossier : <strong>{{ selectedPret.frais_dossier }}%</strong> du montant emprunté.</span>
               </div>
             </div>
             
@@ -775,7 +850,7 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
                   v-model.number="montant" 
                   :min="selectedPret?.montant_min" 
                   :max="selectedPret?.montant_max" 
-                  step="100000" 
+                  step="50000" 
                 />
               </div>
               <div class="slider-labels">
@@ -1067,17 +1142,22 @@ onMounted(() => window.addEventListener('keydown', handleKeydown))
           <div class="key-stat-card">
               <div class="label">Montant</div>
               <div class="value">{{ fcfa(montant) }}</div>
-              <div class="stat-desc">Capital emprunté (Frais de dossier non inclus)</div>
+              <div class="stat-desc">Capital emprunté (hors frais annexes)</div>
+          </div>
+          <div v-if="fraisDossier > 0" class="key-stat-card">
+              <div class="label">Frais de dossier</div>
+              <div class="value text-info">{{ fcfa(fraisDossier) }}</div>
+              <div class="stat-desc">Frais d'ouverture de dossier appliqués par la banque</div>
           </div>
           <div class="key-stat-card">
               <div class="label">Coût total</div>
-              <div class="value">{{ fcfa(coutTotal) }}</div>
-              <div class="stat-desc">Montant total remboursé (Capital + Intérêts)</div>
+              <div class="value">{{ fcfa(coutTotal + fraisDossier) }}</div>
+              <div class="stat-desc">Montant total à débourser (Crédit + Frais)</div>
           </div>
           <div class="key-stat-card">
               <div class="label">Intérêts</div>
               <div class="value text-warning">{{ fcfa(totalInterets) }}</div>
-              <div class="stat-desc">Coût du crédit (ce que gagne la banque)</div>
+              <div class="stat-desc">Coût du crédit (intérêts uniquement)</div>
           </div>
         </div>
 

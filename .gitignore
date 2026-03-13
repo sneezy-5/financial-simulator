@@ -28,3 +28,8 @@ server/database.sqlite
 server/*.sqlite
 server/uploads/*
 !server/uploads/.gitkeep
+
+# Environment variables
+.env
+server/.env
+*.env

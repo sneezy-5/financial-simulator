@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -5,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const { Visit, PayrollRequest } = require('./database');
 const payrollService = require('./payrollService');
+const aiService = require('./aiService');
 
 const app = express();
 const PORT = 3001;
@@ -202,6 +204,63 @@ app.get('/api/rh/download/:filename', (req, res) => {
     }
 });
 
+// ═══════════════════════════════════════════════════════
+// ROUTES IA - OpenRouter
+// ═══════════════════════════════════════════════════════
+
+/**
+ * POST /api/ai/analyse
+ * Analyse complète de la situation financière d'une entreprise
+ */
+app.post('/api/ai/analyse', async (req, res) => {
+    try {
+        const { entreprise, resultats, projections } = req.body;
+        if (!entreprise || !entreprise.ca) {
+            return res.status(400).json({ error: 'Données entreprise manquantes' });
+        }
+        const analyse = await aiService.analyserEntreprise({ entreprise, resultats, projections });
+        res.json({ success: true, analyse });
+    } catch (e) {
+        console.error('Erreur IA analyse:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * POST /api/ai/chat
+ * Réponse à une question spécifique du chef d'entreprise
+ */
+app.post('/api/ai/chat', async (req, res) => {
+    try {
+        const { question, contexte } = req.body;
+        if (!question) {
+            return res.status(400).json({ error: 'Question manquante' });
+        }
+        const reponse = await aiService.repondreQuestion(question, contexte || {});
+        res.json({ success: true, reponse });
+    } catch (e) {
+        console.error('Erreur IA chat:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * GET /api/ai/models
+ * Retourne le modèle IA actuellement configuré
+ */
+app.get('/api/ai/models', (req, res) => {
+    res.json({
+        current: process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001',
+        available: [
+            { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash (Rapide)' },
+            { id: 'anthropic/claude-3-haiku', name: 'Claude 3 Haiku (Équilibré)' },
+            { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini (OpenAI)' },
+            { id: 'meta-llama/llama-3.1-8b-instruct:free', name: 'Llama 3.1 8B (Gratuit)' },
+        ]
+    });
+});
+
 app.listen(PORT, () => {
     console.log(`🚀 Serveur Backend (SQLite) lancé sur http://localhost:${PORT}`);
+    console.log(`🤖 IA OpenRouter: ${process.env.OPENROUTER_MODEL || 'non configuré (ajoutez .env)'}`);
 });
