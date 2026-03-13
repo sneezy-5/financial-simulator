@@ -201,7 +201,7 @@ function calculateSalaryRules(employee) {
         gratification, preavisVal, indemLicenciement, indemTransac, fraisFuneraires,
         primesImposables, primesNonImposablesRub, montantHeuresSup, nbHeuresSup, coefHS, tauxHoraire,
         primeTransport, primeLogement,
-        brutImposable, gainsTotaux, baseCNPS, baseCNPS_PfAtAm, parts,
+        brutImposable, gainsTotaux, baseCNPS, baseCNPS_PfAtAm, parts, totalPersonnesCMU,
         patronal: {
             impotEmployeur, fdfpTA, fdfpFPC, totalFiscal: totalFiscalEmployeur,
             cnpsPF, cnpsAM, cnpsAT, cnpsRetraite: cnpsRetraitePat, cmu: cmuPat,
@@ -331,7 +331,7 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
     body.push(row('T.A.S.P (IMPOT EMPLOYEUR)', calc.brutImposable, null, null, null, '1.2%', calc.patronal.impotEmployeur));
     body.push(row('FDFP - TAXE APPRENTISSAGE', calc.brutImposable, null, null, null, '0.4%', calc.patronal.fdfpTA));
     body.push(row('FDFP - FORMATION CONTINUE', calc.brutImposable, null, null, null, '0.6%', calc.patronal.fdfpFPC));
-    body.push(row('CMU (ASSURANCE MALADIE)', 1000, null, null, calc.salarial.cmu, null, calc.patronal.cmu));
+    body.push(row(`CMU (ASSURANCE MALADIE) [${calc.totalPersonnesCMU} pers.]`, calc.totalPersonnesCMU * 1000, null, null, calc.salarial.cmu, null, calc.patronal.cmu));
     if (calc.salarial.acompte > 0) body.push(row('ACOMPTE / AVANCES', null, null, null, calc.salarial.acompte, null, null));
 
 

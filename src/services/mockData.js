@@ -12,6 +12,7 @@ import bsicLogo from '../assets/logos/bsic.png'
 import biciciLogo from '../assets/logos/bicici.jpg'
 import sibLogo from '../assets/logos/sib.png'
 import bbgLogo from '../assets/logos/bbg.png'
+import bduLogo from '../assets/logos/bdu.png'
 import autreBanqueLogo from '../assets/logos/autre_banque.png'
 
 export const BANQUES = [
@@ -79,6 +80,13 @@ export const BANQUES = [
     description: "BBG - The Bridge to your success"
   },
   {
+    id: 10,
+    nom: "BDU-CI",
+    pays: "CI",
+    logo: bduLogo,
+    description: "Banque de l'Union Côte d'Ivoire"
+  },
+  {
     id: 99,
     nom: "Autre Banque",
     pays: "CI",
@@ -142,6 +150,7 @@ export const BANQUE_QUOTITE_MAP = {
   7: "standard",  // BICICI
   8: "etendue",   // SIB (jusqu'à 60% du salaire)
   9: "standard",  // BBG (Bridge Bank Group)
+  10: "standard", // BDU-CI
   99: "standard"  // Autre
 };
 
@@ -271,6 +280,97 @@ export const TYPES_PRETS = [
       domiciliation_obligatoire: true,
       employeur_agree: true, // Employeur doit être agréé par BBG
       plafond_salaire_pct: 30 // 30% du salaire
+    }
+  },
+  
+  // ═══════════════════════════════════════════════════════════════
+  // BDU-CI - BANQUE DE L'UNION CÔTE D'IVOIRE
+  // ═══════════════════════════════════════════════════════════════
+
+  // PRÊT SCOLAIRE BDU-CI
+  {
+    id: 1001,
+    banque_id: 10,
+    nom: "Prêt Scolaire BDU-CI",
+    taux: 7.5,
+    montant_min: 150000,
+    montant_max: 5000000,
+    duree_min: 1,
+    duree_max: 10,
+    frais_dossier_fixes: true,
+    frais_dossier_grille: [
+      { max: 500000, frais: 30000 },
+      { min: 500001, max: 1000000, frais: 55000 },
+      { min: 1000001, max: 5000000, frais: 80000 }
+    ],
+    tob: 10,
+    assurance_forfait: true,
+    assurance_grille: [
+      { max: 999999, montant: 10000 } // Couverture mutualisée
+    ],
+    assurance: 0.35, // Défaut pour >= 1M (SUNU)
+    description: "Prêt souple et rapide adapté aux dépenses de rentrée scolaire (inscription, fournitures, etc.).",
+    campagne: "01/07 au 31/10",
+    avantages: [
+        "Taux fixe de 7,5% HT",
+        "Remboursement sur 10 mois maximum",
+        "Rapide et adapté aux imprévus de la rentrée"
+    ],
+    documents: [
+        "Lettre de demande de prêt",
+        "3 derniers bulletins de salaire",
+        "Impression écran du compte (3 derniers salaires)",
+        "Attestation administrative pour prêt (Fonctionnaires)",
+        "Absence d'impayés obligatoire"
+    ],
+    conditions: {
+        age_min: 21,
+        age_max: 60,
+        revenus_min: 100000,
+        types_contrat: ["cdi", "fonctionnaire"],
+        domiciliation_obligatoire: true,
+        quotite_calcul: "25% additionnel pour engagés"
+    }
+  },
+
+  // PRÊT CONSOMMATION BDU-CI
+  {
+    id: 1002,
+    banque_id: 10,
+    nom: "Prêt Consommation BDU-CI",
+    taux: 8.5, // Standard estimé ou selon profil
+    montant_min: 500000,
+    montant_max: 50000000,
+    duree_min: 12,
+    duree_max: 84,
+    frais_dossier: 1,
+    assurance: 0.35,
+    tob: 10,
+    frais_tenue_compte: 1100, // 1000 HT + 10% TOB
+    description: "Prêt pour financer vos projets personnels avec disponibilité immédiate des fonds.",
+    avantages: [
+        "Disponibilité immédiate après validation",
+        "Rachat de créance possible",
+        "Ouverture sans apport initial",
+        "Reversement d'intérêt trimestriel avec taux évolutif"
+    ],
+    documents: [
+        "Attestation de redevance ou non redevance + clôture",
+        "Attestation administrative pour prêt bancaire",
+        "Arrêté de nomination (Fonctionnaires)",
+        "Attestation de première prise de service",
+        "Attestation de présence au poste",
+        "Espace fonctionnaire",
+        "03 derniers bulletins de salaire",
+        "Relevé de compte (03 derniers mois)",
+        "Attestation de révocation et non révocation"
+    ],
+    conditions: {
+        age_min: 21,
+        age_max: 60,
+        revenus_min: 150000,
+        types_contrat: ["cdi", "fonctionnaire"],
+        domiciliation_obligatoire: true
     }
   },
 

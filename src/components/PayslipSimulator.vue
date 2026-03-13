@@ -331,7 +331,7 @@ const calc = computed(() => {
     igr = Math.max(0, Math.round(igrParPart * parts))
   }
 
-  // CMU salariale avec ayants droit
+  // CMU salariale avec ayants droit (500 FCFA par personne)
   const cmuSal = 500 * totalPersonnesCMU
   const acompte = +emp.value.acompte || 0
   const avance = +emp.value.avance || 0
@@ -373,7 +373,7 @@ const calc = computed(() => {
     primeAnciennete, ansAnciennete, ancienneteTxt, tauxAnciennete, allocationConges, joursCP: joursConges, moisConge: diffMoisConge,
     primesImposables, primesNonImposablesRub,
     montantHeuresSup, nbHeuresSup, coefHS, tauxHoraire,
-    salaireBrut, brutImposable, baseFiscale, baseCNPS, baseCNPS_PfAtAm, tauxAT, nbAyantsDroitCMU,
+    salaireBrut, brutImposable, baseFiscale, baseCNPS, baseCNPS_PfAtAm, tauxAT, nbAyantsDroitCMU, totalPersonnesCMU,
     parts, ricf,
     gainsTotaux,
     salarial: {
@@ -1177,8 +1177,8 @@ const tabs = [
                 <!-- CMU -->
                 <tr>
                   <td class="code">430</td>
-                  <td class="label">CMU (ASSURANCE MALADIE)</td>
-                  <td class="val">1000</td>
+                  <td class="label">CMU (ASSURANCE MALADIE) [{{ calc.totalPersonnesCMU }} pers.]</td>
+                  <td class="val">{{ fcfa(calc.totalPersonnesCMU * 1000) }}</td>
                   <td></td><td></td>
                   <td class="retenue">{{ fcfa(calc.salarial.cmu) }}</td>
                   <td></td>
