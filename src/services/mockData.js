@@ -314,7 +314,8 @@ export const TYPES_PRETS = [
     avantages: [
         "Taux fixe de 7,5% HT",
         "Remboursement sur 10 mois maximum",
-        "Rapide et adapté aux imprévus de la rentrée"
+        "Rapide et adapté aux imprévus de la rentrée",
+        "Frais de dossier appliqués selon le montant (30k à 80k FCFA)"
     ],
     documents: [
         "Lettre de demande de prêt",

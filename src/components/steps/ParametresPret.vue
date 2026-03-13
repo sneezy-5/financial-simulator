@@ -124,7 +124,7 @@ const isValid = computed(() => {
             </div>
             <input 
                 type="range" v-model.number="data.montant"
-                :min="constraints.minAmount" :max="constraints.maxAmount" step="100000"
+                :min="constraints.minAmount" :max="constraints.maxAmount" step="50000"
                 class="w-full accent-emerald-500 cursor-pointer"
             />
             <div class="flex justify-between text-xs text-muted">
