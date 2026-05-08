@@ -47,27 +47,45 @@ onMounted(fetchStats)
       <div class="kpi-grid">
         <div class="kpi-card">
           <div class="kpi-value">{{ stats.totalVisits }}</div>
-          <div class="kpi-label">Visites Totales</div>
+          <div class="kpi-label">Visiteurs Uniques</div>
         </div>
-        <!-- On pourra ajouter d'autres KPIs ici (ex: Simulations complétées) -->
+        <div class="kpi-card">
+          <div class="kpi-value">{{ stats.totalHits }}</div>
+          <div class="kpi-label">Vues Totales</div>
+        </div>
       </div>
 
       <!-- Tableau des visites récentes -->
       <div class="table-card">
-        <h3>Dernières Visites</h3>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <h3 style="margin: 0;">Activités Récentes</h3>
+          <span style="font-size: 0.8rem; color: #64748b;">Dernières 50 actions</span>
+        </div>
         <table>
           <thead>
             <tr>
               <th>Date</th>
+              <th>Utilisateur (ID)</th>
               <th>IP</th>
-              <th>Navigateur / OS</th>
+              <th>Page</th>
+              <th>Appareil / Navigateur</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="visit in stats.recentVisits" :key="visit.id">
-              <td>{{ formatDate(visit.timestamp || visit.createdAt) }}</td>
-              <td>{{ visit.ip }}</td>
-              <td class="text-xs">{{ visit.userAgent }}</td>
+              <td style="white-space: nowrap;">{{ formatDate(visit.timestamp || visit.createdAt) }}</td>
+              <td>
+                <code style="font-size: 0.7rem; background: #f1f5f9; padding: 2px 4px; border-radius: 4px; color: #475569;">
+                  {{ visit.clientId ? visit.clientId.substring(0, 8) + '...' : 'Inconnu' }}
+                </code>
+              </td>
+              <td style="font-family: monospace; font-size: 0.8rem;">{{ visit.ip }}</td>
+              <td>
+                <span :class="'badge-' + (visit.page || 'home')" class="page-badge">
+                  {{ visit.page || 'home' }}
+                </span>
+              </td>
+              <td class="text-xs" :title="visit.userAgent">{{ visit.userAgent?.substring(0, 40) }}...</td>
             </tr>
           </tbody>
         </table>
@@ -162,4 +180,18 @@ th {
     border-radius: 8px;
     text-align: center;
 }
+
+.page-badge {
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.badge-home { background: #e0f2fe; color: #0369a1; }
+.badge-tax { background: #fef3c7; color: #92400e; }
+.badge-hr { background: #dcfce7; color: #166534; }
+.badge-loan { background: #f3e8ff; color: #6b21a8; }
+.badge-outils_pro { background: #f1f5f9; color: #475569; }
 </style>

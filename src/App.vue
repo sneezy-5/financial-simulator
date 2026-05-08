@@ -48,16 +48,34 @@ const showFullTable = ref(false)
 // CHARGEMENT
 // ══════════════════════════════════════════════════════════════
 
+// Identifiant client unique (persistant)
+const clientId = ref(localStorage.getItem('onda_client_id'))
+if (!clientId.value) {
+  clientId.value = 'c_' + Math.random().toString(36).substring(2, 11)
+  localStorage.setItem('onda_client_id', clientId.value)
+}
+
+async function logVisit(pageName) {
+  try {
+    await fetch('/api/stats/visit', { 
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        page: pageName || currentModule.value, 
+        clientId: clientId.value 
+      })
+    })
+  } catch (e) { /* silent */ }
+}
+
 onMounted(async () => {
   banques.value = await api.getBanques()
-  
-  // Enregistrement de la visite via le Backend Node.js
-  try {
-    await fetch('/api/stats/visit', { method: 'POST' })
-    console.log('📈 Visite enregistrée')
-  } catch (e) {
-    console.warn('Backend non joignable (Analytics désactivé)')
-  }
+  logVisit('home') // Log initial
+})
+
+// Suivi des changements de module
+watch(currentModule, (newMod) => {
+  logVisit(newMod)
 })
 
 watch(selectedBanque, async (banque) => {

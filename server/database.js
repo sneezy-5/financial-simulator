@@ -27,6 +27,10 @@ const Visit = sequelize.define('Visit', {
     page: {
         type: DataTypes.STRING,
         defaultValue: 'home'
+    },
+    clientId: {
+        type: DataTypes.STRING,
+        allowNull: true
     }
 });
 

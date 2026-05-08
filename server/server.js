@@ -9,7 +9,7 @@ const payrollService = require('./payrollService');
 const aiService = require('./aiService');
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
@@ -21,14 +21,28 @@ if (!fs.existsSync('uploads')) {
     fs.mkdirSync('uploads');
 }
 
+// Route de santé pour le monitoring/débogage
+app.get('/api/health', (req, res) => {
+    res.json({ 
+        status: 'ok', 
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+        nodeVersion: process.version
+    });
+});
+
 app.get('/api/stats', async (req, res) => {
     try {
-        const totalVisits = await Visit.count();
+        const totalHits = await Visit.count();
+        const totalVisits = await Visit.count({
+            distinct: true,
+            col: 'clientId'
+        });
         const recentVisits = await Visit.findAll({
-            limit: 20,
+            limit: 50,
             order: [['createdAt', 'DESC']]
         });
-        res.json({ totalVisits, recentVisits });
+        res.json({ totalHits, totalVisits, recentVisits });
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: "Erreur DB" });
@@ -37,34 +51,29 @@ app.get('/api/stats', async (req, res) => {
 
 app.post('/api/stats/visit', async (req, res) => {
     try {
+        const { page, clientId } = req.body;
+        
+        // Extraction robuste de l'IP réelle (derrière proxy Nginx)
         let ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress || req.ip;
+        if (ip && ip.includes(',')) ip = ip.split(',')[0].trim();
+        if (ip && ip.includes('::ffff:')) ip = ip.split(':').pop();
+        if (ip === '::1') ip = '127.0.0.1';
 
-        if (ip && ip.indexOf(',') > -1) {
-            ip = ip.split(',')[0].trim();
-        }
-
-        if (ip && ip.includes('::ffff:')) {
-            ip = ip.split(':').pop();
-        }
-
-        const lastVisit = await Visit.findOne({
-            where: { ip },
-            order: [['createdAt', 'DESC']]
+        // On enregistre l'action
+        await Visit.create({
+            ip: ip,
+            userAgent: req.headers['user-agent'],
+            page: page || 'home',
+            clientId: clientId
         });
 
-        const oneHour = 60 * 60 * 1000;
-        const now = new Date();
-        const shouldCount = !lastVisit || (now - new Date(lastVisit.createdAt) > oneHour);
+        // Nombre de visiteurs uniques (basé sur l'IP ou le ClientID)
+        const totalVisits = await Visit.count({
+            distinct: true,
+            col: clientId ? 'clientId' : 'ip'
+        });
 
-        if (shouldCount) {
-            await Visit.create({
-                ip: ip,
-                userAgent: req.headers['user-agent']
-            });
-        }
-
-        const count = await Visit.count();
-        res.json({ success: true, visits: count, ignored: !shouldCount });
+        res.json({ success: true, visits: totalVisits });
     } catch (e) {
         console.error("Erreur analytics:", e);
         res.json({ success: false });
@@ -260,7 +269,18 @@ app.get('/api/ai/models', (req, res) => {
     });
 });
 
-app.listen(PORT, () => {
-    console.log(`🚀 Serveur Backend (SQLite) lancé sur http://localhost:${PORT}`);
+// Gestion globale des erreurs non capturées
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+    console.error('❌ Uncaught Exception:', err);
+    process.exit(1);
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Serveur Backend lancé sur le port ${PORT}`);
+    console.log(`🔗 URL locale: http://localhost:${PORT}`);
     console.log(`🤖 IA OpenRouter: ${process.env.OPENROUTER_MODEL || 'non configuré (ajoutez .env)'}`);
 });
