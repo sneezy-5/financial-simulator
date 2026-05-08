@@ -55,8 +55,12 @@ const PayrollRequest = sequelize.define('PayrollRequest', {
 });
 
 // Synchronisation (Création des tables si elles n'existent pas)
-sequelize.sync().then(() => {
-    console.log('📦 Base de données SQLite synchronisée.');
-});
+sequelize.sync({ alter: true })
+    .then(() => {
+        console.log('📦 Base de données SQLite synchronisée (avec alter).');
+    })
+    .catch(err => {
+        console.error('❌ Erreur de synchronisation de la base de données:', err);
+    });
 
 module.exports = { sequelize, Visit, PayrollRequest };
