@@ -68,7 +68,7 @@ const activeModule = ref(null)
 const hrWrapperRef = ref(null)
 
 const setModuleSafe = (modVal, typeVal = null) => {
-  const proModules = ['import', 'solde', 'local_db', 'directory', 'settings']
+  const proModules = ['import', 'local_db', 'directory', 'settings']
   let targetMod = modVal
   let targetType = typeVal
 
@@ -100,7 +100,7 @@ const toggleStartMenu = () => {
 }
 
 const openModule = (modId) => {
-  const proModules = ['import', 'solde', 'local_db', 'directory', 'settings']
+  const proModules = ['import', 'local_db', 'directory', 'settings']
   if (proModules.includes(modId) && !isPro.value) {
     showToast("Cette fonctionnalité est réservée aux abonnés ONDA RH Pro. Veuillez vous connecter.", "error")
     emit('require-auth')
@@ -624,7 +624,7 @@ const activeModuleDetails = computed(() => {
             v-for="mod in modules" 
             :key="mod.id" 
             class="desktop-shortcut-card"
-            :class="{ 'locked-shortcut': ['import', 'solde', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro }"
+            :class="{ 'locked-shortcut': ['import', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro }"
             @click="openModule(mod.id)"
             :style="{ '--shortcut-color': mod.color }"
           >
@@ -635,7 +635,7 @@ const activeModuleDetails = computed(() => {
               <h3>{{ mod.title.split(' (')[0] }}</h3>
               <p>{{ mod.subtitle }}</p>
             </div>
-            <div class="shortcut-badge pro-badge" v-if="['import', 'solde', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro">🔒 PRO</div>
+            <div class="shortcut-badge pro-badge" v-if="['import', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro">🔒 PRO</div>
             <div class="shortcut-badge" v-else-if="mod.badge">{{ mod.badge }}</div>
           </button>
         </div>
@@ -678,15 +678,6 @@ const activeModuleDetails = computed(() => {
                 <span class="meta-value">{{ isHRApp ? 'Installé' : 'Mode Navigateur' }}</span>
               </div>
             </div>
-
-            <button 
-              v-if="!isPro" 
-              @click="emit('require-auth')" 
-              style="margin-top: 1.15rem; width: 100%; padding: 0.65rem 1rem; background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); color: white; border: none; border-radius: 10px; font-weight: 700; font-size: 0.775rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 0.35rem; box-shadow: 0 4px 10px rgba(99, 102, 241, 0.25); transition: all 0.2s;"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
-              Débloquer la version Pro RH
-            </button>
           </div>
         </div>
 
@@ -708,15 +699,15 @@ const activeModuleDetails = computed(() => {
             v-for="mod in modules"
             :key="mod.id"
             class="sm-tile"
-            :class="{ 'locked-tile': ['import', 'solde', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro }"
-            :style="{ background: ['import', 'solde', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro ? '#475569' : mod.color }"
+            :class="{ 'locked-tile': ['import', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro }"
+            :style="{ background: ['import', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro ? '#475569' : mod.color }"
             @click="openModule(mod.id)"
           >
             <div class="sm-tile-icon">
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="mod.icon"></svg>
             </div>
             <div class="sm-tile-title">
-              <template v-if="['import', 'solde', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro">🔒 </template>
+              <template v-if="['import', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro">🔒 </template>
               {{ mod.title.split(' (')[0] }}
             </div>
           </button>
