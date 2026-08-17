@@ -10,12 +10,24 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700;800&display=swap"
     rel="stylesheet">
-  <title>financial-simulator</title>
+  <title>ONDA</title>
+  <script>
+    (function() {
+      var urlParams = new URLSearchParams(window.location.search);
+      var isHR = urlParams.get('module') === 'hr';
+      var manifestUrl = isHR ? '/manifest-hr.json' : '/manifest.json';
+      var link = document.createElement('link');
+      link.rel = 'manifest';
+      link.href = manifestUrl;
+      document.head.appendChild(link);
+    })();
+  </script>
 </head>
 
 <body>
   <div id="app"></div>
   <script type="module" src="/src/main.js"></script>
+  <script src="https://js.paystack.co/v1/inline.js"></script>
 </body>
 
 </html>

@@ -2,7 +2,7 @@
 // SERVICE IA - OpenRouter (compatible avec tous les LLMs)
 // ═══════════════════════════════════════════════════════
 
-require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+require('dotenv').config({ path: require('path').join(__dirname, '.env'), override: true });
 const https = require('https');
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -13,7 +13,7 @@ const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
  */
 async function callOpenRouter(messages, options = {}) {
     const apiKey = process.env.OPENROUTER_API_KEY;
-    const model = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001';
+    const model = process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini';
     const appName = process.env.APP_NAME || 'ONDA Lite';
 
     if (!apiKey || apiKey === 'your_openrouter_api_key_here') {
@@ -145,4 +145,68 @@ function formatFCFA(val) {
     return Math.round(val).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 }
 
-module.exports = { callOpenRouter, analyserEntreprise, repondreQuestion, SYSTEM_PROMPT, formatFCFA };
+/**
+ * Analyse OCR Vision d'un PDF de bulletin de paie et reconstruit le HTML (RAG HTML-to-PDF)
+ */
+async function rebuildPayslipTemplate(imageBase64) {
+    const prompt = `
+Tu es un intégrateur web expert. Voici une image d'un bulletin de paie (template). Ta mission est de reconstruire INTÉGRALEMENT ce bulletin en générant un code HTML.
+
+Règles strictes de DESIGN (TRES IMPORTANT) :
+- Tu DOIS utiliser les classes de **Tailwind CSS** pour styliser le document.
+- TAILLE DE POLICE : text-xs (12px) pour tout le texte. Les titres de section en text-sm font-bold. Le titre "BULLETIN DE PAIE" en text-base font-bold. N'utilise JAMAIS text-lg, text-xl, text-2xl ou plus grand.
+- ESPACEMENT : ULTRA COMPACT. Pas de margin-bottom ni padding excessif. L'espace entre les sections doit être mt-2 max.
+- TABLEAU : Observe bien le style du tableau sur l'image. S'il n'y a pas de fond gris, n'en mets pas. S'il n'y a que des lignes horizontales (border-b, border-t), utilise uniquement celles-ci. Aligne TOUS les nombres (colonnes Base, Taux, Montant) et leurs en-têtes à DROITE (text-right). Les lignes du tableau doivent avoir un padding minimal (px-2 py-0.5).
+- Ne mets pas de balise <style> ni de <head>. Renvoie uniquement le contenu qui va à l'intérieur de la balise <body>.
+- Reproduis la STRUCTURE EXACTE de l'image. 
+- ALIGNEMENTS (CRITIQUE) : OBSERVE ATTENTIVEMENT L'IMAGE. 
+  - L'en-tête (République, Entreprise) est-il centré ? Centre-le (text-center).
+  - Le texte du bandeau "NET À PAYER" est-il aligné à droite ? Aligne-le à droite (text-right ou justify-end).
+  - Les colonnes numériques doivent être parfaitement alignées.
+- TOUT LE CONTENU DOIT TENIR SUR UNE SEULE PAGE A4. C'est la contrainte N°1.
+
+Règles de FONCTIONNEMENT :
+1. Tu dois renvoyer UNIQUEMENT le code HTML (les <div>, <table>, etc.), rien d'autre. Pas de markdown (ne mets pas de \`\`\`html).
+2. Remplace les valeurs textuelles par les variables exactes suivantes (incluant les accolades) :
+   - {nom_entreprise}
+   - {nom}
+   - {prenom}
+   - {matricule}
+   - {poste}
+   - {salaireBase}
+   - {brut}
+   - {salarial.its}
+   - {salarial.cnps}
+   - {netAPayer}
+   - {date_jour}
+3. S'il y a des montants non mappés, laisse les montants d'origine.
+    `;
+
+    const messages = [
+        {
+            role: 'user',
+            content: [
+                { type: 'text', text: prompt },
+                { type: 'image_url', image_url: { url: imageBase64 } }
+            ]
+        }
+    ];
+
+    try {
+        const responseText = await callOpenRouter(messages, { maxTokens: 4000, temperature: 0.1 });
+        
+        let htmlContent = responseText.trim();
+        
+        // Nettoyage classique du markdown
+        if (htmlContent.startsWith('\`\`\`html')) htmlContent = htmlContent.substring(7);
+        if (htmlContent.startsWith('\`\`\`')) htmlContent = htmlContent.substring(3);
+        if (htmlContent.endsWith('\`\`\`')) htmlContent = htmlContent.substring(0, htmlContent.length - 3);
+        
+        return htmlContent.trim();
+    } catch (e) {
+        console.error("Erreur Vision OCR HTML:", e);
+        throw new Error("La reconstruction IA a échoué.");
+    }
+}
+
+module.exports = { callOpenRouter, analyserEntreprise, repondreQuestion, rebuildPayslipTemplate, SYSTEM_PROMPT, formatFCFA };

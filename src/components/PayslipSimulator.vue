@@ -1,11 +1,20 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
+import { getCountryRules } from '../services/countryConfig.js'
+import { calculatePayslip } from '../services/calculators/index.js'
+import { user, fetchMe } from '../services/auth.js'
+
+const emit = defineEmits(['require-auth', 'require-billing'])
 
 // Prop optionnel pour pré-sélectionner le type depuis le composant parent
 const props = defineProps({
   initialType: {
     type: String,
     default: 'habituel' // 'habituel' | 'conges'
+  },
+  country: {
+    type: String,
+    default: 'CI'
   }
 })
 
@@ -13,6 +22,7 @@ const props = defineProps({
 // DONNÉES DE L'EMPLOYÉ
 // ══════════════════════════════════════════════
 const emp = ref({
+  pays: props.country || 'CI',
   // Entreprise
   nom_entreprise: '',
   adresse: "Abidjan, Côte d'Ivoire",
@@ -35,6 +45,7 @@ const emp = ref({
   type_contrat: 'CDI',
   situation_matrimoniale: 'celibataire',
   nombre_enfants: 0,
+  statut_salarie: 'local', // 'local' ou 'expatrie'
   date_embauche: '',
   // Temps de travail (basé sur le modèle Excel)
   jours_travailles: 30,   // Jours réellement travaillés ce mois (Standard 30j en CI)
@@ -76,6 +87,17 @@ const emp = ref({
   bulletin_type: props.initialType // 'habituel' | 'conges'
 })
 
+const countryRules = computed(() => {
+  const p = emp.value.pays || props.country || 'CI'
+  return getCountryRules(p)
+})
+
+watch(countryRules, (newRules) => {
+  if (newRules && newRules.villeParDefaut) {
+    emp.value.adresse = newRules.villeParDefaut
+  }
+}, { immediate: true })
+
 const moisLabels = [
   '', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
   'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'
@@ -95,46 +117,236 @@ const goToTab = (tabId) => {
   }, 50)
 }
 
-const showHelp = ref(false)
+// ═══ PARTAGE DE SIMULATION (Deeplink avec données) ═══
+const shareToast = ref(false)
 
-const explanations = {
-  salaire_base: {
-    title: "Salaire de Base",
-    text: "C'est la rémunération convenue au contrat pour 173.33 heures le mois. Si vous travaillez moins d'heures, il est réduit au prorata. C'est la base de calcul pour la plupart des primes et indemnités."
-  },
-  heures_sup: {
-    title: "Heures Supplémentaires",
-    text: "Toute heure travaillée au-delà de 40h/semaine. En Côte d'Ivoire, elles sont majorées (15%, 50%, 75% ou 100% selon le moment). Elles augmentent votre brut imposable et donc votre net, mais aussi vos impôts."
-  },
-  its_2024: {
-    title: "ITS Unique (Réforme 2024)",
-    text: "Depuis janvier 2024, l'IS, la CN et l'IGR sont fusionnés en un Impôt Unique (ITS). Le calcul est progressif par tranches. Plus votre salaire est élevé, plus le taux appliqué sur la tranche supérieure augmente."
-  },
-  cnps: {
-    title: "CNPS (Retraite)",
-    text: "Une part de 6.3% est retenue sur votre salaire brut (plafonné à 3.375.000 FCFA) pour financer votre future retraite. L'employeur paie aussi 7.7% de son côté."
-  },
-  cmu: {
-    title: "CMU (Assurance Maladie)",
-    text: "Cotisation de 1000 FCFA par personne (vous et vos ayants droit). Elle permet d'accéder aux soins à prix réduit dans les centres conventionnés."
-  },
-  ricf: {
-    title: "Réduction RICF",
-    text: "C'est un cadeau fiscal ! Plus vous avez de parts (marié, enfants), plus votre impôt ITS est réduit. Chaque part supplémentaire après la première réduit l'impôt de 11.000 FCFA par mois."
-  },
-  transport: {
-    title: "Prime de Transport",
-    text: "C'est une indemnité pour vos frais de déplacement. Contrairement au salaire, elle n'est pas imposable (jusqu'à 30.000 FCFA généralement) : vous recevez 100% du montant sans retenue."
-  },
-  anciennete: {
-    title: "Prime d'Ancienneté",
-    text: "Générée automatiquement si vous avez plus de 2 ans de service (basé sur la date d'embauche). Le taux commence à 2% après 2 ans et gagne +1% par an, plafonné à 25%."
-  },
-  conges: {
-    title: "Allocation Congés Payés",
-    text: "Si vous prenez des jours de repos, cette indemnité remplace le salaire des jours correspondants. Elle est imposable et soumise à cotisations car elle remplace un revenu."
+function shareSimulation() {
+  try {
+    // Sérialiser les champs clés de la simulation
+    const shareData = {
+      sb: emp.value.salaire_base,
+      ss: emp.value.sursalaire,
+      pt: emp.value.prime_transport,
+      pl: emp.value.prime_logement,
+      ne: emp.value.nombre_enfants,
+      sm: emp.value.situation_matrimoniale,
+      st: emp.value.statut_salarie,
+      tc: emp.value.type_contrat,
+      jt: emp.value.jours_travailles,
+      aj: emp.value.absences_jours,
+      hs: emp.value.heures_sup_nb,
+      hc: emp.value.heures_sup_coef,
+      ac: emp.value.acompte,
+      av: emp.value.avance,
+      op: emp.value.opposition,
+      ar: emp.value.autres_retenues,
+      ad: emp.value.ayants_droit_cmu,
+      nm: emp.value.nom,
+      pr: emp.value.prenom,
+      po: emp.value.poste,
+      ne2: emp.value.nom_entreprise,
+      bt: emp.value.bulletin_type || props.initialType || 'habituel',
+      py: emp.value.pays || props.country || 'CI',
+      pm: emp.value.primes?.filter(p => p.montant > 0).map(p => ({ l: p.label, m: p.montant, i: p.imposable }))
+    }
+    const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(shareData))))
+    const type = shareData.bt
+    const country = shareData.py
+    const url = `${window.location.origin}${window.location.pathname}?module=hr&type=${type}&country=${country}&d=${encoded}`
+    
+    navigator.clipboard.writeText(url).then(() => {
+      shareToast.value = true
+      setTimeout(() => { shareToast.value = false }, 3000)
+    }).catch(() => {
+      // Fallback pour navigateurs anciens
+      prompt('Copiez ce lien :', url)
+    })
+  } catch (e) {
+    console.error('Erreur partage:', e)
   }
 }
+
+// Charger les données depuis l'URL si présentes
+function loadFromUrlData() {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const dataStr = params.get('d')
+    if (!dataStr) return
+    
+    const d = JSON.parse(decodeURIComponent(escape(atob(dataStr))))
+    if (d.sb !== undefined) emp.value.salaire_base = Number(d.sb)
+    if (d.ss !== undefined) emp.value.sursalaire = Number(d.ss)
+    if (d.pt !== undefined) emp.value.prime_transport = Number(d.pt)
+    if (d.pl !== undefined) emp.value.prime_logement = Number(d.pl)
+    if (d.ne !== undefined) emp.value.nombre_enfants = Number(d.ne)
+    if (d.sm) emp.value.situation_matrimoniale = d.sm
+    if (d.st) emp.value.statut_salarie = d.st
+    if (d.tc) emp.value.type_contrat = d.tc
+    if (d.jt !== undefined) emp.value.jours_travailles = Number(d.jt)
+    if (d.aj !== undefined) emp.value.absences_jours = Number(d.aj)
+    if (d.hs !== undefined) emp.value.heures_sup_nb = Number(d.hs)
+    if (d.hc !== undefined) emp.value.heures_sup_coef = Number(d.hc)
+    if (d.ac !== undefined) emp.value.acompte = Number(d.ac)
+    if (d.av !== undefined) emp.value.avance = Number(d.av)
+    if (d.op !== undefined) emp.value.opposition = Number(d.op)
+    if (d.ar !== undefined) emp.value.autres_retenues = Number(d.ar)
+    if (d.ad !== undefined) emp.value.ayants_droit_cmu = Number(d.ad)
+    if (d.nm) emp.value.nom = d.nm
+    if (d.pr) emp.value.prenom = d.pr
+    if (d.po) emp.value.poste = d.po
+    if (d.ne2) emp.value.nom_entreprise = d.ne2
+    if (d.pm && Array.isArray(d.pm)) {
+      emp.value.primes = d.pm.map((p, i) => ({
+        id: i + 1,
+        label: p.l || `Prime ${i + 1}`,
+        montant: Number(p.m) || 0,
+        imposable: p.i !== false
+      }))
+    }
+  } catch (e) {
+    console.warn('Deeplink data invalide:', e)
+  }
+}
+
+const defaultTemplateHtml = ref(null)
+
+// Charger au montage
+import { onMounted } from 'vue'
+import { localDb } from '../services/localDatabase.js'
+
+onMounted(async () => {
+  loadFromUrlData()
+  try {
+    const templates = await localDb.getTemplates()
+    const defTpl = templates.find(t => t.isDefault && (!t.type || t.type === 'payslip'))
+    if (defTpl && defTpl.htmlTemplate) {
+      defaultTemplateHtml.value = defTpl.htmlTemplate
+    }
+  } catch (e) {
+    console.warn("Erreur chargement template", e)
+  }
+})
+
+const livePreviewHtml = computed(() => {
+  if (!defaultTemplateHtml.value) return ''
+  
+  const c = calc.value || {}
+  const viewData = {
+    ...emp.value,
+    ...c,
+    date_jour: new Date().toLocaleDateString(),
+    nom_entreprise: (emp.value.nom_entreprise || 'ENTREPRISE').toUpperCase()
+  }
+
+  let html = defaultTemplateHtml.value
+  const formatFCFA = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+
+  for (const key of Object.keys(viewData)) {
+    const val = viewData[key]
+    // Flatten nested objects (like salarial, patronal) if necessary, but string replace is flat
+    // In payrollService we just do a flat replace of the top level keys
+    // Wait, calc.salarial.cnps exists. The backend does a flat Object.keys(viewData), so it doesn't handle nested tags unless they are flattened!
+    // Actually the backend just does ...calculs, which has nested objects. We need to flatten them here for the frontend live preview!
+    if (typeof val === 'object' && val !== null) {
+        for (const subKey of Object.keys(val)) {
+            const subVal = val[subKey]
+            const strVal = typeof subVal === 'number' ? formatFCFA(subVal) : (subVal || '')
+            const regex = new RegExp(`{${key}.${subKey}}`, 'g')
+            html = html.replace(regex, strVal)
+        }
+    }
+    const strVal = typeof val === 'number' ? formatFCFA(val) : (val || '')
+    const regex = new RegExp(`{${key}}`, 'g')
+    html = html.replace(regex, strVal)
+  }
+  html = html.replace(/{[^}]+}/g, '0')
+
+  const fullHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <script src="https://cdn.tailwindcss.com"><\/script>
+        <style>
+            html, body { margin: 0; padding: 0; font-family: Arial, sans-serif; font-size: 11px; line-height: 1.4; background: white; }
+            body { padding: 12px; box-sizing: border-box; }
+            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            table { font-size: 11px; border-collapse: collapse; width: 100%; }
+            td, th { padding: 3px 6px; }
+        </style>
+    </head>
+    <body>${html}
+    <script>
+      function notifyHeight() {
+        const h = document.body.scrollHeight;
+        window.parent.postMessage({ iframeHeight: h }, '*');
+      }
+      window.addEventListener('load', notifyHeight);
+      const obs = new MutationObserver(notifyHeight);
+      obs.observe(document.body, { childList: true, subtree: true });
+    <\/script>
+    </body>
+    </html>
+  `
+  return fullHtml
+})
+
+const templateIframeRef = ref(null)
+const templateIframeHeight = ref(900)
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('message', (event) => {
+    if (event.data && event.data.iframeHeight) {
+      templateIframeHeight.value = Math.max(600, event.data.iframeHeight + 40)
+    }
+  })
+}
+
+const showHelp = ref(false)
+
+const explanations = computed(() => {
+  const r = countryRules.value
+  return {
+    salaire_base: {
+      title: "Salaire de Base",
+      text: `C'est la rémunération convenue au contrat pour 173.33 heures le mois. ${r.preposition.charAt(0).toUpperCase() + r.preposition.slice(1)} ${r.name}, c'est la base de calcul pour la plupart des primes et cotisations.`
+    },
+    heures_sup: {
+      title: "Heures Supplémentaires",
+      text: `Toute heure travaillée au-delà de 40h/semaine. ${r.preposition.charAt(0).toUpperCase() + r.preposition.slice(1)} ${r.name}, elles sont majorées (15%, 50%, 75% ou 100% selon le moment). Elles augmentent votre brut imposable.`
+    },
+    impot_salarial: {
+      title: r.libelleImpotSalarial,
+      text: `C'est l'impôt retenu chaque mois sur votre salaire ${r.preposition} ${r.name}. Le calcul est progressif par tranches. Plus votre salaire est élevé, plus le taux marginal augmente.`
+    },
+    retraite: {
+      title: `${r.organismeRetraite} (Retraite)`,
+      text: `Une part de ${(r.tauxRetraiteSal * 100).toFixed(1)}% est retenue sur votre salaire brut (plafonné à ${Math.round(r.plafondRetraite).toLocaleString('fr-FR')} FCFA) pour financer votre future retraite. L'employeur paie ${(r.tauxRetraitePat * 100).toFixed(1)}% de son côté.`
+    },
+    sante: {
+      title: `${r.organismeSante} (Santé)`,
+      text: r.hasCMU
+        ? `Cotisation de 1 000 FCFA par personne (vous et vos ayants droit). Elle permet d'accéder aux soins à prix réduit dans les centres conventionnés.`
+        : `Le régime de santé ${r.preposition} ${r.name} est géré par ${r.organismeSante}. Les modalités de cotisation varient selon le régime applicable.`
+    },
+    impot_employeur: {
+      title: r.libelleImpotEmployeur,
+      text: `C'est une taxe payée par l'employeur sur la masse salariale. ${r.preposition.charAt(0).toUpperCase() + r.preposition.slice(1)} ${r.name}, le taux est de ${(r.tauxImpotEmployeurLocal * 100).toFixed(1)}% pour les salariés locaux${r.tauxImpotEmployeurExpat !== r.tauxImpotEmployeurLocal ? ` et ${(r.tauxImpotEmployeurExpat * 100).toFixed(1)}% pour les expatriés` : ''}.`
+    },
+    transport: {
+      title: "Prime de Transport",
+      text: `C'est une indemnité pour vos frais de déplacement. Elle n'est généralement pas imposable jusqu'à un certain seuil : vous recevez 100% du montant sans retenue.`
+    },
+    anciennete: {
+      title: "Prime d'Ancienneté",
+      text: "Générée automatiquement si vous avez plus de 2 ans de service (basé sur la date d'embauche). Le taux commence à 2% après 2 ans et progresse de +1% par an, plafonné à 25%."
+    },
+    conges: {
+      title: "Allocation Congés Payés",
+      text: "Si vous prenez des jours de repos, cette indemnité remplace le salaire des jours correspondants. Elle est imposable et soumise à cotisations car elle remplace un revenu."
+    }
+  }
+})
 
 // ══════════════════════════════════════════════
 // CALCULS EN TEMPS RÉEL
@@ -227,176 +439,7 @@ const calc = computed(() => {
   // Le brut imposable (Ordre LOGIPAIE)
   // Inclut : Salaire base + Sursalaire + HS + Ancienneté + Congés + Primes Imposables + Gratif + Préavis
   const salaireBrut = salaireBase + sursalaire + primeAnciennete + allocationConges + montantHeuresSup + primesImposables
-  const brutImposable = salaireBrut
-  // Total Gains (inclut le brut + éléments non imposables)
-  const gainsTotaux = salaireBrut + primeTransport + primeLogement + primesNonImposablesRub
-
-  // Charges fiscales employeur (sur brut imposable)
-  const baseFiscale = brutImposable
-  const impotEmployeur = Math.round(baseFiscale * 0.012)
-  const fdfpTA = Math.round(baseFiscale * 0.004)
-  const fdfpFPC = Math.round(baseFiscale * 0.006)
-  const totalFiscalEmployeur = impotEmployeur + fdfpTA + fdfpFPC
-
-  // Charges sociales employeur - Normes 2024
-  const plafondCNPS = 3375000
-  const baseCNPS = Math.min(brutImposable, plafondCNPS)
-  const baseCNPS_PfAtAm = Math.min(brutImposable, 75000) // Plafond SMIG 2023 = 75 000
-  const tauxAT = +emp.value.taux_at || 0.02
-  const cnpsPF = Math.round(baseCNPS_PfAtAm * 0.05)       // 5% Prestations Familiales
-  const cnpsAM = Math.round(baseCNPS_PfAtAm * 0.0075)     // 0.75% Assurance Maternité
-  const cnpsAT = Math.round(baseCNPS_PfAtAm * tauxAT)     // 2-5% Accident Travail
-  const cnpsRetraitePat = Math.round(baseCNPS * 0.077)     // 7.7% Retraite Patronale
-  const sitCmu = String(emp.value.situation_matrimoniale || '').toLowerCase()
-  const conjointCmu = sitCmu.includes('mari') ? 1 : 0
-  const enfantsCmu = Number(emp.value.nombre_enfants) || 0
-  const nbPersonnesCMUAuto = 1 + conjointCmu + enfantsCmu
-  // Permettre une saisie manuelle si elle existe, sinon utiliser le calcul automatique
-  const nbAyantsDroitCMU = Math.max(0, +emp.value.ayants_droit_cmu > 0 ? +emp.value.ayants_droit_cmu : (nbPersonnesCMUAuto - 1))
-  const totalPersonnesCMU = 1 + nbAyantsDroitCMU
-  const cmuPat = 500 * totalPersonnesCMU
-  const totalSocialEmployeur = cnpsPF + cnpsAM + cnpsAT + cnpsRetraitePat + cmuPat
-  const totalPatronal = totalFiscalEmployeur + totalSocialEmployeur
-
-  // 4. Calculs Charges Salariales
-  const cnpsSal = Math.round(baseCNPS * 0.063)
-  
-  let itsFinal = 0, ricf = 0
-  let is = 0, cn = 0, igr = 0
-
-  let n = Math.min(Number(emp.value.nombre_enfants) || 0, 4)
-  let parts = 1
-  const sit = String(emp.value.situation_matrimoniale || '').toLowerCase()
-
-  if (sit.includes('mari')) {
-    // Marié : Base 2 + 0.5 par enfant
-    parts = 2 + (n * 0.5)
-  } else if (sit.includes('veuf') || sit.includes('veuv')) {
-    // Veuf : 1 part si sans enfant, sinon Base 2 + 0.5 par enfant (comme marié)
-    parts = (n > 0) ? (2 + (n * 0.5)) : 1
-  } else {
-    // Célibataire, Divorcé : 1 part si sans enfant, sinon Base 1.5 + 0.5 par enfant
-    parts = (n > 0) ? (1.5 + (n * 0.5)) : 1
-  }
-  parts = Math.min(parts, 5.0)
-
-    if (emp.value.regime !== 'ancien') {
-      // ---- RÉFORME 2024 (ITS UNIQUE) ----
-      // L'utilisateur précise : "L’ITS est calculé sur le salaire brut imposable"
-      const salImposable = brutImposable
-      
-      const tranches = [
-        { plafond: 75000, taux: 0.00 },
-        { plafond: 240000, taux: 0.16 },
-        { plafond: 800000, taux: 0.21 },
-        { plafond: 2400000, taux: 0.24 },
-        { plafond: 8000000, taux: 0.28 },
-        { plafond: Infinity, taux: 0.32 }
-      ]
-      
-      let impotBrut = 0
-      let prec = 0
-      for (const { plafond, taux } of tranches) {
-        if (salImposable <= prec) break
-        impotBrut += (Math.min(salImposable, plafond) - prec) * taux
-        prec = plafond
-      }
-
-      const itsBrut = Math.round(impotBrut)
-      ricf = Math.max(0, (parts - 1) * 11000)
-      itsFinal = Math.max(0, itsBrut - ricf)
-    } else {
-    // ---- ANCIENNE LOI (IS, CN, IGR) ----
-    // On utilise l'abattement de 20% sur (Brut - CNPS - 80%) sur certaines versions, 
-    // ou la formule standard classique.
-    is = Math.round(brutImposable * 0.012)
-    if (brutImposable > 50000) {
-      if (brutImposable <= 130000) cn = Math.round((brutImposable - 50000) * 0.015)
-      else if (brutImposable <= 200000) cn = 1200 + Math.round((brutImposable - 130000) * 0.05)
-      else cn = 4700 + Math.round((brutImposable - 200000) * 0.10)
-    }
-
-    const baseIGR = (brutImposable - is - cn - cnpsSal) * 0.85
-    const quotientFamilial = baseIGR / parts
-
-    let igrParPart = 0
-    if (quotientFamilial > 25000) {
-      if (quotientFamilial <= 45583) igrParPart = (quotientFamilial - 25000) * 0.10
-      else if (quotientFamilial <= 81666) igrParPart = (quotientFamilial * 0.15) - 2292
-      else if (quotientFamilial <= 126666) igrParPart = (quotientFamilial * 0.20) - 6375
-      else if (quotientFamilial <= 220833) igrParPart = (quotientFamilial * 0.25) - 12708
-      else if (quotientFamilial <= 389166) igrParPart = (quotientFamilial * 0.35) - 34792
-      else igrParPart = (quotientFamilial * 0.45) - 73708
-    }
-    igr = Math.max(0, Math.round(igrParPart * parts))
-  }
-
-  // CMU salariale avec ayants droit (500 FCFA par personne)
-  const cmuSal = 500 * totalPersonnesCMU
-  const acompte = +emp.value.acompte || 0
-  const avance = +emp.value.avance || 0
-  const opposition = +emp.value.opposition || 0
-  const autresRetenues = +emp.value.autres_retenues || 0
-  ricf = Math.max(0, (parts - 1) * 11000)
-  const impots = emp.value.regime !== 'ancien' ? itsFinal : (is + cn + igr)
-  const totalRetenues = impots + cnpsSal + cmuSal + acompte + avance + opposition + autresRetenues
-  const netAPayerRaw = gainsTotaux - totalRetenues
-  const netAPayer = Math.max(0, netAPayerRaw)
-
-  // Détail des tranches pour l'affichage
-  const detailTranches = []
-  if (emp.value.regime !== 'ancien') {
-    const salImposable = brutImposable
-    const tranches = [
-      { plafond: 75000, taux: 0.00 },
-      { plafond: 240000, taux: 0.16 },
-      { plafond: 800000, taux: 0.21 },
-      { plafond: 2400000, taux: 0.24 },
-      { plafond: 8000000, taux: 0.28 },
-      { plafond: Infinity, taux: 0.32 }
-    ]
-    let prec = 0
-    for (const { plafond, taux } of tranches) {
-      if (salImposable <= prec) break
-      const baseTranche = Math.min(salImposable, plafond) - prec
-      const montantTranche = Math.round(baseTranche * taux)
-      if (montantTranche > 0 || (taux === 0 && baseTranche > 0)) {
-          detailTranches.push({ label: `Tranche ${taux * 100}%`, base: baseTranche, taux, montant: montantTranche })
-      }
-      prec = plafond
-    }
-  }
-
-  return {
-    salaireBase, salaireBaseMensuel, joursDansLeMois, joursTrav,
-    sursalaire, primeTransport, primeLogement,
-    primeAnciennete, ansAnciennete, ancienneteTxt, tauxAnciennete, allocationConges, joursCP: joursConges, moisConge: diffMoisConge,
-    primesImposables, primesNonImposablesRub,
-    montantHeuresSup, nbHeuresSup, coefHS, tauxHoraire,
-    salaireBrut, brutImposable, baseFiscale, baseCNPS, baseCNPS_PfAtAm, tauxAT, nbAyantsDroitCMU, totalPersonnesCMU,
-    parts, ricf,
-    gainsTotaux,
-    salarial: {
-      its: itsFinal, ricf,
-      is, cn, igr,
-      cnps: cnpsSal,
-      cmu: cmuSal,
-      regime: emp.value.regime,
-      total: totalRetenues,
-      acompte, avance, opposition, autresRetenues
-    },
-    patronal: {
-      impot: impotEmployeur, fdfpTA, fdfpFPC,
-      totalFiscal: totalFiscalEmployeur,
-      cnpsPF, cnpsAM, cnpsAT,
-      cnpsRetraite: cnpsRetraitePat,
-      cmu: cmuPat,
-      totalSocial: totalSocialEmployeur,
-      grandTotal: totalPatronal
-    },
-    netAPayer,
-    netAPayerRaw
-  }
+  return calculatePayslip(emp.value, countryRules.value)
 })
 
 // Calcul Inversé (Net à Brut) - Magie Mathématique
@@ -509,19 +552,51 @@ const generatePDF = async () => {
     errorMsg.value = 'Veuillez renseigner au moins le nom et le salaire de base.'
     return
   }
+
+  const token = localStorage.getItem('auth_token')
+  if (!token) {
+    errorMsg.value = "Vous devez être connecté pour générer un bulletin de paie. (Coût : 5 crédits)"
+    emit('require-auth')
+    return
+  }
+
+  if (user.value && user.value.credits < 5) {
+    errorMsg.value = `Crédits insuffisants. Il vous faut 5 crédits pour générer ce bulletin. Votre solde : ${user.value.credits} crédits.`
+    emit('require-billing')
+    return
+  }
+
   generating.value = true
   errorMsg.value = null
   generated.value = false
   downloadUrl.value = null
 
   try {
+    let htmlTemplate = null
+    try {
+      const { localDb } = await import('../services/localDatabase.js')
+      const templates = await localDb.getTemplates()
+      const defTpl = templates.find(t => t.isDefault && (!t.type || t.type === 'payslip'))
+      if (defTpl && defTpl.htmlTemplate) {
+        htmlTemplate = defTpl.htmlTemplate
+      }
+    } catch(e) {
+      console.warn('Erreur lecture modèle par défaut', e)
+    }
+
     const response = await fetch('/api/rh/generate-single-payslip', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ employee: emp.value })
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ employee: emp.value, htmlTemplate })
     })
 
     if (!response.ok) {
+      if (response.status === 402) {
+        emit('require-billing')
+      }
       const err = await response.json().catch(() => ({}))
       throw new Error(err.error || 'Erreur serveur')
     }
@@ -529,6 +604,13 @@ const generatePDF = async () => {
     const blob = await response.blob()
     downloadUrl.value = URL.createObjectURL(blob)
     generated.value = true
+
+    // Rafraîchir les crédits de l'utilisateur
+    try {
+      await fetchMe()
+    } catch (fetchErr) {
+      console.warn("Erreur rafraîchissement utilisateur:", fetchErr)
+    }
   } catch (e) {
     errorMsg.value = e.message
   } finally {
@@ -568,10 +650,20 @@ const tabs = [
       <div class="paysim-header-icon">
         <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
       </div>
-      <div>
+      <div style="flex: 1;">
         <h3>Simulation de Bulletin de Paie</h3>
-        <p>Saisissez les données et visualisez le résultat en temps réel (Loi ivoirienne)</p>
+        <p>Saisissez les données et visualisez le résultat en temps réel</p>
       </div>
+      <button class="share-sim-btn" @click="shareSimulation" title="Copier le lien de partage avec vos données de simulation">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        <span>Partager</span>
+      </button>
+    </div>
+
+    <!-- Toast de confirmation de partage -->
+    <div v-if="shareToast" class="share-toast" style="display: flex; align-items: center; gap: 8px;">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      Lien de simulation copié dans le presse-papiers !
     </div>
 
     <div class="paysim-body">
@@ -619,11 +711,19 @@ const tabs = [
             <div class="bloc-title"><span class="bloc-num">1</span> Coordonnées Société</div>
             <div class="field-group">
               <label>Nom de l'entreprise</label>
-              <input v-model="emp.nom_entreprise" type="text" placeholder="Ex: Côte d'Ivoire PAIE" />
+              <input v-model="emp.nom_entreprise" type="text" :placeholder="`Ex: ${countryRules.name} PAIE`" />
+            </div>
+            <div class="field-group">
+              <label>Zone Fiscale & Réglementation</label>
+              <select v-model="emp.pays">
+                <option value="CI">🇨🇮 Côte d'Ivoire (UEMOA)</option>
+                <option value="BJ">🇧🇯 Bénin (UEMOA)</option>
+                <option value="TG">🇹🇬 Togo (UEMOA)</option>
+              </select>
             </div>
             <div class="field-group">
               <label>Adresse</label>
-              <input v-model="emp.adresse" type="text" placeholder="Ex: Abidjan, Plateau" />
+              <input v-model="emp.adresse" type="text" :placeholder="`Ex: ${countryRules.villeParDefaut || 'Capitale'}`" />
             </div>
             <div class="field-group">
               <label>Siège Social</label>
@@ -632,7 +732,7 @@ const tabs = [
             <div class="field-row">
               <div class="field-group">
                 <label>E-mail Entreprise</label>
-                <input v-model="emp.email_entreprise" type="email" placeholder="infos@entreprise.ci" />
+                <input v-model="emp.email_entreprise" type="email" :placeholder="`infos@entreprise.${countryRules.code.toLowerCase()}`" />
               </div>
               <div class="field-group">
                 <label>Téléphone Employeur</label>
@@ -641,8 +741,8 @@ const tabs = [
             </div>
             <div class="field-row">
               <div class="field-group">
-                <label>N° CNPS</label>
-                <input v-model="emp.numero_cnps" type="text" placeholder="Numéro CNPS" />
+                <label>N° {{ countryRules.organismeRetraite.split(' ')[0] }}</label>
+                <input v-model="emp.numero_cnps" type="text" :placeholder="`Numéro ${countryRules.organismeRetraite.split(' ')[0]}`" />
               </div>
               <div class="field-group">
                 <label>N° Contribuable (RCCM)</label>
@@ -731,7 +831,16 @@ const tabs = [
                 <input v-model="emp.num_secu" type="text" placeholder="N° Sécurité Sociale" />
               </div>
             </div>
-            <div class="parts-badge">
+            <div class="field-row">
+              <div class="field-group">
+                <label>Statut du salarié</label>
+                <select v-model="emp.statut_salarie">
+                  <option value="local">Local</option>
+                  <option value="expatrie">Expatrié</option>
+                </select>
+              </div>
+            </div>
+            <div class="parts-badge" v-if="countryRules.hasPartsFiscales">
               <span class="parts-label">Parts fiscales calculées :</span>
               <span class="parts-value">{{ calc.parts.toFixed(2) }}</span>
             </div>
@@ -746,8 +855,8 @@ const tabs = [
               <div class="field-group">
                 <label>Régime Fiscal</label>
                 <select v-model="emp.regime">
-                  <option value="2024">Nouvelle Réforme 2024 (ITS UNIQUE)</option>
-                  <option value="ancien">Ancienne Loi (IS, CN, IGR)</option>
+                  <option value="2024">Nouveau Régime ({{ countryRules.libelleImpotSalarial.split(' ')[0] }})</option>
+                  <option value="ancien">Ancien Régime</option>
                 </select>
               </div>
             </div>
@@ -931,7 +1040,7 @@ const tabs = [
               <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-dasharray="31 31"></circle>
             </svg>
             <svg v-else xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            {{ generating ? 'Génération...' : 'Générer PDF' }}
+            {{ generating ? 'Génération...' : 'Générer PDF (5 crédits)' }}
           </button>
 
           <div v-if="errorMsg" class="error-alert mt-4">
@@ -939,10 +1048,18 @@ const tabs = [
             {{ errorMsg }}
           </div>
           
-          <div v-if="downloadUrl" class="success-alert mt-4">
-            ✅ Génération réussie !
-            <a :href="downloadUrl" :download="computedFileName" class="dl-link" title="Télécharger">⬇️ Télécharger PDF</a>
-            <button @click="reset" class="btn-reset-small ml-4 text-xs text-gray-500 underline">Faire un autre</button>
+          <div v-if="downloadUrl" class="success-alert mt-4" style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+              Génération réussie !
+            </div>
+            <div style="display: flex; align-items: center;">
+              <a :href="downloadUrl" :download="computedFileName" class="dl-link" title="Télécharger" style="display: inline-flex; align-items: center; gap: 4px;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Télécharger PDF
+              </a>
+              <button @click="reset" class="btn-reset-small ml-4 text-xs text-gray-500 underline">Faire un autre</button>
+            </div>
           </div>
         </div>
 
@@ -950,18 +1067,26 @@ const tabs = [
 
       <!-- COLONNE DROITE: Prévisualisation Premium LOGIPAIE -->
       <div class="paysim-preview">
-        <div class="preview-container">
+        <div v-if="defaultTemplateHtml" class="preview-container" style="padding: 0; background: transparent; border: none;">
+          <iframe
+            ref="templateIframeRef"
+            :srcdoc="livePreviewHtml"
+            :style="{ width: '100%', height: templateIframeHeight + 'px', border: 'none', borderRadius: '8px', boxShadow: '0 1px 8px rgba(0,0,0,0.08)', background: 'white', display: 'block' }"
+            scrolling="no"
+          ></iframe>
+        </div>
+        <div v-else class="preview-container">
           
           <!-- Header Bulletin Neutre -->
           <div class="preview-header">
             <div class="header-left">
               <div class="company-name-main">{{ (emp.nom_entreprise || 'MON ENTREPRISE').toUpperCase() }}</div>
               <div class="company-sub">
-                <p>{{ emp.adresse || 'Abidjan, Côte d\'Ivoire' }}</p>
+                <p>{{ emp.adresse || countryRules.villeParDefaut || 'Capitale' }}</p>
                 <div class="fiscal-ids">
                   <span v-if="emp.numero_contribuable">N° CC: {{ emp.numero_contribuable }}</span>
                   <span v-if="emp.numero_rc">RCCM: {{ emp.numero_rc }}</span>
-                  <span v-if="emp.numero_cnps">CNPS: {{ emp.numero_cnps }}</span>
+                  <span v-if="emp.numero_cnps">{{ countryRules.organismeRetraite.split(' ')[0] }}: {{ emp.numero_cnps }}</span>
                 </div>
               </div>
             </div>
@@ -986,16 +1111,265 @@ const tabs = [
             <div class="lph-right lph-box border border-slate-200">
                <div class="lph-content p-2">
                 <div class="lph-row"><span>N° Matricule :</span> <strong>{{ emp.matricule || '____' }}</strong></div>
-                <div class="lph-row"><span>N° CNPS :</span> <strong>{{ emp.num_secu || '____' }}</strong></div>
-                <div class="lph-row"><span>Parts IGR :</span> <strong>{{ calc.parts?.toFixed(2) }}</strong></div>
+                <div class="lph-row"><span>N° {{ countryRules.organismeRetraite.split(' ')[0] }} :</span> <strong>{{ emp.num_secu || '____' }}</strong></div>
+                <div class="lph-row" v-if="countryRules.hasPartsFiscales"><span>Parts fiscales :</span> <strong>{{ calc.parts?.toFixed(2) }}</strong></div>
                 <div class="lph-row"><span>Type Contrat :</span> <span>{{ emp.type_contrat || 'CDI' }}</span></div>
                 <div class="lph-row"><span>Ancienneté :</span> <span>{{ calc.ancienneteTxt || '____' }}</span></div>
               </div>
             </div>
           </div>
 
-          <!-- Tableau de Paie 7 Colonnes Style Papier -->
-          <div class="table-wrapper">
+          <!-- Tableau de Paie Modèle Bénin -->
+          <div v-if="countryRules.code === 'BJ'" class="table-wrapper payslip-benin">
+            <div class="benin-section-title">DÉTAIL DE LA RÉMUNÉRATION</div>
+            <table class="benin-table">
+              <thead>
+                <tr>
+                  <th class="benin-col-label">RUBRIQUES DE GAINS (ÉLÉMENTS DE RÉMUNÉRATION)</th>
+                  <th class="benin-col-base">Base</th>
+                  <th class="benin-col-taux">Taux</th>
+                  <th class="benin-col-montant">Montant (FCFA)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="label">1. Salaire de base</td>
+                  <td class="val"></td><td class="val"></td>
+                  <td class="montant">{{ fcfa(calc.salaireBase) }}</td>
+                </tr>
+                <tr v-if="calc.montantHeuresSup > 0">
+                  <td class="label">2. Heures supplémentaires</td>
+                  <td class="val"></td><td class="val"></td>
+                  <td class="montant">{{ fcfa(calc.montantHeuresSup) }}</td>
+                </tr>
+                <tr v-if="calc.primeAnciennete > 0 || calc.sursalaire > 0 || calc.primesImposables > 0 || calc.primesNonImposablesRub > 0">
+                  <td class="label">3. Primes (rendement, fonction, etc.)</td>
+                  <td class="val"></td><td class="val"></td>
+                  <td class="montant">{{ fcfa(calc.primeAnciennete + calc.sursalaire + calc.primesImposables + calc.primesNonImposablesRub) }}</td>
+                </tr>
+                <tr v-if="calc.primeTransport > 0 || calc.primeLogement > 0">
+                  <td class="label">4. Indemnités (transport, logement, représentation, etc.)</td>
+                  <td class="val"></td><td class="val"></td>
+                  <td class="montant">{{ fcfa(calc.primeTransport + calc.primeLogement) }}</td>
+                </tr>
+                <tr v-if="calc.allocationConges > 0">
+                  <td class="label">5. Gratifications / Congés Payés</td>
+                  <td class="val"></td><td class="val"></td>
+                  <td class="montant">{{ fcfa(calc.allocationConges) }}</td>
+                </tr>
+                <!-- Brut -->
+                <tr class="benin-total-row">
+                  <td colspan="3">TOTAL SALAIRE BRUT (A)</td>
+                  <td class="montant">{{ fcfa(calc.gainsTotaux) }} FCFA</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <table class="benin-table mt-4">
+              <thead>
+                <tr>
+                  <th class="benin-col-label">RETENUES LÉGALES ET AUTRES RETENUES</th>
+                  <th class="benin-col-base">Base</th>
+                  <th class="benin-col-taux">Taux</th>
+                  <th class="benin-col-montant">Montant (FCFA)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="label">1. CNSS – part salariale</td>
+                  <td class="val">(A)</td>
+                  <td class="val">3,6%</td>
+                  <td class="montant">{{ fcfa(calc.salarial.cnps) }}</td>
+                </tr>
+                <tr>
+                  <td class="label">2. Salaire imposable (B)</td>
+                  <td class="val">(A) – CNSS</td>
+                  <td class="val"></td>
+                  <td class="montant">{{ fcfa(calc.salarial.baseITS) }}</td>
+                </tr>
+                <tr>
+                  <td class="label">3. ITS (Impôt sur les traitements et salaires)</td>
+                  <td class="val">(B)</td>
+                  <td class="val">barème</td>
+                  <td class="montant">{{ fcfa(calc.salarial.its) }}</td>
+                </tr>
+                <tr v-for="taxe in calc.salarial.autresTaxes" :key="taxe.code">
+                  <td class="label">4. {{ taxe.label }}</td>
+                  <td class="val"></td><td class="val"></td>
+                  <td class="montant">{{ fcfa(taxe.montant) }}</td>
+                </tr>
+                <tr v-if="(calc.salarial.total - calc.salarial.its - calc.salarial.cnps - (calc.salarial.autresTaxes[0]?.montant || 0)) > 0">
+                  <td class="label">5. Autres retenues autorisées</td>
+                  <td class="val"></td><td class="val"></td>
+                  <td class="montant">{{ fcfa(calc.salarial.total - calc.salarial.its - calc.salarial.cnps - (calc.salarial.autresTaxes[0]?.montant || 0)) }}</td>
+                </tr>
+                <!-- Total Retenues -->
+                <tr class="benin-total-row">
+                  <td colspan="3">TOTAL DES RETENUES (C)</td>
+                  <td class="montant">{{ fcfa(calc.salarial.total) }} FCFA</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <table class="benin-table mt-4" style="border-top: 2px solid #1e293b;">
+              <tbody>
+                <tr>
+                  <td class="label" colspan="3" style="font-weight: 500;">Salaire brut (A)</td>
+                  <td class="montant">{{ fcfa(calc.gainsTotaux) }} FCFA</td>
+                </tr>
+                <tr>
+                  <td class="label" colspan="3" style="font-weight: 500;">Moins : Total des retenues (C)</td>
+                  <td class="montant">{{ fcfa(calc.salarial.total) }} FCFA</td>
+                </tr>
+                <tr class="benin-net-row">
+                  <td colspan="3">NET À PAYER (D = A – C)</td>
+                  <td class="montant">{{ fcfa(calc.netAPayer) }} FCFA</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Tableau de Paie Modèle Togo -->
+          <div v-else-if="countryRules.code === 'TG'" class="table-wrapper payslip-benin">
+            <div class="benin-section-title">DÉTAIL DE LA RÉMUNÉRATION (TOGO)</div>
+            
+            <!-- 1. GAINS -->
+            <table class="benin-table">
+              <thead>
+                <tr>
+                  <th class="benin-col-label">RUBRIQUES DE GAINS (RÉMUNÉRATION)</th>
+                  <th class="benin-col-base">Base</th>
+                  <th class="benin-col-taux">Taux</th>
+                  <th class="benin-col-montant">Montant (FCFA)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="label">1. Salaire de base</td>
+                  <td class="val"></td><td class="val"></td>
+                  <td class="montant">{{ fcfa(calc.salaireBase) }}</td>
+                </tr>
+                <tr v-if="calc.primeAnciennete > 0">
+                  <td class="label">2. Prime d'ancienneté ({{ calc.ansAnciennete }} ans)</td>
+                  <td class="val">catégorie</td><td class="val">{{ calc.tauxAnciennete }}%</td>
+                  <td class="montant">{{ fcfa(calc.primeAnciennete) }}</td>
+                </tr>
+                <tr v-if="calc.montantHeuresSup > 0">
+                  <td class="label">3. Heures supplémentaires</td>
+                  <td class="val">{{ fcfa(calc.tauxHoraire) }}</td><td class="val">{{ calc.nbHeuresSup }}h</td>
+                  <td class="montant">{{ fcfa(calc.montantHeuresSup) }}</td>
+                </tr>
+                <tr v-if="calc.sursalaire > 0 || calc.primesImposables > 0 || calc.primesNonImposablesRub > 0">
+                  <td class="label">4. Primes (rendement, assiduité, etc.)</td>
+                  <td class="val"></td><td class="val"></td>
+                  <td class="montant">{{ fcfa(calc.sursalaire + calc.primesImposables + calc.primesNonImposablesRub) }}</td>
+                </tr>
+                <tr v-if="calc.primeTransport > 0 || calc.primeLogement > 0">
+                  <td class="label">5. Indemnités (transport, logement)</td>
+                  <td class="val"></td><td class="val"></td>
+                  <td class="montant">{{ fcfa(calc.primeTransport + calc.primeLogement) }}</td>
+                </tr>
+                <tr v-if="calc.allocationConges > 0">
+                  <td class="label">6. Gratifications / Congés Payés</td>
+                  <td class="val"></td><td class="val"></td>
+                  <td class="montant">{{ fcfa(calc.allocationConges) }}</td>
+                </tr>
+                <tr class="benin-total-row">
+                  <td colspan="3">TOTAL SALAIRE BRUT (A)</td>
+                  <td class="montant">{{ fcfa(calc.gainsTotaux) }} FCFA</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <!-- 2. RETENUES SOCIALES -->
+            <table class="benin-table mt-4">
+              <thead>
+                <tr>
+                  <th class="benin-col-label">RETENUES SOCIALES SALARIALES</th>
+                  <th class="benin-col-base">Base</th>
+                  <th class="benin-col-taux">Taux</th>
+                  <th class="benin-col-montant">Montant (FCFA)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="label">1. CNSS – part salariale (Vieillesse, Invalidité)</td>
+                  <td class="val">(A)</td><td class="val">4,0%</td>
+                  <td class="montant">{{ fcfa(calc.salarial.cnps) }}</td>
+                </tr>
+                <tr>
+                  <td class="label">2. Assurance Maladie (INAM / AMU)</td>
+                  <td class="val">(A)</td><td class="val">5,0%</td>
+                  <td class="montant">{{ fcfa(calc.salarial.inam || calc.salarial.cmu) }}</td>
+                </tr>
+                <tr class="benin-total-row">
+                  <td colspan="3">TOTAL COTISATIONS SOCIALES SALARIALES (B)</td>
+                  <td class="montant">{{ fcfa(calc.salarial.cnps + (calc.salarial.inam || calc.salarial.cmu)) }} FCFA</td>
+                </tr>
+                <tr style="background: #f8fafc; font-weight: bold;">
+                  <td colspan="3">REVENU APRÈS COTISATIONS SOCIALES (C = A – B)</td>
+                  <td class="montant" style="color: #1e293b;">{{ fcfa(calc.revenuApresCotisations) }} FCFA</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <!-- 3. IMPÔT SUR LE REVENU (IRPP) -->
+            <table class="benin-table mt-4">
+              <thead>
+                <tr>
+                  <th class="benin-col-label" colspan="3">IMPÔT SUR LE REVENU DES PERSONNES PHYSIQUES (IRPP)</th>
+                  <th class="benin-col-montant">Montant (FCFA)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="label" colspan="3">Revenu après cotisations sociales (C)</td>
+                  <td class="montant">{{ fcfa(calc.revenuApresCotisations) }}</td>
+                </tr>
+                <tr>
+                  <td class="label" colspan="3">Moins : Abattement professionnel 28 % (plafonné)</td>
+                  <td class="montant" style="color: #dc2626;">- {{ fcfa(calc.abattementMensuel) }}</td>
+                </tr>
+                <tr style="font-weight: 500; background: #f1f5f9;">
+                  <td class="label" colspan="3">REVENU NET IMPOSABLE MENSUEL (D)</td>
+                  <td class="montant">{{ fcfa(calc.revenuNetImposableMensuel) }} FCFA</td>
+                </tr>
+                <tr class="benin-total-row">
+                  <td colspan="3">IRPP MENSUEL RETENU À LA SOURCE (E)</td>
+                  <td class="montant">{{ fcfa(calc.salarial.irpp || calc.salarial.its) }} FCFA</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <!-- 4. SYNTHÈSE DU NET -->
+            <table class="benin-table mt-4" style="border-top: 2px solid #1e293b;">
+              <tbody>
+                <tr>
+                  <td class="label" colspan="3" style="font-weight: 500;">Salaire brut (A)</td>
+                  <td class="montant">{{ fcfa(calc.gainsTotaux) }} FCFA</td>
+                </tr>
+                <tr>
+                  <td class="label" colspan="3" style="font-weight: 500;">Moins : Cotisations sociales salariales (B)</td>
+                  <td class="montant">{{ fcfa(calc.salarial.cnps + (calc.salarial.inam || calc.salarial.cmu)) }} FCFA</td>
+                </tr>
+                <tr>
+                  <td class="label" colspan="3" style="font-weight: 500;">Moins : IRPP mensuel (E)</td>
+                  <td class="montant">{{ fcfa(calc.salarial.irpp || calc.salarial.its) }} FCFA</td>
+                </tr>
+                <tr v-if="calc.totalRetenuesDiverses > 0">
+                  <td class="label" colspan="3" style="font-weight: 500;">Moins : Autres retenues (avances, prêts...) (F)</td>
+                  <td class="montant">{{ fcfa(calc.totalRetenuesDiverses) }} FCFA</td>
+                </tr>
+                <tr class="benin-net-row">
+                  <td colspan="3">NET À PAYER (A – B – E – F)</td>
+                  <td class="montant">{{ fcfa(calc.netAPayer) }} FCFA</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Tableau de Paie Modèle Standard (CI, etc.) -->
+          <div v-else class="table-wrapper">
             <table class="logipaie-table">
               <thead>
                 <tr>
@@ -1088,36 +1462,35 @@ const tabs = [
                 </tr>
 
                 <!-- Charges Sociales -->
-                <!-- CNPS SALARIALE & PATRONALE -->
                 <tr>
                   <td class="code">454</td>
-                  <td class="label">CNPS - RETRAITE</td>
+                  <td class="label">{{ countryRules.organismeRetraite }} - RETRAITE</td>
                   <td class="val">{{ fcfa(calc.baseCNPS) }}</td>
-                  <td class="val">6.3%</td>
+                  <td class="val">{{ (countryRules.tauxRetraiteSal * 100).toFixed(1) }}%</td>
                   <td></td>
                   <td class="retenue">{{ fcfa(calc.salarial.cnps) }}</td>
-                  <td class="val">7.7%</td>
+                  <td class="val">{{ (countryRules.tauxRetraitePat * 100).toFixed(1) }}%</td>
                   <td class="retenue">{{ fcfa(calc.patronal.cnpsRetraite) }}</td>
                 </tr>
                 <tr>
                   <td class="code">470</td>
-                  <td class="label">CNPS - PRESTATIONS FAMILIALES</td>
+                  <td class="label">{{ countryRules.organismeSante }} - PRESTATIONS FAMILIALES</td>
                   <td class="val">{{ fcfa(calc.baseCNPS_PfAtAm) }}</td>
                   <td></td><td></td><td></td>
-                  <td class="val">5.0%</td>
+                  <td class="val">{{ (countryRules.tauxPFPat * 100).toFixed(1) }}%</td>
                   <td class="retenue">{{ fcfa(calc.patronal.cnpsPF) }}</td>
                 </tr>
                 <tr>
                   <td class="code">472</td>
-                  <td class="label">CNPS - ACCIDENT DU TRAVAIL</td>
+                  <td class="label">{{ countryRules.organismeRetraite.split(' ')[0] }} - ACCIDENT DU TRAVAIL</td>
                   <td class="val">{{ fcfa(calc.baseCNPS_PfAtAm) }}</td>
                   <td></td><td></td><td></td>
                   <td class="val">{{ emp.taux_at || 2 }}%</td>
                   <td class="retenue">{{ fcfa(calc.patronal.cnpsAT) }}</td>
                 </tr>
-                <tr>
+                <tr v-if="countryRules.code === 'CI'">
                   <td class="code">475</td>
-                  <td class="label">CNPS - ASSURANCE MATERNITE</td>
+                  <td class="label">{{ countryRules.organismeRetraite.split(' ')[0] }} - ASSURANCE MATERNITE</td>
                   <td class="val">{{ fcfa(calc.baseCNPS_PfAtAm) }}</td>
                   <td></td><td></td><td></td>
                   <td class="val">0.75%</td>
@@ -1128,7 +1501,7 @@ const tabs = [
                 <template v-if="emp.regime !== 'ancien'">
                   <tr>
                     <td class="code">405</td>
-                    <td class="label">ITS (IMPOT UNIQUE 2024)</td>
+                    <td class="label">{{ countryRules.libelleImpotSalarial }}</td>
                     <td class="val">{{ fcfa(calc.brutImposable) }}</td>
                     <td></td><td></td>
                     <td class="retenue">{{ fcfa((calc.salarial.its || 0) + (calc.salarial.ricf || 0)) }}</td>
@@ -1136,7 +1509,7 @@ const tabs = [
                   </tr>
                   <tr v-if="calc.salarial.ricf > 0" class="sub-row">
                     <td class="code">406</td>
-                    <td class="label">&nbsp;&nbsp;dont RED. FAMILIALE (RICF)</td>
+                    <td class="label">&nbsp;&nbsp;dont RED. FAMILIALE (RICF) [{{ calc.parts?.toFixed(2) }} parts]</td>
                     <td></td><td></td>
                     <td class="sub-gain">( -{{ fcfa(calc.salarial.ricf) }} )</td>
                     <td></td><td></td><td></td>
@@ -1147,37 +1520,40 @@ const tabs = [
                   <tr><td class="code">410</td><td class="label">CONTRIBUTION NAT. (C.N.)</td><td class="val">{{ fcfa(calc.brutImposable) }}</td><td></td><td></td><td class="retenue">{{ fcfa(calc.salarial.cn) }}</td><td></td><td></td></tr>
                   <tr><td class="code">415</td><td class="label">I.G.R.</td><td></td><td></td><td></td><td class="retenue">{{ fcfa(calc.salarial.igr) }}</td><td></td><td></td></tr>
                 </template>
+                
+                <!-- Autres Taxes Salariales (ex: ORTB Bénin) -->
+                <tr v-for="taxe in calc.salarial.autresTaxes" :key="taxe.code">
+                  <td class="code">{{ taxe.code }}</td>
+                  <td class="label">{{ taxe.label }}</td>
+                  <td class="val">{{ taxe.base ? fcfa(taxe.base) : '' }}</td>
+                  <td></td><td></td>
+                  <td class="retenue">{{ fcfa(taxe.montant) }}</td>
+                  <td></td><td></td>
+                </tr>
 
                 <!-- Fiscalité Patronale -->
                 <tr>
                   <td class="code">600</td>
-                  <td class="label">T.A.S.P (IMPOT EMPLOYEUR)</td>
+                  <td class="label">{{ countryRules.libelleImpotEmployeur }}</td>
                   <td class="val">{{ fcfa(calc.brutImposable) }}</td>
                   <td></td><td></td><td></td>
-                  <td class="val">1.2%</td>
+                  <td class="val">{{ (countryRules.tauxImpotEmployeurLocal * 100).toFixed(1) }}%</td>
                   <td class="retenue">{{ fcfa(calc.patronal.impotEmployeur) }}</td>
                 </tr>
-                <tr>
-                  <td class="code">610</td>
-                  <td class="label">FDFP - APPRENTISSAGE</td>
-                  <td class="val">{{ fcfa(calc.brutImposable) }}</td>
+                <!-- Autres Taxes Patronales (ex: FDFP) -->
+                <tr v-for="taxe in calc.patronal.autresTaxes" :key="taxe.code">
+                  <td class="code">{{ taxe.code }}</td>
+                  <td class="label">{{ taxe.label }}</td>
+                  <td class="val">{{ taxe.base ? fcfa(taxe.base) : '' }}</td>
                   <td></td><td></td><td></td>
-                  <td class="val">0.4%</td>
-                  <td class="retenue">{{ fcfa(calc.patronal.fdfpTA) }}</td>
-                </tr>
-                <tr>
-                  <td class="code">612</td>
-                  <td class="label">FDFP - FORMATION CONTINUE</td>
-                  <td class="val">{{ fcfa(calc.brutImposable) }}</td>
-                  <td></td><td></td><td></td>
-                  <td class="val">0.6%</td>
-                  <td class="retenue">{{ fcfa(calc.patronal.fdfpFPC) }}</td>
+                  <td class="val">{{ taxe.taux ? (taxe.taux * 100).toFixed(1) + '%' : '' }}</td>
+                  <td class="retenue">{{ fcfa(taxe.montant) }}</td>
                 </tr>
 
                 <!-- CMU -->
-                <tr>
+                <tr v-if="countryRules.hasCMU">
                   <td class="code">430</td>
-                  <td class="label">CMU (ASSURANCE MALADIE) [{{ calc.totalPersonnesCMU }} pers.]</td>
+                  <td class="label">{{ countryRules.organismeSante }} (ASSURANCE MALADIE) [{{ calc.totalPersonnesCMU }} pers.]</td>
                   <td class="val">{{ fcfa(calc.totalPersonnesCMU * 1000) }}</td>
                   <td></td><td></td>
                   <td class="retenue">{{ fcfa(calc.salarial.cmu) }}</td>
@@ -1196,16 +1572,16 @@ const tabs = [
             </table>
           </div>
 
-          <!-- Zone Totaux et Net (Style Logipaie) -->
-          <div class="logipaie-footer-grid mt-6">
+          <!-- Zone Totaux et Net (Style Logipaie - Réservé aux autres pays) -->
+          <div v-if="countryRules.code !== 'BJ'" class="logipaie-footer-grid mt-6">
             <div class="lp-cumuls-container">
               <div class="lp-cumuls-label">CUMULS</div>
               <div class="lp-cumuls-data">
                 <div class="cumul-row"><span>Brut imposable</span> <span>{{ fcfa(calc.brutImposable) }}</span></div>
                 <div class="cumul-row"><span>Nombre de jours</span> <span>{{ calc.joursTrav }}</span></div>
-                <div class="cumul-row"><span>ITS</span> <span>{{ fcfa(calc.salarial.its) }}</span></div>
-                <div class="cumul-row"><span>RICF</span> <span>{{ fcfa(calc.salarial.ricf) }}</span></div>
-                <div class="cumul-row"><span>Cnps</span> <span>{{ fcfa(calc.salarial.cnps) }}</span></div>
+                <div class="cumul-row"><span>{{ countryRules.libelleImpotSalarial.split(' ')[0] }}</span> <span>{{ fcfa(calc.salarial.its) }}</span></div>
+                <div class="cumul-row" v-if="countryRules.code === 'CI'"><span>RICF</span> <span>{{ fcfa(calc.salarial.ricf) }}</span></div>
+                <div class="cumul-row"><span>{{ countryRules.organismeRetraite.split(' ')[0] }}</span> <span>{{ fcfa(calc.salarial.cnps) }}</span></div>
               </div>
             </div>
             
@@ -1221,6 +1597,13 @@ const tabs = [
               <div class="lp-net-title">NET À PAYER</div>
               <div class="lp-net-value">{{ fcfa(calc.netAPayer) }} F</div>
             </div>
+          </div>
+          
+          <!-- Mode de paiement spécifique Bénin -->
+          <div v-if="countryRules.code === 'BJ'" class="benin-payment-footer mt-4">
+            <div><strong>MODE DE PAIEMENT :</strong> {{ emp.virement ? 'Virement bancaire' : 'Espèces' }}</div>
+            <div v-if="emp.virement && emp.rib"><strong>Numéro de compte :</strong> {{ emp.rib }}</div>
+            <div class="mt-2"><em>Arrêté le présent bulletin à la somme de : {{ fcfa(calc.netAPayer) }} francs CFA.</em></div>
           </div>
 
           <!-- Zone Signature -->
@@ -1245,12 +1628,12 @@ const tabs = [
     <div class="education-section">
       <div class="edu-container">
         <h3 class="edu-title">
-          Comprendre le Bulletin Ivoirien
+          Comprendre le Bulletin {{ countryRules.adjectif.charAt(0).toUpperCase() + countryRules.adjectif.slice(1) }}
           <div class="edu-flag">
-            <svg width="24" height="16" viewBox="0 0 3 2"><rect width="3" height="2" fill="#009A44"/><rect width="2" height="2" fill="#FFF"/><rect width="1" height="2" fill="#FF8200"/></svg>
+            <img :src="countryRules.flagUrl" :alt="countryRules.name" style="width: 24px; height: 16px; object-fit: cover; border-radius: 3px; box-shadow: 0 1px 3px rgba(0,0,0,0.2);" />
           </div>
         </h3>
-        <p class="edu-intro">Quelques clés pour mieux décrypter vos rubriques de paie</p>
+        <p class="edu-intro">Quelques clés pour mieux décrypter vos rubriques de paie {{ countryRules.preposition }} {{ countryRules.name }}</p>
         
         <div class="edu-grid">
           <div v-for="(edu, key) in explanations" :key="key" class="edu-card">
@@ -2746,6 +3129,146 @@ const tabs = [
   }
   .edu-card {
     padding: 1.5rem 1.15rem;
+  }
+}
+
+/* ══ Bouton Partager Simulation ══ */
+.share-sim-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.85rem;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  color: #1d4ed8;
+  font-weight: 700;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.share-sim-btn:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(29, 78, 216, 0.15);
+}
+.share-toast {
+  background: #065f46;
+  color: white;
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 0.65rem 1.25rem;
+  border-radius: 12px;
+  text-align: center;
+  animation: slideDown 0.3s ease;
+}
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+/* STYLES SPECIFIQUES AU MODELE BENIN / TOGO (RESPONSIVE OPTIMISÉ) */
+.payslip-benin {
+  padding: 10px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.benin-section-title {
+  text-align: center;
+  font-weight: 700;
+  font-size: 13px;
+  background: #334155;
+  color: white;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border-radius: 4px;
+}
+.benin-table {
+  width: 100%;
+  min-width: 480px; /* Empêche l'écrasement des colonnes sur mobile */
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.benin-table th, .benin-table td {
+  border: 1px solid #cbd5e1;
+  padding: 6px 8px;
+}
+.benin-table thead th {
+  background: #f1f5f9;
+  color: #334155;
+  font-weight: 700;
+  text-align: left;
+}
+.benin-col-label { width: 45%; }
+.benin-col-base { width: 18%; text-align: right; }
+.benin-col-taux { width: 12%; text-align: center; }
+.benin-col-montant { width: 25%; text-align: right; font-weight: 600; }
+.benin-table td.label { color: #1e293b; font-weight: 500; }
+.benin-table td.val { text-align: center; color: #475569; }
+.benin-table td.montant { text-align: right; color: #0f172a; }
+.benin-total-row td {
+  background: #e2e8f0;
+  font-weight: 700;
+  color: #1e293b;
+  text-align: left;
+}
+.benin-total-row td.montant {
+  text-align: right;
+  font-size: 12px;
+}
+.benin-net-row td {
+  background: #1e293b;
+  color: white;
+  font-weight: 800;
+  font-size: 13px;
+}
+.benin-net-row td.montant {
+  text-align: right;
+}
+.benin-payment-footer {
+  font-size: 11px;
+  color: #1e293b;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+}
+
+/* RESPONSIVE MOBILE FIXES FOR FORM & PREVIEW */
+@media (max-width: 640px) {
+  .field-group input,
+  .field-group select {
+    font-size: 16px !important; /* Empeche le zoom auto sur Safari/iOS */
+    padding: 0.65rem 0.75rem !important;
+  }
+  
+  .preview-container {
+    padding: 10px !important;
+    border-top-width: 4px !important;
+  }
+
+  .lph-row {
+    font-size: 0.72rem;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .footer-signatures {
+    flex-direction: column;
+    gap: 30px;
+    margin-top: 30px;
+  }
+
+  .sig-card {
+    width: 100%;
+  }
+
+  .btn-generate {
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 1rem;
+    padding: 1rem;
   }
 }
 </style>

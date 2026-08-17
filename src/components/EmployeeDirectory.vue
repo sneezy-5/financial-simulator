@@ -1,0 +1,1056 @@
+<script setup>
+import { ref, onMounted, computed, watch } from 'vue'
+import { localDb } from '../services/localDatabase.js'
+import { getCountryRules } from '../services/countryConfig.js'
+import { showToast } from '../services/toast.js'
+import { showConfirm } from '../services/confirmModal.js'
+
+const props = defineProps({
+  country: {
+    type: String,
+    default: 'CI'
+  }
+})
+
+const countryRules = computed(() => getCountryRules(props.country))
+const fcfa = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ' + countryRules.value.currency
+
+const employees = ref([])
+const loading = ref(true)
+const searchQuery = ref('')
+const selectedEmployee = ref(null)
+
+const loadEmployees = async () => {
+  loading.value = true
+  try {
+    employees.value = await localDb.getEmployees()
+  } catch (e) {
+    console.error("Erreur de chargement des employés", e)
+  }
+  loading.value = false
+}
+
+onMounted(() => {
+  loadEmployees()
+})
+
+const filteredEmployees = computed(() => {
+  if (!searchQuery.value) return employees.value
+  const q = searchQuery.value.toLowerCase()
+  return employees.value.filter(e => 
+    (e.nom || '').toLowerCase().includes(q) || 
+    (e.prenom || '').toLowerCase().includes(q) || 
+    (e.matricule || '').toLowerCase().includes(q) ||
+    (e.poste || '').toLowerCase().includes(q)
+  )
+})
+
+const currentPage = ref(1)
+const pageSize = ref(12)
+
+const totalPages = computed(() => {
+  return Math.ceil(filteredEmployees.value.length / pageSize.value) || 1
+})
+
+const paginatedEmployees = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  const end = start + pageSize.value
+  return filteredEmployees.value.slice(start, end)
+})
+
+watch(searchQuery, () => {
+  currentPage.value = 1
+})
+const deleteEmployee = async (id) => {
+  const ok = await showConfirm('Voulez-vous vraiment supprimer cet employé de la base locale ? Cette action est irréversible.', {
+    title: 'Supprimer l\'employé',
+    confirmLabel: 'Supprimer',
+    cancelLabel: 'Annuler',
+    type: 'danger'
+  })
+  if (!ok) return
+  try {
+    await localDb.deleteEmployee(id)
+    await loadEmployees()
+  } catch (e) {
+    showToast("Erreur lors de la suppression.", 'error')
+  }
+}
+
+const editEmployee = (emp) => {
+  selectedEmployee.value = JSON.parse(JSON.stringify(emp)) // Clone
+}
+
+const saveEmployee = async () => {
+  if (!selectedEmployee.value.nom || !selectedEmployee.value.nom.trim()) {
+    showToast("Le nom complet est obligatoire", 'error')
+    return
+  }
+  if (!selectedEmployee.value.salaire_base || parseFloat(selectedEmployee.value.salaire_base) <= 0) {
+    showToast("Le salaire de base est obligatoire et doit être supérieur à 0", 'error')
+    return
+  }
+  if (!selectedEmployee.value.date_embauche) {
+    showToast("La date d'embauche est obligatoire pour le calcul de l'ancienneté", 'error')
+    return
+  }
+  try {
+    await localDb.saveEmployee(selectedEmployee.value)
+    selectedEmployee.value = null
+    await loadEmployees()
+  } catch (e) {
+    showToast("Erreur lors de la sauvegarde", 'error')
+  }
+}
+
+const fileInput = ref(null)
+const isImporting = ref(false)
+
+const triggerImport = () => {
+  if (fileInput.value) fileInput.value.click()
+}
+
+const importExcel = async (e) => {
+  const file = e.target.files[0]
+  if (!file) return
+  isImporting.value = true
+  const formData = new FormData()
+  formData.append('file', file)
+  
+  try {
+    const res = await fetch('/api/rh/extract-data', { method: 'POST', body: formData })
+    const data = await res.json()
+    if (!data.success) throw new Error(data.error)
+    
+    if (data.data.length === 0) throw new Error("Fichier vide")
+    
+    // Auto-map headers
+    const headers = Object.keys(data.data[0])
+    const columnMap = {} 
+    
+    const fieldMappings = [
+      { key: 'nom', keywords: ['nom', 'name', 'salarie', 'salarié'] },
+      { key: 'prenom', keywords: ['prenom', 'prénom', 'first'] },
+      { key: 'matricule', keywords: ['matricule', 'id', 'numéro'] },
+      { key: 'salaire_base', keywords: ['salaire', 'base', 'brut', 'mensuel'] },
+      { key: 'sursalaire', keywords: ['sursalaire', 'sur salaire'] },
+      { key: 'prime_transport', keywords: ['transport', 'deplacement'] },
+      { key: 'prime_logement', keywords: ['logement', 'loyer'] },
+      { key: 'heures_sup_nb', keywords: ['heure', 'sup', 'hs'] },
+      { key: 'poste', keywords: ['poste', 'fonction', 'job'] },
+      { key: 'date_embauche', keywords: ['embauche', 'entree', 'entrée', 'recrutement'] }
+    ]
+    
+    const usedHeaders = new Set()
+    fieldMappings.forEach(field => {
+      const match = headers.find(h => {
+        if (usedHeaders.has(h)) return false
+        const hLow = h.toLowerCase()
+        return field.keywords.some(kw => hLow.includes(kw))
+      })
+      if (match) {
+        columnMap[match] = field.key
+        usedHeaders.add(match)
+      }
+    })
+    
+    // Fetch existing employees to prevent duplicates
+    const existingEmployees = await localDb.getEmployees()
+    
+    // Save all to localDb
+    let added = 0
+    let updated = 0
+    for (const rawEmp of data.data) {
+      const mappedEmp = {}
+      for (const [header, val] of Object.entries(rawEmp)) {
+        if (columnMap[header]) {
+          mappedEmp[columnMap[header]] = val
+        } else {
+          // Keep it with the original header name just in case
+          mappedEmp[header] = val
+        }
+      }
+      
+      // If we found a name, we save it
+      if (mappedEmp.nom) {
+        // Check for duplicate
+        const existing = existingEmployees.find(e => {
+          if (mappedEmp.matricule && e.matricule === mappedEmp.matricule) return true
+          return e.nom === mappedEmp.nom && (e.prenom || '') === (mappedEmp.prenom || '')
+        })
+        
+        if (existing) {
+          mappedEmp.id = existing.id
+          updated++
+        } else {
+          added++
+        }
+        await localDb.saveEmployee(mappedEmp)
+      }
+    }
+    
+    showToast(`${added} nouvel(s) employé(s) ajouté(s), ${updated} mis à jour avec succès !`, 'success')
+    await loadEmployees()
+  } catch (err) {
+    showToast("Erreur lors de l'import : " + err.message, 'error')
+  } finally {
+    isImporting.value = false
+    e.target.value = null // reset
+  }
+}
+</script>
+
+<template>
+  <div class="directory-wrapper animate-in">
+    <!-- HEADER -->
+    <div class="directory-header">
+      <div class="header-info">
+        <h2>
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+          Annuaire des Employés
+        </h2>
+        <p>Gérez vos salariés de manière 100% confidentielle dans votre navigateur (IndexedDB).</p>
+      </div>
+      <a href="/api/rh/download/modele-paie.xlsx" download class="btn-download-model">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        Modèle Excel Vierge
+      </a>
+    </div>
+
+    <!-- LISTE ET RECHERCHE -->
+    <div v-if="!selectedEmployee">
+      <div class="controls-bar">
+        <div class="search-input-wrapper">
+          <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <input type="text" v-model="searchQuery" placeholder="Rechercher par nom, matricule, poste..." />
+        </div>
+        
+        <input type="file" ref="fileInput" accept=".xlsx, .xls" style="display: none" @change="importExcel" />
+        
+        <div class="action-buttons">
+          <button @click="triggerImport" :disabled="isImporting" class="btn-secondary">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+            {{ isImporting ? 'Import en cours...' : 'Importer Excel' }}
+          </button>
+          
+          <button @click="editEmployee({})" class="btn-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            <span class="btn-text">Ajouter un Employé</span>
+          </button>
+        </div>
+      </div>
+
+      <div v-if="loading" class="state-container">
+        <div class="loader"></div>
+        <p>Chargement des employés...</p>
+      </div>
+      
+      <div v-else-if="filteredEmployees.length === 0" class="empty-state">
+        <div class="empty-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="8" y1="12" x2="16" y2="12"></line></svg>
+        </div>
+        <h3>Aucun employé trouvé</h3>
+        <p>Votre base de données locale est vide ou aucun résultat ne correspond à votre recherche.</p>
+        <button @click="editEmployee({})" class="btn-primary-outline">Créer le premier employé</button>
+      </div>
+
+      <div v-else class="directory-content">
+        <!-- Desktop Table view -->
+        <div class="table-container-responsive desktop-only">
+          <table class="employees-table">
+            <thead>
+              <tr>
+                <th>Employé</th>
+                <th>Matricule</th>
+                <th>Poste</th>
+                <th style="text-align: right;">Salaire de Base</th>
+                <th style="text-align: right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="emp in paginatedEmployees" :key="emp.id" class="employee-row">
+                <td>
+                  <div class="employee-identity">
+                    <div class="avatar-circle">
+                      {{ (emp.nom || 'E').charAt(0).toUpperCase() }}
+                    </div>
+                    <div>
+                      <div class="emp-name">{{ emp.nom }} {{ emp.prenom }}</div>
+                      <div class="emp-date" v-if="emp.date_embauche">Recruté le {{ new Date(emp.date_embauche).toLocaleDateString('fr-FR') }}</div>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <span class="badge-matricule">{{ emp.matricule || 'Non spécifié' }}</span>
+                </td>
+                <td>
+                  <span class="emp-poste-cell">{{ emp.poste || '—' }}</span>
+                </td>
+                <td style="text-align: right; font-weight: 700; color: #ffffff;">
+                  {{ fcfa(emp.salaire_base) }}
+                </td>
+                <td>
+                  <div class="row-actions">
+                    <button @click="editEmployee(emp)" class="btn-icon-edit" title="Modifier">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4z"></path></svg>
+                    </button>
+                    <button @click="deleteEmployee(emp.id)" class="btn-icon-delete" title="Supprimer">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Mobile Card view -->
+        <div class="mobile-only mobile-cards-container">
+          <div v-for="emp in paginatedEmployees" :key="emp.id" class="employee-mobile-card animate-in">
+            <div class="mobile-card-header">
+              <div class="employee-identity">
+                <div class="avatar-circle">
+                  {{ (emp.nom || 'E').charAt(0).toUpperCase() }}
+                </div>
+                <div>
+                  <div class="emp-name">{{ emp.nom }} {{ emp.prenom }}</div>
+                  <div class="emp-date" v-if="emp.date_embauche">Recruté le {{ new Date(emp.date_embauche).toLocaleDateString('fr-FR') }}</div>
+                </div>
+              </div>
+              <div class="row-actions">
+                <button @click="editEmployee(emp)" class="btn-icon-edit" title="Modifier">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4z"></path></svg>
+                </button>
+                <button @click="deleteEmployee(emp.id)" class="btn-icon-delete" title="Supprimer">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                </button>
+              </div>
+            </div>
+            
+            <div class="mobile-card-details">
+              <div class="mobile-detail-row">
+                <span class="mobile-detail-label">Matricule :</span>
+                <span class="badge-matricule">{{ emp.matricule || 'Non spécifié' }}</span>
+              </div>
+              <div class="mobile-detail-row">
+                <span class="mobile-detail-label">Poste :</span>
+                <span class="emp-poste-cell">{{ emp.poste || '—' }}</span>
+              </div>
+              <div class="mobile-detail-row">
+                <span class="mobile-detail-label">Salaire :</span>
+                <span class="mobile-salary-val" style="font-weight: 700; color: #ffffff;">{{ fcfa(emp.salaire_base) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pagination -->
+        <div v-if="totalPages > 1" class="pagination-container">
+          <button @click="currentPage--" :disabled="currentPage === 1" class="btn-pag">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+            Précédent
+          </button>
+          <span class="pag-info">Page {{ currentPage }} sur {{ totalPages }}</span>
+          <button @click="currentPage++" :disabled="currentPage === totalPages" class="btn-pag">
+            Suivant
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- EDITEUR INDIVIDUEL -->
+    <div v-else class="employee-editor">
+      <div class="editor-header">
+        <h3>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+          {{ selectedEmployee.id ? 'Éditer la fiche salarié' : 'Créer une fiche salarié' }}
+        </h3>
+        <button @click="selectedEmployee = null" class="btn-close">&times;</button>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Nom Complet <span class="req">*</span></label>
+          <input v-model="selectedEmployee.nom" type="text" placeholder="ex. N'Guessan" />
+        </div>
+        <div class="form-group">
+          <label>Prénom(s)</label>
+          <input v-model="selectedEmployee.prenom" type="text" placeholder="ex. Koffi Emmanuel" />
+        </div>
+        <div class="form-group">
+          <label>Matricule</label>
+          <input v-model="selectedEmployee.matricule" type="text" placeholder="ex. EMP-2026-004" />
+        </div>
+        <div class="form-group">
+          <label>Poste occupé</label>
+          <input v-model="selectedEmployee.poste" type="text" placeholder="ex. Directeur des Opérations" />
+        </div>
+        <div class="form-group">
+          <label>Salaire de base mensuel ({{ getCountryRules(props.country).currency }}) <span class="req">*</span></label>
+          <input v-model="selectedEmployee.salaire_base" type="number" placeholder="ex. 500000" />
+        </div>
+        <div class="form-group">
+          <label>Sursalaire ({{ getCountryRules(props.country).currency }})</label>
+          <input v-model="selectedEmployee.sursalaire" type="number" placeholder="ex. 100000" />
+        </div>
+        <div class="form-group">
+          <label>Date d'embauche <span class="req">*</span></label>
+          <input v-model="selectedEmployee.date_embauche" type="date" />
+        </div>
+      </div>
+
+      <div class="editor-footer">
+        <button @click="selectedEmployee = null" class="btn-cancel">Annuler</button>
+        <button @click="saveEmployee" class="btn-save">Enregistrer les modifications</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.directory-wrapper {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  font-family: inherit;
+  color: #0f172a;
+}
+
+/* Header */
+.directory-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.header-info h2 {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #0f172a;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 0 0.5rem 0;
+}
+
+.header-info p {
+  font-size: 0.9rem;
+  color: #64748b;
+  margin: 0;
+}
+
+.btn-download-model {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(16, 185, 129, 0.1);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  padding: 0.6rem 1.2rem;
+  border-radius: 10px;
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.15);
+}
+
+.btn-download-model:hover {
+  background: rgba(16, 185, 129, 0.2);
+  transform: translateY(-1px);
+}
+
+/* Controls Bar */
+.controls-bar {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.search-input-wrapper {
+  position: relative;
+  flex: 1;
+  min-width: 250px;
+}
+
+.search-icon {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #94a3b8;
+}
+
+.search-input-wrapper input {
+  width: 100%;
+  padding: 0.75rem 1rem 0.75rem 2.5rem;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 0.9rem;
+  outline: none;
+  transition: all 0.2s;
+  box-sizing: border-box;
+}
+
+.search-input-wrapper input:focus {
+  border-color: #3b82f6;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.action-buttons {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.btn-secondary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: #ffffff;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  padding: 0.75rem 1.25rem;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+
+.btn-secondary:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.btn-primary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.25);
+}
+
+.btn-primary:hover {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(59, 130, 246, 0.35);
+}
+
+/* Empty States */
+.empty-state {
+  padding: 4rem 2rem;
+  text-align: center;
+  background: #f8fafc;
+  border-radius: 16px;
+  border: 2px dashed #e2e8f0;
+  margin-top: 1rem;
+}
+
+.empty-icon {
+  color: #94a3b8;
+  margin-bottom: 1rem;
+}
+
+.empty-state h3 {
+  color: #0f172a;
+  margin: 0 0 0.5rem 0;
+  font-size: 1.2rem;
+}
+
+.empty-state p {
+  color: #64748b;
+  font-size: 0.9rem;
+  margin: 0 0 1.5rem 0;
+}
+
+.btn-primary-outline {
+  background: transparent;
+  color: #3b82f6;
+  border: 1px solid #3b82f6;
+  padding: 0.6rem 1.2rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+
+.btn-primary-outline:hover {
+  background: #eff6ff;
+}
+
+/* Loading States */
+.state-container {
+  padding: 4rem;
+  text-align: center;
+  color: #64748b;
+}
+
+.loader {
+  width: 24px;
+  height: 24px;
+  border: 3px solid #e2e8f0;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 1rem auto;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Table Design */
+.table-container-responsive {
+  background: #ffffff;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.05);
+  overflow: auto;
+  max-height: 480px;
+}
+
+.employees-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.9rem;
+}
+
+.employees-table th {
+  background: #f8fafc;
+  color: #475569;
+  font-weight: 700;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid #e2e8f0;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  box-shadow: inset 0 -1px 0 #e2e8f0;
+}
+
+.employees-table td {
+  padding: 1.1rem 1.5rem;
+  border-bottom: 1px solid #e2e8f0;
+  color: #475569;
+  background: transparent !important;
+}
+
+.employee-row {
+  transition: background 0.15s;
+  background: transparent !important;
+}
+
+.employee-row:hover {
+  background: #f8fafc !important;
+}
+
+.employee-identity {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.avatar-circle {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.15) 0%, rgba(3, 105, 161, 0.2) 100%);
+  color: #3b82f6;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 0.95rem;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
+}
+
+.emp-name {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.emp-date {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.badge-matricule {
+  display: inline-block;
+  background: #f1f5f9;
+  color: #475569;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border: 1px solid #e2e8f0;
+}
+
+.emp-poste-cell {
+  font-weight: 500;
+  color: #64748b;
+}
+
+/* Actions in Table */
+.row-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.btn-icon-edit, .btn-icon-delete {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-icon-edit {
+  color: #64748b;
+}
+
+.btn-icon-edit:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+
+.btn-icon-delete {
+  color: #ef4444;
+}
+
+.btn-icon-delete:hover {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #dc2626;
+}
+
+/* Pagination */
+.pagination-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 1.5rem;
+  margin-top: 2rem;
+}
+
+.btn-pag {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #475569;
+  font-weight: 700;
+  font-size: 0.8rem;
+  transition: all 0.2s;
+}
+
+.btn-pag:hover:not(:disabled) {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.btn-pag:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.pag-info {
+  font-size: 0.85rem;
+  color: #64748b;
+  font-weight: 700;
+}
+
+/* Employee Editor */
+.employee-editor {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 2rem;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(15px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.editor-header h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1.25rem;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.btn-close {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #64748b;
+  font-size: 1.75rem;
+  line-height: 1;
+  transition: color 0.2s;
+}
+
+.btn-close:hover {
+  color: #0f172a;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.5rem;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.form-group label {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #475569;
+}
+
+.form-group label .req {
+  color: #ef4444;
+}
+
+.form-group input {
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 0.9rem;
+  outline: none;
+  transition: all 0.2s;
+  box-sizing: border-box;
+}
+
+.form-group input:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  background: #ffffff;
+}
+
+.editor-footer {
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  gap: 1rem;
+  justify-content: flex-end;
+}
+
+.btn-cancel {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  color: #64748b;
+  padding: 0.75rem 1.5rem;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+
+.btn-cancel:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.btn-save {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  border: none;
+  padding: 0.75rem 1.75rem;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);
+}
+
+.btn-save:hover {
+  background: linear-gradient(135deg, #34d399 0%, #047857 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(16, 185, 129, 0.4);
+}
+
+/* Responsive visibility */
+@media (min-width: 641px) {
+  .desktop-only {
+    display: block !important;
+  }
+  .mobile-only {
+    display: none !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .desktop-only {
+    display: none !important;
+  }
+  .mobile-only {
+    display: block !important;
+  }
+  
+  .directory-wrapper {
+    padding: 0.5rem 0.25rem !important;
+  }
+  
+  /* Squeeze directory header */
+  .directory-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+    text-align: center;
+    margin-bottom: 1.25rem;
+  }
+  
+  .header-info h2 {
+    justify-content: center;
+    font-size: 1.25rem;
+  }
+  
+  .btn-download-model {
+    justify-content: center;
+    padding: 0.5rem 1rem;
+    font-size: 0.8rem;
+  }
+  
+  /* Squeeze controls bar */
+  .controls-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+  
+  .action-buttons {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  
+  .action-buttons .btn-secondary {
+    flex: 1;
+    justify-content: center;
+    padding: 0 12px;
+    height: 42px;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+  }
+  
+  .action-buttons .btn-primary {
+    flex: 0 0 42px;
+    width: 42px;
+    height: 42px;
+    padding: 0 !important;
+    justify-content: center;
+    align-items: center;
+    border-radius: 10px;
+    display: flex;
+  }
+  
+  .action-buttons .btn-primary .btn-text {
+    display: none !important;
+  }
+  
+  /* Mobile Cards */
+  .mobile-cards-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  
+  .employee-mobile-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  }
+  
+  .mobile-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #e2e8f0;
+    padding-bottom: 8px;
+  }
+  
+  .mobile-card-details {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  
+  .mobile-detail-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.85rem;
+  }
+  
+  .mobile-detail-label {
+    color: #64748b;
+    font-weight: 500;
+  }
+}
+</style>

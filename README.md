@@ -74,5 +74,5 @@ src/
 *   **Scoring** : Système de points sur 100 basé sur la stabilité financière et personnelle.
 
 ## 👥 Auteur
-**Développé par Narcisse Adingra (alias Sneezy) - Équipe Waretack**
+**Développé par Narcisse Adingra (alias Sneezy) - Équipe Djeli**
 Développé avec ❤️ pour simplifier l'accès à l'information financière.

@@ -14,6 +14,10 @@ import sibLogo from '../assets/logos/sib.png'
 import bbgLogo from '../assets/logos/bbg.png'
 import bduLogo from '../assets/logos/bdu.png'
 import autreBanqueLogo from '../assets/logos/autre_banque.png'
+import boaLogo from '../assets/logos/boa.webp'
+import corisLogo from '../assets/logos/corisbank.webp'
+import orabankLogo from '../assets/logos/orabank.webp'
+import utbLogo from '../assets/logos/utb_bank.webp'
 
 export const BANQUES = [
   {
@@ -86,10 +90,55 @@ export const BANQUES = [
     logo: bduLogo,
     description: "Banque de l'Union Côte d'Ivoire"
   },
+
+  // 🇧🇯 BÉNIN
+  { id: 101, nom: "BOA Bénin", pays: "BJ", logo: boaLogo, description: "Bank of Africa Bénin" },
+  { id: 102, nom: "Ecobank Bénin", pays: "BJ", logo: ecobankLogo, description: "Ecobank Bénin" },
+  { id: 103, nom: "NSIA Banque Bénin", pays: "BJ", logo: nsiaLogo, description: "NSIA Banque Bénin" },
+  { id: 104, nom: "Coris Bank Bénin", pays: "BJ", logo: corisLogo, description: "Coris Bank International Bénin" },
+  { id: 105, nom: "BGFIBank Bénin", pays: "BJ", logo: autreBanqueLogo, description: "BGFIBank Bénin" },
+  { id: 106, nom: "UBA Bénin", pays: "BJ", logo: ubaLogo, description: "United Bank for Africa Bénin" },
+
+  // 🇹🇬 TOGO
+  { id: 201, nom: "Ecobank Togo", pays: "TG", logo: ecobankLogo, description: "Ecobank Togo" },
+  { id: 202, nom: "Orabank Togo", pays: "TG", logo: orabankLogo, description: "Orabank Togo" },
+  { id: 203, nom: "UTB", pays: "TG", logo: utbLogo, description: "Union Togolaise de Banque" },
+  { id: 204, nom: "Coris Bank Togo", pays: "TG", logo: corisLogo, description: "Coris Bank Togo" },
+  { id: 205, nom: "BOA Togo", pays: "TG", logo: boaLogo, description: "Bank of Africa Togo" },
+  { id: 206, nom: "NSIA Banque Togo", pays: "TG", logo: nsiaLogo, description: "NSIA Banque Togo" },
+
+  // 🇲🇱 MALI
+  { id: 301, nom: "BDM-SA", pays: "ML", logo: autreBanqueLogo, description: "Banque de Développement du Mali" },
+  { id: 302, nom: "BMS-SA", pays: "ML", logo: autreBanqueLogo, description: "Banque Malienne de Solidarité" },
+  { id: 303, nom: "BOA Mali", pays: "ML", logo: boaLogo, description: "Bank of Africa Mali" },
+  { id: 304, nom: "Ecobank Mali", pays: "ML", logo: ecobankLogo, description: "Ecobank Mali" },
+
+  // 🇧🇫 BURKINA FASO
+  { id: 401, nom: "Coris Bank International", pays: "BF", logo: corisLogo, description: "Coris Bank Burkina Faso" },
+  { id: 402, nom: "BOA Burkina Faso", pays: "BF", logo: boaLogo, description: "Bank of Africa Burkina Faso" },
+  { id: 403, nom: "Ecobank Burkina", pays: "BF", logo: ecobankLogo, description: "Ecobank Burkina" },
+
+  // 🇨🇲 CAMEROUN
+  { id: 501, nom: "Afriland First Bank", pays: "CM", logo: autreBanqueLogo, description: "Afriland First Bank Cameroun" },
+  { id: 502, nom: "Société Générale Cameroun", pays: "CM", logo: sgciLogo, description: "SG Cameroun" },
+  { id: 503, nom: "BICEC", pays: "CM", logo: biciciLogo, description: "Banque Internationale du Cameroun" },
+  { id: 504, nom: "CBC", pays: "CM", logo: autreBanqueLogo, description: "Commercial Bank Cameroon" },
+
+  // 🇸🇳 SÉNÉGAL
+  { id: 601, nom: "CBAO", pays: "SN", logo: autreBanqueLogo, description: "CBAO Groupe Attijariwafa bank" },
+  { id: 602, nom: "Société Générale Sénégal", pays: "SN", logo: sgciLogo, description: "SG Sénégal" },
+  { id: 603, nom: "BOA Sénégal", pays: "SN", logo: boaLogo, description: "Bank of Africa Sénégal" },
+  { id: 604, nom: "BICIS", pays: "SN", logo: biciciLogo, description: "Banque Internationale pour le Commerce et l'Industrie du Sénégal" },
+
+  // 🇬🇦 GABON
+  { id: 701, nom: "BGFIBank Gabon", pays: "GA", logo: autreBanqueLogo, description: "BGFIBank Gabon" },
+  { id: 702, nom: "UGB", pays: "GA", logo: autreBanqueLogo, description: "Union Gabonaise de Banque" },
+  { id: 703, nom: "BICIG", pays: "GA", logo: biciciLogo, description: "Banque Internationale pour le Commerce et l'Industrie du Gabon" },
+
   {
     id: 99,
     nom: "Autre Banque",
-    pays: "CI",
+    pays: "ALL",
     logo: autreBanqueLogo,
     description: "Simulation générique pour toute autre banque"
   }
@@ -151,7 +200,13 @@ export const BANQUE_QUOTITE_MAP = {
   8: "etendue",   // SIB (jusqu'à 60% du salaire)
   9: "standard",  // BBG (Bridge Bank Group)
   10: "standard", // BDU-CI
-  99: "standard"  // Autre
+  99: "standard", // Autre
+  201: "standard", // Ecobank Togo
+  202: "standard", // Orabank Togo
+  203: "standard", // UTB
+  204: "standard", // Coris Bank Togo
+  205: "standard", // BOA Togo
+  206: "standard"  // NSIA Banque Togo
 };
 
 export const TYPES_PRETS = [
@@ -2160,6 +2215,517 @@ export const TYPES_PRETS = [
       domiciliation_obligatoire: true,
       apport_personnel: 0
     }
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // PRETS TOGO (Générés)
+  {
+    id: 1000,
+    banque_id: 201,
+    nom: "Prêt personnel",
+    type: "consommation",
+    taux: 9,
+    montant_min: 500000,
+    montant_max: 5000000,
+    duree_min: 12,
+    duree_max: 60,
+    frais_dossier: 1.5,
+    frais_dossier_min: 50000,
+    assurance: 1,
+    description: "Financement consommation proposé par Ecobank Togo pour vos projets.",
+    avantages: ["CDI, domiciliation salaire, assurance décès-invalidité"],
+    conditions: {
+      age_min: 21,
+      age_max: 60,
+      anciennete_min: 12,
+      revenus_min: 150000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: false,
+      types_garantie_acceptes: ["domiciliation"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 0
+    }
+  },
+
+  {
+    id: 1001,
+    banque_id: 201,
+    nom: "Prêt immobilier",
+    type: "immobilier",
+    taux: 7,
+    montant_min: 500000,
+    montant_max: 150000000,
+    duree_min: 12,
+    duree_max: 240,
+    frais_dossier: 1.5,
+    frais_dossier_min: 50000,
+    assurance: 1,
+    description: "Financement immobilier proposé par Ecobank Togo pour vos projets.",
+    avantages: ["Apport 10–20%, hypothèque, assurance multirisques"],
+    conditions: {
+      age_min: 21,
+      age_max: 60,
+      anciennete_min: 12,
+      revenus_min: 200000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: true,
+      types_garantie_acceptes: ["hypotheque"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 10
+    }
+  },
+
+  {
+    id: 1002,
+    banque_id: 201,
+    nom: "Crédit auto",
+    type: "automobile",
+    taux: 8,
+    montant_min: 500000,
+    montant_max: 30000000,
+    duree_min: 12,
+    duree_max: 60,
+    frais_dossier: 1.5,
+    frais_dossier_min: 50000,
+    assurance: 1,
+    description: "Financement automobile proposé par Ecobank Togo pour vos projets.",
+    avantages: ["Facture proforma, assurance tous risques"],
+    conditions: {
+      age_min: 21,
+      age_max: 60,
+      anciennete_min: 12,
+      revenus_min: 150000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: true,
+      types_garantie_acceptes: ["gage_vehicule"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 10
+    }
+  },
+
+  {
+    id: 1003,
+    banque_id: 202,
+    nom: "Prêt personnel (Ora'Conso)",
+    type: "consommation",
+    taux: 7,
+    montant_min: 500000,
+    montant_max: 10000000,
+    duree_min: 12,
+    duree_max: 60,
+    frais_dossier: 1,
+    frais_dossier_min: 25000,
+    assurance: 1,
+    description: "Financement consommation proposé par Orabank Togo pour vos projets.",
+    avantages: ["CDI, domiciliation salaire, assurance"],
+    conditions: {
+      age_min: 21,
+      age_max: 65,
+      anciennete_min: 12,
+      revenus_min: 200000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: false,
+      types_garantie_acceptes: ["domiciliation"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 0
+    }
+  },
+
+  {
+    id: 1004,
+    banque_id: 202,
+    nom: "Prêt immobilier",
+    type: "immobilier",
+    taux: 6,
+    montant_min: 500000,
+    montant_max: 300000000,
+    duree_min: 12,
+    duree_max: 240,
+    frais_dossier: 1,
+    frais_dossier_min: 25000,
+    assurance: 1,
+    description: "Financement immobilier proposé par Orabank Togo pour vos projets.",
+    avantages: ["Apport 10%, hypothèque 1er rang, assurance"],
+    conditions: {
+      age_min: 21,
+      age_max: 65,
+      anciennete_min: 12,
+      revenus_min: 200000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: true,
+      types_garantie_acceptes: ["hypotheque"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 10
+    }
+  },
+
+  {
+    id: 1005,
+    banque_id: 202,
+    nom: "Crédit auto",
+    type: "automobile",
+    taux: 7.5,
+    montant_min: 500000,
+    montant_max: 40000000,
+    duree_min: 12,
+    duree_max: 60,
+    frais_dossier: 1,
+    frais_dossier_min: 25000,
+    assurance: 1,
+    description: "Financement automobile proposé par Orabank Togo pour vos projets.",
+    avantages: ["Facture, assurance tous risques"],
+    conditions: {
+      age_min: 21,
+      age_max: 65,
+      anciennete_min: 12,
+      revenus_min: 200000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: true,
+      types_garantie_acceptes: ["gage_vehicule"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 10
+    }
+  },
+
+  {
+    id: 1006,
+    banque_id: 204,
+    nom: "Prêt personnel",
+    type: "consommation",
+    taux: 8,
+    montant_min: 500000,
+    montant_max: 5000000,
+    duree_min: 12,
+    duree_max: 48,
+    frais_dossier: 1.5,
+    frais_dossier_min: 30000,
+    assurance: 1,
+    description: "Financement consommation proposé par Coris Bank Togo pour vos projets.",
+    avantages: ["CDI, domiciliation salaire"],
+    conditions: {
+      age_min: 21,
+      age_max: 60,
+      anciennete_min: 12,
+      revenus_min: 150000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: false,
+      types_garantie_acceptes: ["domiciliation"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 0
+    }
+  },
+
+  {
+    id: 1007,
+    banque_id: 204,
+    nom: "Prêt immobilier",
+    type: "immobilier",
+    taux: 7,
+    montant_min: 500000,
+    montant_max: 100000000,
+    duree_min: 12,
+    duree_max: 180,
+    frais_dossier: 1.5,
+    frais_dossier_min: 30000,
+    assurance: 1,
+    description: "Financement immobilier proposé par Coris Bank Togo pour vos projets.",
+    avantages: ["Apport 15%, hypothèque, assurance"],
+    conditions: {
+      age_min: 21,
+      age_max: 60,
+      anciennete_min: 12,
+      revenus_min: 200000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: true,
+      types_garantie_acceptes: ["hypotheque"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 15
+    }
+  },
+
+  {
+    id: 1008,
+    banque_id: 204,
+    nom: "Crédit auto",
+    type: "automobile",
+    taux: 8.5,
+    montant_min: 500000,
+    montant_max: 25000000,
+    duree_min: 12,
+    duree_max: 60,
+    frais_dossier: 1.5,
+    frais_dossier_min: 30000,
+    assurance: 1,
+    description: "Financement automobile proposé par Coris Bank Togo pour vos projets.",
+    avantages: ["Facture, assurance"],
+    conditions: {
+      age_min: 21,
+      age_max: 60,
+      anciennete_min: 12,
+      revenus_min: 150000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: true,
+      types_garantie_acceptes: ["gage_vehicule"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 10
+    }
+  },
+
+  {
+    id: 1009,
+    banque_id: 205,
+    nom: "Prêt consommation",
+    type: "consommation",
+    taux: 8,
+    montant_min: 500000,
+    montant_max: 10000000,
+    duree_min: 12,
+    duree_max: 60,
+    frais_dossier: 1.25,
+    frais_dossier_min: 50000,
+    assurance: 1,
+    description: "Financement consommation proposé par BOA Togo pour vos projets.",
+    avantages: ["CDI, domiciliation salaire, assurance"],
+    conditions: {
+      age_min: 21,
+      age_max: 60,
+      anciennete_min: 12,
+      revenus_min: 200000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: false,
+      types_garantie_acceptes: ["domiciliation"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 0
+    }
+  },
+
+  {
+    id: 1010,
+    banque_id: 205,
+    nom: "Prêt Ma Maison (immobilier)",
+    type: "immobilier",
+    taux: 6.5,
+    montant_min: 500000,
+    montant_max: 200000000,
+    duree_min: 12,
+    duree_max: 300,
+    frais_dossier: 1.25,
+    frais_dossier_min: 50000,
+    assurance: 1,
+    description: "Financement immobilier proposé par BOA Togo pour vos projets.",
+    avantages: ["Épargne préalable (36 mois), apport 10%"],
+    conditions: {
+      age_min: 21,
+      age_max: 60,
+      anciennete_min: 12,
+      revenus_min: 200000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: true,
+      types_garantie_acceptes: ["hypotheque"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 10
+    }
+  },
+
+  {
+    id: 1011,
+    banque_id: 205,
+    nom: "Crédit auto",
+    type: "automobile",
+    taux: 8,
+    montant_min: 500000,
+    montant_max: 30000000,
+    duree_min: 12,
+    duree_max: 60,
+    frais_dossier: 1.25,
+    frais_dossier_min: 50000,
+    assurance: 1,
+    description: "Financement automobile proposé par BOA Togo pour vos projets.",
+    avantages: ["Facture, assurance"],
+    conditions: {
+      age_min: 21,
+      age_max: 60,
+      anciennete_min: 12,
+      revenus_min: 200000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: true,
+      types_garantie_acceptes: ["gage_vehicule"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 10
+    }
+  },
+
+  {
+    id: 1012,
+    banque_id: 206,
+    nom: "Prêt personnel",
+    type: "consommation",
+    taux: 7.5,
+    montant_min: 500000,
+    montant_max: 10000000,
+    duree_min: 12,
+    duree_max: 60,
+    frais_dossier: 1.5,
+    frais_dossier_min: 50000,
+    assurance: 1,
+    description: "Financement consommation proposé par NSIA Banque Togo pour vos projets.",
+    avantages: ["CDI, domiciliation salaire"],
+    conditions: {
+      age_min: 21,
+      age_max: 65,
+      anciennete_min: 12,
+      revenus_min: 150000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: false,
+      types_garantie_acceptes: ["domiciliation"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 0
+    }
+  },
+
+  {
+    id: 1013,
+    banque_id: 206,
+    nom: "Prêt immobilier",
+    type: "immobilier",
+    taux: 6.5,
+    montant_min: 500000,
+    montant_max: 150000000,
+    duree_min: 12,
+    duree_max: 240,
+    frais_dossier: 1.5,
+    frais_dossier_min: 50000,
+    assurance: 1,
+    description: "Financement immobilier proposé par NSIA Banque Togo pour vos projets.",
+    avantages: ["Apport 10–20%, hypothèque, assurance"],
+    conditions: {
+      age_min: 21,
+      age_max: 65,
+      anciennete_min: 12,
+      revenus_min: 200000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: true,
+      types_garantie_acceptes: ["hypotheque"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 10
+    }
+  },
+
+  {
+    id: 1014,
+    banque_id: 206,
+    nom: "Crédit auto",
+    type: "automobile",
+    taux: 8,
+    montant_min: 500000,
+    montant_max: 30000000,
+    duree_min: 12,
+    duree_max: 60,
+    frais_dossier: 1.5,
+    frais_dossier_min: 50000,
+    assurance: 1,
+    description: "Financement automobile proposé par NSIA Banque Togo pour vos projets.",
+    avantages: ["Facture, assurance"],
+    conditions: {
+      age_min: 21,
+      age_max: 65,
+      anciennete_min: 12,
+      revenus_min: 150000,
+      types_contrat: ["cdi", "fonctionnaire"],
+      garantie_requise: true,
+      types_garantie_acceptes: ["gage_vehicule"],
+      domiciliation_obligatoire: true,
+      apport_personnel: 10
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // BANQUES BÉNIN
+  // ═══════════════════════════════════════════════════════════════
+
+  // BOA BÉNIN (101)
+  {
+    id: 10101, banque_id: 101, nom: "Prêt personnel", taux: 10, montant_min: 500000, montant_max: 5000000, duree_min: 12, duree_max: 83, frais_dossier: 1.5, assurance: 1, description: "Prêt personnel",
+    avantages: ["Sans apport", "Jusqu'à 83 mois"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 0, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: false, domiciliation_obligatoire: true }
+  },
+  {
+    id: 10102, banque_id: 101, nom: "Prêt Ma Maison", taux: 8.25, montant_min: 5000000, montant_max: 80000000, duree_min: 24, duree_max: 240, frais_dossier: 1.5, assurance: 1, description: "Prêt immobilier",
+    avantages: ["Apport 20%", "Jusqu'à 20 ans"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 20, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: true, types_garantie_acceptes: ["hypotheque"], domiciliation_obligatoire: true }
+  },
+  {
+    id: 10103, banque_id: 101, nom: "Crédit auto", taux: 9.5, montant_min: 2000000, montant_max: 30000000, duree_min: 12, duree_max: 60, frais_dossier: 1.5, assurance: 1, description: "Crédit auto",
+    avantages: ["Apport 10%"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 10, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: true, types_garantie_acceptes: ["gage_vehicule"], domiciliation_obligatoire: true }
+  },
+
+  // ECOBANK BÉNIN (102)
+  {
+    id: 10201, banque_id: 102, nom: "Prêt personnel", taux: 11.5, montant_min: 500000, montant_max: 10000000, duree_min: 12, duree_max: 60, frais_dossier: 1.5, assurance: 1, description: "Prêt personnel",
+    avantages: ["Sans apport"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 0, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: false, domiciliation_obligatoire: true }
+  },
+  {
+    id: 10202, banque_id: 102, nom: "Crédit Habitat", taux: 10, montant_min: 5000000, montant_max: 100000000, duree_min: 36, duree_max: 240, frais_dossier: 1.5, assurance: 1, description: "Crédit immobilier",
+    avantages: ["Apport 20%"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 20, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: true, types_garantie_acceptes: ["hypotheque"], domiciliation_obligatoire: true }
+  },
+  {
+    id: 10203, banque_id: 102, nom: "Crédit auto", taux: 11, montant_min: 2000000, montant_max: 30000000, duree_min: 12, duree_max: 60, frais_dossier: 1.5, assurance: 1, description: "Crédit auto",
+    avantages: ["Apport 10%"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 10, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: true, types_garantie_acceptes: ["gage_vehicule"], domiciliation_obligatoire: true }
+  },
+
+  // CORIS BANK BÉNIN (104)
+  {
+    id: 10401, banque_id: 104, nom: "Prêt personnel", taux: 9.5, montant_min: 500000, montant_max: 5000000, duree_min: 12, duree_max: 60, frais_dossier: 1.5, assurance: 1, description: "Prêt personnel",
+    avantages: ["Sans apport"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 0, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: false, domiciliation_obligatoire: true }
+  },
+  {
+    id: 10402, banque_id: 104, nom: "Prêt immobilier", taux: 8.75, montant_min: 5000000, montant_max: 80000000, duree_min: 24, duree_max: 180, frais_dossier: 1.5, assurance: 1, description: "Prêt immobilier",
+    avantages: ["Apport 20%"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 20, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: true, types_garantie_acceptes: ["hypotheque"], domiciliation_obligatoire: true }
+  },
+  {
+    id: 10403, banque_id: 104, nom: "Crédit auto", taux: 9.75, montant_min: 2000000, montant_max: 25000000, duree_min: 12, duree_max: 60, frais_dossier: 1.5, assurance: 1, description: "Crédit auto",
+    avantages: ["Apport 10%"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 10, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: true, types_garantie_acceptes: ["gage_vehicule"], domiciliation_obligatoire: true }
+  },
+
+  // NSIA BANQUE BÉNIN (103)
+  {
+    id: 10301, banque_id: 103, nom: "Prêt personnel", taux: 9.75, montant_min: 500000, montant_max: 10000000, duree_min: 12, duree_max: 60, frais_dossier: 1.5, assurance: 1, description: "Prêt personnel",
+    avantages: ["Sans apport"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 0, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: false, domiciliation_obligatoire: true }
+  },
+  {
+    id: 10302, banque_id: 103, nom: "Prêt immobilier", taux: 8.75, montant_min: 5000000, montant_max: 100000000, duree_min: 36, duree_max: 240, frais_dossier: 1.5, assurance: 1, description: "Prêt immobilier",
+    avantages: ["Apport 20%"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 20, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: true, types_garantie_acceptes: ["hypotheque"], domiciliation_obligatoire: true }
+  },
+  {
+    id: 10303, banque_id: 103, nom: "Crédit auto", taux: 9.75, montant_min: 2000000, montant_max: 30000000, duree_min: 12, duree_max: 60, frais_dossier: 1.5, assurance: 1, description: "Crédit auto",
+    avantages: ["Apport 10%"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 10, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: true, types_garantie_acceptes: ["gage_vehicule"], domiciliation_obligatoire: true }
+  },
+
+  // UBA BÉNIN (106)
+  {
+    id: 10601, banque_id: 106, nom: "Prêt personnel", taux: 10.5, montant_min: 500000, montant_max: 5000000, duree_min: 12, duree_max: 84, frais_dossier: 1, assurance: 1, description: "Prêt personnel",
+    avantages: ["Sans apport", "Jusqu'à 84 mois"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 0, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: false, domiciliation_obligatoire: true }
+  },
+  {
+    id: 10602, banque_id: 106, nom: "Prêt immobilier", taux: 10.5, montant_min: 5000000, montant_max: 80000000, duree_min: 24, duree_max: 180, frais_dossier: 1, assurance: 1, description: "Prêt immobilier",
+    avantages: ["Apport 20%"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 20, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: true, types_garantie_acceptes: ["hypotheque"], domiciliation_obligatoire: true }
+  },
+  {
+    id: 10603, banque_id: 106, nom: "Crédit auto", taux: 10.5, montant_min: 2000000, montant_max: 25000000, duree_min: 12, duree_max: 60, frais_dossier: 1, assurance: 1, description: "Crédit auto",
+    avantages: ["Apport 10%"],
+    conditions: { age_min: 21, age_max: 60, revenus_min: 150000, apport_personnel: 10, types_contrat: ["cdi", "fonctionnaire"], garantie_requise: true, types_garantie_acceptes: ["gage_vehicule"], domiciliation_obligatoire: true }
   }
 ];
 
@@ -2183,7 +2749,124 @@ export const LABELS = {
 };
 
 export const api = {
-  getBanques: () => Promise.resolve(BANQUES),
-  getPretsByBanque: (banqueId) => Promise.resolve(TYPES_PRETS.filter(p => p.banque_id === banqueId)),
+  getBanques: async (countryCode) => {
+    let baseBanques = [...BANQUES];
+    if (countryCode) {
+      baseBanques = BANQUES.filter(b => b.pays === countryCode || b.pays === 'ALL');
+    }
+    try {
+      const res = await fetch(`/api/bank-loans?country=${countryCode || ''}`)
+      if (res.ok) {
+        const data = await res.json()
+        if (data.loans && data.loans.length > 0) {
+          const dbBankNames = [...new Set(data.loans.map(l => l.bankName))]
+          dbBankNames.forEach(bName => {
+            const exists = baseBanques.some(b => b.nom.toLowerCase() === bName.toLowerCase())
+            if (!exists) {
+              baseBanques.push({
+                id: `db_bank_${bName.replace(/\s+/g, '_')}`,
+                nom: bName,
+                pays: countryCode || 'CI',
+                logo: autreBanqueLogo,
+                description: `Offre bancaire ${bName}`
+              })
+            }
+          })
+        }
+      }
+    } catch (e) {
+      /* Fallback vers la liste locale */
+    }
+    return baseBanques
+  },
+
+  getPretsByBanque: async (banqueId) => {
+    const localList = TYPES_PRETS.filter(p => p.banque_id === banqueId)
+    
+    let banqueNom = ''
+    if (typeof banqueId === 'object' && banqueId !== null) {
+      banqueNom = banqueId.nom
+    } else {
+      const bObj = BANQUES.find(b => b.id === banqueId)
+      if (bObj) banqueNom = bObj.nom
+    }
+
+    try {
+      const url = banqueNom ? `/api/bank-loans?bankName=${encodeURIComponent(banqueNom)}` : '/api/bank-loans'
+      const res = await fetch(url)
+      if (res.ok) {
+        const data = await res.json()
+        if (data.loans && data.loans.length > 0) {
+          const dbPrets = data.loans.map(l => ({
+            id: `db_loan_${l.id}`,
+            banque_id: banqueId,
+            nom: l.loanName,
+            type: "consommation",
+            taux: l.interestRate,
+            montant_min: l.minAmount,
+            montant_max: l.maxAmount,
+            duree_min: l.minDurationMonths,
+            duree_max: l.maxDurationMonths,
+            frais_dossier: 1.0,
+            assurance: 0.8,
+            description: l.description || `${l.loanName} proposé par ${l.bankName}`,
+            avantages: [
+              `Taux fixe à ${l.interestRate}%`,
+              `Montant jusqu'à ${l.maxAmount.toLocaleString('fr-FR')} FCFA`,
+              `Durée jusqu'à ${l.maxDurationMonths} mois`
+            ],
+            conditions: {
+              age_min: 21,
+              age_max: 65,
+              anciennete_min: 6,
+              revenus_min: 150000,
+              types_contrat: ["cdi", "fonctionnaire"],
+              garantie_requise: false,
+              types_garantie_acceptes: ["domiciliation"],
+              domiciliation_obligatoire: true,
+              apport_personnel: 0
+            }
+          }))
+          return [...dbPrets, ...localList]
+        }
+      }
+    } catch (e) {
+      /* Fallback vers la liste locale */
+    }
+
+    if (localList.length > 0) return localList
+    
+    return [
+      {
+        id: `generic_${banqueId}`,
+        banque_id: banqueId,
+        nom: "Prêt Personnel Consommation",
+        type: "consommation",
+        taux: 8.5,
+        montant_min: 500000,
+        montant_max: 20000000,
+        duree_min: 12,
+        duree_max: 60,
+        assurance: 0.8,
+        frais_dossier: 1.0,
+        conditions: {
+          age_min: 21,
+          age_max: 62,
+          anciennete_min: 6,
+          revenus_min: 150000,
+          types_contrat: ["fonctionnaire", "cdi"],
+          garantie_requise: false,
+          types_garantie_acceptes: ["domiciliation"],
+          domiciliation_obligatoire: true,
+          apport_personnel: 0
+        },
+        avantages: [
+          "Décision sous 48h",
+          "Taux préférentiel prêt personnel",
+          "Sans apport obligatoire"
+        ]
+      }
+    ]
+  },
   getAllPrets: () => Promise.resolve(TYPES_PRETS)
 };

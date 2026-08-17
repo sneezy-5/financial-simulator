@@ -16,8 +16,19 @@ import TaxFichePDF from './tax/TaxFichePDF.vue'
 import TaxGuideCharges from './tax/TaxGuideCharges.vue'
 import TaxAssistant from './tax/TaxAssistant.vue'
 import TaxAnalysesExpert from './tax/TaxAnalysesExpert.vue'
+import TaxResumeClair from './tax/TaxResumeClair.vue'
+
+import { getCountryRules } from '../services/countryConfig.js'
+
+const props = defineProps({
+  country: {
+    type: String,
+    default: 'CI'
+  }
+})
 
 const emit = defineEmits(['retour'])
+const countryRules = computed(() => getCountryRules(props.country))
 
 const form = ref({
   nom: '',
@@ -37,7 +48,46 @@ const projections = ref(null)
 const suggestions = ref([])
 const version = ref(0)
 const showAssistant = ref(false)
-const activeResultTab = ref('analyses') 
+const activeResultTab = ref('analyses')
+const showBanner = ref(true)
+const activeTooltip = ref(null)
+
+const TOOLTIPS = {
+  ca: {
+    titre: 'Chiffre d\'Affaires (CA)',
+    texte: 'C\'est TOUT l\'argent que vos clients vous ont payé dans l\'année. Ventes de marchandises, prestations de services... Si vous vendez 5 000 FCFA par jour pendant 300 jours, votre CA est de 1 500 000 FCFA.',
+    exemple: 'Ex : épicier qui vend 2 500 000 FCFA/mois → CA annuel = 30 000 000 FCFA'
+  },
+  chargesFixes: {
+    titre: 'Charges Fixes',
+    texte: 'Ce sont les dépenses que vous payez chaque mois, MÊME si vous n\'avez pas vendu grand chose. Ce sont les coûts incompressibles de votre activité.',
+    exemple: 'Ex : Loyer boutique 150 000 FCFA + salaire gardien 80 000 FCFA + électricité 20 000 FCFA = 250 000 FCFA/mois de charges fixes'
+  },
+  chargesVariables: {
+    titre: 'Charges Variables (Achats)',
+    texte: 'Ce que vous achetez pour pouvoir vendre ou fabriquer. Ces dépenses augmentent quand vous vendez plus, et diminuent quand vous vendez moins.',
+    exemple: 'Ex : un revendeur qui achète 60% de son CA en marchandises → pour 30 000 000 FCFA de CA, il a 18 000 000 FCFA de charges variables'
+  },
+  cga: {
+    titre: 'Centre de Gestion Agréé (CGA)',
+    texte: 'Un CGA est un organisme officiel agréé par l\'État qui aide les petites entreprises à tenir leur comptabilité. En échange, l\'État vous offre une réduction d\'impôt de 50% si vous êtes dans le régime TEE.',
+    exemple: 'Sans CGA : impôt = 4% du CA. Avec CGA : impôt = 2% du CA. Pour 30M FCFA de CA, économie de 600 000 FCFA !'
+  },
+  employes: {
+    titre: 'Nombre d\'Employés',
+    texte: 'Indiquez le nombre de personnes que vous employez et payez régulièrement. Cette information n\'affecte pas directement votre impôt de base, mais elle est utile pour les analyses et pour calculer vos cotisations sociales.',
+    exemple: 'Comptez vos salariés permanents. Ne comptez pas les prestataires occasionnels.'
+  },
+  regime: {
+    titre: 'Régime Fiscal',
+    texte: 'L\'État classe toutes les entreprises en catégories selon leur chiffre d\'affaires. Chaque catégorie a ses propres règles d\'imposition. Votre régime est automatiquement déterminé par votre CA.',
+    exemple: 'CA < 5M → Très Petite Activité (2%) | CA 5-50M → Petite Entreprise (4%) | CA 50-200M → Microentreprise (6%) | CA > 200M → Comptabilité Complète'
+  }
+}
+
+function toggleTooltip(key) {
+  activeTooltip.value = activeTooltip.value === key ? null : key
+}
 
 const currentParams = computed(() => ({
   ca: parseNum(form.value.ca),
@@ -152,32 +202,61 @@ const REGIME_COLORS = {
   rni: '#dc2626',
 }
 
-const dgiAlerts = [
-  { id: 1, text: "📅 Rappel : La déclaration mensuelle des impôts (ITS, TVA, AIRSI) doit être effectuée avant le 15 du mois." },
-  { id: 2, text: "🏛️ DGI Info : L'adhésion à un Centre de Gestion Agréé (CGA) est obligatoire pour bénéficier de l'abattement fiscal." },
-  { id: 3, text: "📜 Note Circulaire : Application stricte de la facture normalisée pour toutes les transactions commerciales." },
-  { id: 4, text: "📊 Réglementation : Les seuils de chiffre d'affaires pour le régime de l'Entreprenant ont été actualisés pour 2024." }
-]
-const currentAlertIdx = ref(0)
-setInterval(() => {
-  currentAlertIdx.value = (currentAlertIdx.value + 1) % dgiAlerts.length
-}, 5000)
+const warningMessage = computed(() => {
+  const ca = parseNum(form.value.ca)
+  const cf = parseNum(form.value.chargesFixes) * 12
+  const cv = parseNum(form.value.chargesVariables)
+  if (ca > 0 && (cf + cv) > ca) {
+    return "⚠️ Vos charges totales (" + formatFCFA(cf + cv) + "/an) dépassent votre chiffre d'affaires. Votre entreprise fonctionnera en déficit (-" + formatFCFA(cf + cv - ca) + "/an)."
+  }
+  if (form.value.saisirBenefice && parseNum(form.value.beneficeManuel) < 0) {
+    return "⚠️ Le bénéfice net saisi est négatif. Votre entreprise fonctionnera en déficit."
+  }
+  if (form.value.saisirBenefice && parseNum(form.value.beneficeManuel) > ca) {
+    return "⚠️ Le bénéfice net saisi est supérieur à votre chiffre d'affaires, ce qui est impossible comptablement."
+  }
+  return ""
+})
+
+watch(() => form.value.employes, (newVal) => {
+  if (newVal < 0) form.value.employes = 0
+  if (newVal > 10000) form.value.employes = 10000
+})
+
+watch(() => form.value.ca, (newVal) => {
+  const val = parseNum(newVal)
+  if (val > 10000000000) {
+    form.value.ca = String(10000000000).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0')
+    errors.value.ca = "Le chiffre d'affaires est limité à 10 milliards FCFA pour la simulation."
+  } else if (errors.value.ca && val > 0) {
+    delete errors.value.ca
+  }
+})
+
+watch(() => form.value.chargesFixes, (newVal) => {
+  const val = parseNum(newVal)
+  if (val > 1000000000) {
+    form.value.chargesFixes = String(1000000000).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0')
+  }
+})
+
+watch(() => form.value.chargesVariables, (newVal) => {
+  const val = parseNum(newVal)
+  if (val > 10000000000) {
+    form.value.chargesVariables = String(10000000000).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0')
+  }
+})
+
+watch(() => form.value.beneficeManuel, (newVal) => {
+  const val = parseNum(newVal)
+  if (val > 10000000000) {
+    form.value.beneficeManuel = String(10000000000).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0')
+  }
+})
 </script>
 
 <template>
   <div class="tax-page">
-
-    <!-- Barre d'Alertes DGI -->
-    <div class="dgi-ticker no-print">
-      <div class="ticker-content">
-        <span class="ticker-label">DGI INFOS</span>
-        <div class="ticker-text-wrapper">
-          <transition name="slide-up" mode="out-in">
-            <p :key="currentAlertIdx">{{ dgiAlerts[currentAlertIdx].text }}</p>
-          </transition>
-        </div>
-      </div>
-    </div>
 
     <!-- Header -->
     <header class="tax-header no-print">
@@ -203,10 +282,32 @@ setInterval(() => {
       <div class="form-card no-print" id="form-main">
         <!-- Modèles préconfigurés -->
         <TaxModeles @select="applyModele" />
+        <!-- Bannière pédagogique d'accueil -->
+        <div v-if="showBanner" class="welcome-banner">
+          <div class="wb-content">
+            <div class="wb-icon">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="color: #2563eb;">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <div class="wb-text">
+              <strong>Comment ça marche ?</strong>
+              <div class="wb-steps">
+                <span class="wb-step"><span class="wb-num">1</span> Dites-nous ce que vous faites et combien vous gagnez</span>
+                <span class="wb-step"><span class="wb-num">2</span> On calcule automatiquement ce que vous devez à l'État</span>
+                <span class="wb-step"><span class="wb-num">3</span> On vous explique comment payer et comment réduire votre impôt</span>
+              </div>
+            </div>
+          </div>
+          <button class="wb-close" @click="showBanner = false" title="Fermer">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+
         <div class="form-header">
           <div class="fh-left">
             <h2>Simulateur de taxes</h2>
-            <p>Remplissez les informations ci-dessous pour une estimation précise</p>
+            <p>Remplissez les informations ci-dessous — on vous explique tout !</p>
           </div>
           <button class="btn-assistant-trigger" @click="showAssistant = true">
             <span class="bot-icon">🤖</span>
@@ -225,7 +326,8 @@ setInterval(() => {
 
           <!-- Secteur -->
           <div class="field full">
-            <label>Secteur d'activité <span class="req">*</span></label>
+            <label>Dans quel domaine travaillez-vous ? <span class="req">*</span></label>
+            <p class="field-desc">Choisissez l'activité qui ressemble le plus à ce que vous faites.</p>
           <div class="secteur-grid">
               <button
                 v-for="s in SECTEURS" :key="s.id"
@@ -243,22 +345,41 @@ setInterval(() => {
 
           <!-- CA -->
           <div class="field">
-            <label>Chiffre d'Affaires annuel <span class="req">*</span></label>
+            <div class="label-with-tip">
+              <label>Vos revenus totaux de l'année <span class="req">*</span></label>
+              <button class="tip-btn" @click.stop="toggleTooltip('ca')" type="button" :class="{ active: activeTooltip === 'ca' }">?</button>
+            </div>
+            <p class="field-desc">Tout l'argent reçu de vos clients : ventes, prestations...</p>
+            <div v-if="activeTooltip === 'ca'" class="tooltip-box">
+              <div class="tt-title">{{ TOOLTIPS.ca.titre }}</div>
+              <p class="tt-text">{{ TOOLTIPS.ca.texte }}</p>
+              <div class="tt-exemple">{{ TOOLTIPS.ca.exemple }}</div>
+            </div>
             <div class="input-row">
               <input
                 :value="form.ca"
                 type="text"
                 inputmode="numeric"
-                placeholder="80 000 000"
+                placeholder="Ex : 30 000 000"
                 @input="e => formatAmount(e, 'ca')"
+                @focus="activeTooltip = null"
               />
               <span class="unit">FCFA / an</span>
             </div>
             <p v-if="errors.ca" class="err">{{ errors.ca }}</p>
-            <!-- Régime détecté -->
-            <div v-if="regimeDetecte" class="regime-chip" :style="{ color: REGIME_COLORS[regimeDetecte.id], background: REGIME_COLORS[regimeDetecte.id] + '12', border: '1px solid ' + REGIME_COLORS[regimeDetecte.id] + '30' }">
+            <!-- Régime détecté (en clair) -->
+            <div v-if="regimeDetecte" class="regime-chip-edu" :style="{ color: REGIME_COLORS[regimeDetecte.id], background: REGIME_COLORS[regimeDetecte.id] + '12', border: '1px solid ' + REGIME_COLORS[regimeDetecte.id] + '30' }">
               <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z"/></svg>
-              Régime : <strong>{{ regimeDetecte.label }}</strong>
+              <div>
+                <div class="rce-name">Catégorie fiscale : <strong>{{ regimeDetecte.label }}</strong></div>
+                <div class="rce-hint">{{ regimeDetecte.description }}</div>
+              </div>
+              <button class="tip-btn small" @click.stop="toggleTooltip('regime')" type="button">?</button>
+            </div>
+            <div v-if="activeTooltip === 'regime'" class="tooltip-box">
+              <div class="tt-title">{{ TOOLTIPS.regime.titre }}</div>
+              <p class="tt-text">{{ TOOLTIPS.regime.texte }}</p>
+              <div class="tt-exemple">{{ TOOLTIPS.regime.exemple }}</div>
             </div>
           </div>
 
@@ -269,47 +390,84 @@ setInterval(() => {
 
           <!-- Charges fixes -->
           <div class="field">
-            <label>Charges fixes mensuelles</label>
+            <div class="label-with-tip">
+              <label>Ce que vous payez chaque mois</label>
+              <button class="tip-btn" @click.stop="toggleTooltip('chargesFixes')" type="button" :class="{ active: activeTooltip === 'chargesFixes' }">?</button>
+            </div>
+            <p class="field-desc">Loyer, salaires, électricité... même si vous ne vendez rien</p>
+            <div v-if="activeTooltip === 'chargesFixes'" class="tooltip-box">
+              <div class="tt-title">{{ TOOLTIPS.chargesFixes.titre }}</div>
+              <p class="tt-text">{{ TOOLTIPS.chargesFixes.texte }}</p>
+              <div class="tt-exemple">{{ TOOLTIPS.chargesFixes.exemple }}</div>
+            </div>
             <div class="input-row">
               <input
                 :value="form.chargesFixes"
                 type="text"
                 inputmode="numeric"
-                placeholder="3 500 000"
+                placeholder="Ex : 250 000"
                 @input="e => formatAmount(e, 'chargesFixes')"
+                @focus="activeTooltip = null"
               />
               <span class="unit">FCFA / mois</span>
             </div>
-            <p class="hint">Loyer, salaires, électricité... Sera multiplié × 12</p>
+            <p class="hint">Ce montant sera automatiquement multiplié × 12 pour l'année</p>
           </div>
 
           <!-- Charges variables -->
           <div class="field">
-            <label>Achats et charges variables annuels</label>
+            <div class="label-with-tip">
+              <label>Ce que vous achetez pour vendre</label>
+              <button class="tip-btn" @click.stop="toggleTooltip('chargesVariables')" type="button" :class="{ active: activeTooltip === 'chargesVariables' }">?</button>
+            </div>
+            <p class="field-desc">Marchandises, matières premières, emballages...</p>
+            <div v-if="activeTooltip === 'chargesVariables'" class="tooltip-box">
+              <div class="tt-title">{{ TOOLTIPS.chargesVariables.titre }}</div>
+              <p class="tt-text">{{ TOOLTIPS.chargesVariables.texte }}</p>
+              <div class="tt-exemple">{{ TOOLTIPS.chargesVariables.exemple }}</div>
+            </div>
             <div class="input-row">
               <input
                 :value="form.chargesVariables"
                 type="text"
                 inputmode="numeric"
-                placeholder="40 000 000"
+                placeholder="Ex : 18 000 000"
                 @input="e => formatAmount(e, 'chargesVariables')"
+                @focus="activeTooltip = null"
               />
               <span class="unit">FCFA / an</span>
             </div>
-            <p class="hint">Marchandises, transport, commissions...</p>
           </div>
 
           <!-- Employés -->
           <div class="field">
-            <label>Nombre d'employés</label>
-            <input v-model.number="form.employes" type="number" min="0" placeholder="0" />
+            <div class="label-with-tip">
+              <label>Nombre d'employés</label>
+              <button class="tip-btn" @click.stop="toggleTooltip('employes')" type="button" :class="{ active: activeTooltip === 'employes' }">?</button>
+            </div>
+            <p class="field-desc">Personnes que vous payez chaque mois</p>
+            <div v-if="activeTooltip === 'employes'" class="tooltip-box">
+              <div class="tt-title">{{ TOOLTIPS.employes.titre }}</div>
+              <p class="tt-text">{{ TOOLTIPS.employes.texte }}</p>
+              <div class="tt-exemple">{{ TOOLTIPS.employes.exemple }}</div>
+            </div>
+            <input v-model.number="form.employes" type="number" min="0" placeholder="0" @focus="activeTooltip = null" />
           </div>
 
           <!-- CGA -->
           <div class="field full">
+            <div class="label-with-tip" style="margin-bottom:0.5rem">
+              <label style="margin:0">Êtes-vous membre d'un CGA ?</label>
+              <button class="tip-btn" @click.stop="toggleTooltip('cga')" type="button" :class="{ active: activeTooltip === 'cga' }">?</button>
+            </div>
+            <div v-if="activeTooltip === 'cga'" class="tooltip-box">
+              <div class="tt-title">{{ TOOLTIPS.cga.titre }}</div>
+              <p class="tt-text">{{ TOOLTIPS.cga.texte }}</p>
+              <div class="tt-exemple">{{ TOOLTIPS.cga.exemple }}</div>
+            </div>
             <label class="check-label">
               <input type="checkbox" v-model="form.cga" />
-              <span>Adhérent à un Centre de Gestion Agréé (CGA) — réduit l'impôt de 50% pour le régime TEE</span>
+              <span>Oui, je suis adhérent à un <strong>Centre de Gestion Agréé (CGA)</strong> <span class="cga-badge">→ -50% d'impôt pour le régime TEE</span></span>
             </label>
           </div>
 
@@ -330,6 +488,12 @@ setInterval(() => {
               </div>
             </div>
           </div>
+          
+          <!-- Message de déficit et sécurité -->
+          <div v-if="warningMessage" class="field full deficit-alert animate-shake">
+            <span class="alert-icon">⚠️</span>
+            <span class="alert-text">{{ warningMessage }}</span>
+          </div>
 
         </div><!-- /form-body -->
 
@@ -343,6 +507,8 @@ setInterval(() => {
 
       <!-- Résultats -->
       <div id="tax-resultats" v-if="resultats" :key="version">
+        <!-- Résumé en clair — nouveau composant pédagogique -->
+        <TaxResumeClair class="no-print" :resultats="resultats" :params="currentParams" :nom="form.nom" />
         <!-- TOP : Synthèse Immédiate (Fixe) -->
         <TaxResultats class="no-print" :resultats="resultats" :suggestions="suggestions" :nom="form.nom" />
         <TaxRegimeExplication class="no-print" :resultats="resultats" />
@@ -448,12 +614,12 @@ setInterval(() => {
 * { box-sizing: border-box; }
 .tax-page { min-height: 100vh; background: #f8fafc; font-family: 'Inter', system-ui, sans-serif; }
 
-/* Header */
+/* Header - Default Mobile */
 .tax-header {
   background: white;
   border-bottom: 1px solid #e2e8f0;
-  padding: 0 1.5rem;
-  height: 58px;
+  padding: 0 0.875rem;
+  height: 52px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -464,72 +630,89 @@ setInterval(() => {
 .back-btn {
   display: flex; align-items: center; gap: 0.375rem;
   background: transparent; border: 1px solid #e2e8f0;
-  border-radius: 8px; padding: 0.4rem 0.875rem;
-  font-size: 0.85rem; font-weight: 600; color: #475569;
+  border-radius: 8px; padding: 0.375rem 0.625rem;
+  font-size: 0.8rem; font-weight: 600; color: #475569;
   cursor: pointer; transition: all 0.15s;
 }
 .back-btn:hover { background: #f1f5f9; border-color: #cbd5e1; }
 .tax-title { display: flex; align-items: center; gap: 0.625rem; }
-.tax-title-main { font-size: 0.95rem; font-weight: 700; color: #0f172a; }
-.tax-title-sub { font-size: 0.72rem; color: #64748b; }
+.tax-title-main { font-size: 0.85rem; font-weight: 700; color: #0f172a; }
+.tax-title-sub { display: none; }
 
-/* DGI Ticker */
-.dgi-ticker {
-  background: #fefce8;
-  border: 1px solid #fde68a;
+/* Deficit Alert */
+.deficit-alert {
+  background: #fff5f5;
+  border: 1px solid #fee2e2;
   border-radius: 12px;
-  margin-bottom: 0.5rem;
-  overflow: hidden;
-}
-.ticker-content {
+  padding: 0.875rem 1.125rem;
   display: flex;
   align-items: center;
-  padding: 0.6rem 1rem;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+  box-shadow: 0 2px 4px rgba(220, 38, 38, 0.05);
 }
-.ticker-label {
-  background: #92400e;
-  color: white;
-  font-size: 0.65rem;
-  font-weight: 800;
-  padding: 2px 6px;
-  border-radius: 4px;
-  margin-right: 1rem;
-  white-space: nowrap;
+.alert-icon {
+  font-size: 1.25rem;
+  flex-shrink: 0;
 }
-.ticker-text-wrapper {
-  flex: 1;
-  height: 1.2rem;
-  overflow: hidden;
-  position: relative;
-}
-.ticker-text-wrapper p {
-  margin: 0;
-  font-size: 0.85rem;
+.alert-text {
+  font-size: 0.84rem;
+  color: #b91c1c;
   font-weight: 600;
-  color: #854d0e;
-  white-space: nowrap;
+  line-height: 1.4;
 }
 
-/* Transitions */
-.slide-up-enter-active, .slide-up-leave-active { transition: all 0.5s ease; }
-.slide-up-enter-from { transform: translateY(20px); opacity: 0; }
-.slide-up-leave-to { transform: translateY(-20px); opacity: 0; }
+/* Shake Animation */
+.animate-shake {
+  animation: shake 0.4s ease-in-out;
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
 
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
-/* Content */
-.tax-content { max-width: 780px; margin: 0 auto; padding: 2rem 1rem; display: flex; flex-direction: column; gap: 1.5rem; }
+/* Content - Default Mobile */
+.tax-content {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
 
 /* Form card */
 .form-card { background: white; border: 1px solid #e2e8f0; border-radius: 14px; overflow: hidden; }
-.form-header { padding: 1.5rem 1.75rem; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; }
-.fh-left h2 { font-size: 1.05rem; font-weight: 700; color: #0f172a; margin: 0; }
-.fh-left p { font-size: 0.82rem; color: #64748b; margin: 0.25rem 0 0; }
-.btn-assistant-trigger { display: flex; align-items: center; gap: 0.625rem; padding: 0.625rem 1rem; background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; border-radius: 10px; font-size: 0.84rem; font-weight: 700; cursor: pointer; transition: all 0.15s; }
+
+.form-header {
+  padding: 1rem;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.fh-left h2 { font-size: 0.95rem; font-weight: 700; color: #0f172a; margin: 0; }
+.fh-left p { font-size: 0.8rem; color: #64748b; margin: 0.25rem 0 0; }
+
+.btn-assistant-trigger {
+  display: flex; align-items: center; justify-content: center; gap: 0.625rem;
+  padding: 0.625rem 1rem; background: #eff6ff; color: #2563eb;
+  border: 1px solid #bfdbfe; border-radius: 10px; font-size: 0.84rem;
+  font-weight: 700; cursor: pointer; transition: all 0.15s;
+  width: 100%;
+}
 .btn-assistant-trigger:hover { background: #dbeafe; transform: translateY(-1px); }
 .bot-icon { font-size: 1.1rem; }
 
-.form-body { padding: 1.5rem 1.75rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+.form-body {
+  padding: 0.875rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
 .field { display: flex; flex-direction: column; gap: 0.35rem; }
 .field.full { grid-column: 1 / -1; }
 
@@ -540,9 +723,9 @@ label { font-size: 0.83rem; font-weight: 600; color: #374151; }
 .err { font-size: 0.74rem; color: #dc2626; margin: 0; }
 
 input[type="text"], input[type="number"] {
-  width: 100%; padding: 0.625rem 0.875rem;
+  width: 100%; padding: 0.75rem 0.875rem;
   border: 1px solid #d1d5db; border-radius: 8px;
-  font-size: 0.9rem; font-family: inherit;
+  font-size: 1rem; font-family: inherit;
   background: white; color: #111827;
   transition: border-color 0.15s;
 }
@@ -551,13 +734,17 @@ input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(3
 .input-row { display: flex; border: 1px solid #d1d5db; border-radius: 8px; overflow: hidden; background: white; }
 .input-row input { border: none; border-radius: 0; flex: 1; box-shadow: none !important; }
 .input-row input:focus { box-shadow: none !important; }
-.unit { padding: 0 0.75rem; font-size: 0.75rem; font-weight: 600; color: #9ca3af; background: #f9fafb; border-left: 1px solid #e5e7eb; display: flex; align-items: center; white-space: nowrap; }
+.unit {
+  padding: 0 0.5rem; font-size: 0.72rem; font-weight: 600;
+  color: #9ca3af; background: #f9fafb;
+  border-left: 1px solid #e5e7eb; display: flex; align-items: center; white-space: nowrap;
+}
 
-/* Secteur */
-.secteur-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
+/* Secteur - Default Mobile */
+.secteur-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.375rem; }
 .secteur-btn {
   display: flex; flex-direction: column; align-items: center; gap: 0.35rem;
-  padding: 0.625rem 0.5rem; border: 1px solid #e2e8f0;
+  padding: 0.5rem 0.375rem; border: 1px solid #e2e8f0;
   border-radius: 10px; background: white; cursor: pointer;
   font-size: 0.75rem; font-weight: 500; color: #475569;
   text-align: center; transition: all 0.15s; width: 100%;
@@ -566,7 +753,7 @@ input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(3
 .secteur-btn.active { border-color: #0f766e; background: #f0fdfa; color: #0f766e; font-weight: 600; }
 .secteur-icon { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; color: inherit; }
 .secteur-icon :deep(svg) { width: 20px; height: 20px; }
-.secteur-label { font-size: 0.72rem; line-height: 1.3; }
+.secteur-label { font-size: 0.68rem; line-height: 1.3; }
 
 /* Checkbox */
 .check-label { display: flex; align-items: flex-start; gap: 0.5rem; cursor: pointer; font-weight: 500; font-size: 0.85rem; color: #374151; }
@@ -575,20 +762,158 @@ input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(3
 /* Regime chip */
 .regime-chip { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.65rem; border-radius: 20px; font-size: 0.78rem; font-weight: 600; margin-top: 0.3rem; }
 
+/* Regime chip éducatif */
+.regime-chip-edu {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.6rem 0.875rem; border-radius: 12px;
+  font-size: 0.82rem; font-weight: 600; margin-top: 0.5rem;
+}
+.rce-name { font-size: 0.82rem; font-weight: 600; }
+.rce-hint { font-size: 0.73rem; font-weight: 400; opacity: 0.75; margin-top: 0.1rem; }
+
+/* Label with tooltip button */
+.label-with-tip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.tip-btn {
+  flex-shrink: 0;
+  width: 20px; height: 20px;
+  min-width: 20px; min-height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid #d1d5db;
+  background: #f9fafb;
+  color: #6b7280;
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+  line-height: 1;
+}
+.tip-btn:hover, .tip-btn.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: white;
+}
+.tip-btn.small {
+  width: 18px; height: 18px;
+  min-width: 18px; min-height: 18px;
+  font-size: 0.65rem;
+}
+
+/* Tooltip box */
+.tooltip-box {
+  background: #0f172a;
+  color: white;
+  border-radius: 12px;
+  padding: 0.875rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  animation: fadeIn 0.2s ease-out;
+}
+.tt-title { font-size: 0.82rem; font-weight: 700; color: #f8fafc; }
+.tt-text { font-size: 0.8rem; color: #cbd5e1; line-height: 1.55; margin: 0; }
+.tt-exemple {
+  font-size: 0.75rem; color: #94a3b8;
+  background: rgba(255,255,255,0.07);
+  border-radius: 6px;
+  padding: 0.4rem 0.625rem;
+  line-height: 1.4;
+  font-style: italic;
+}
+
+/* Field description */
+.field-desc {
+  font-size: 0.77rem;
+  color: #64748b;
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* CGA badge */
+.cga-badge {
+  display: inline-block;
+  background: #dcfce7;
+  color: #15803d;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.1rem 0.45rem;
+  border-radius: 6px;
+  margin-left: 0.25rem;
+}
+
+/* Welcome banner */
+.welcome-banner {
+  background: linear-gradient(135deg, #eff6ff 0%, #f0fdfa 100%);
+  border-bottom: 1px solid #e0f2fe;
+  padding: 0.875rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.875rem;
+}
+.wb-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  flex: 1;
+}
+.wb-icon { font-size: 1.5rem; flex-shrink: 0; margin-top: 2px; }
+.wb-text { flex: 1; }
+.wb-text strong { font-size: 0.88rem; color: #0f172a; display: block; margin-bottom: 0.5rem; }
+.wb-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.wb-step {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: #374151;
+}
+.wb-num {
+  flex-shrink: 0;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: #0f172a;
+  color: white;
+  font-size: 0.68rem;
+  font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+}
+.wb-close {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 4px;
+  cursor: pointer;
+  color: #94a3b8;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+.wb-close:hover { background: #f1f5f9; color: #374151; }
+
 /* RSI notice */
 .rsi-notice { background: #fefce8; border: 1px solid #fde68a; border-radius: 10px; padding: 1rem; display: flex; flex-direction: column; gap: 0.625rem; }
 .notice-text { display: flex; align-items: center; gap: 0.5rem; font-size: 0.83rem; color: #92400e; font-weight: 500; }
 
-/* Form footer */
-.form-footer { padding: 1rem 1.75rem 1.5rem; display: flex; justify-content: flex-end; border-top: 1px solid #f1f5f9; }
+/* Form footer - Default Mobile */
+.form-footer { padding: 0.875rem; display: flex; justify-content: flex-end; border-top: 1px solid #f1f5f9; }
 .btn-primary {
-  display: flex; align-items: center; gap: 0.5rem;
+  display: flex; align-items: center; justify-content: center; gap: 0.5rem;
   background: #0f766e; color: white;
   border: none; border-radius: 9px;
-  padding: 0.75rem 1.5rem;
-  font-size: 0.9rem; font-weight: 600;
+  padding: 0.875rem;
+  font-size: 1rem; font-weight: 600;
   cursor: pointer; transition: all 0.15s;
   touch-action: manipulation;
+  width: 100%;
 }
 .btn-primary:hover { background: #0d6460; box-shadow: 0 4px 12px rgba(15,118,110,0.25); }
 .btn-primary:active { transform: scale(0.98); }
@@ -605,28 +930,30 @@ input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(3
 /* Divider */
 .form-divider { height: 1px; background: #f1f5f9; margin: 0 1.75rem; }
 
-/* Results Tabs */
+/* Results Tabs - Default Mobile */
 .result-tabs {
   display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   gap: 0.5rem;
   background: white;
   padding: 0.5rem;
   border: 1px solid #e2e8f0;
   border-radius: 14px;
   margin: 1rem 0;
-  overflow-x: auto;
   scrollbar-width: none;
 }
 .result-tabs::-webkit-scrollbar { display: none; }
 
 .result-tabs button {
-  flex: 1;
+  flex: 0 0 auto;
   white-space: nowrap;
-  padding: 0.75rem 1rem;
+  padding: 0.6rem 1rem;
   border: none;
   background: transparent;
   border-radius: 10px;
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   font-weight: 700;
   color: #64748b;
   cursor: pointer;
@@ -636,7 +963,6 @@ input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(3
   justify-content: center;
   gap: 0.5rem;
 }
-
 .result-tabs button:hover { background: #f1f5f9; color: #0f172a; }
 .result-tabs button.active {
   background: #0f172a;
@@ -656,30 +982,20 @@ input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(3
   to { opacity: 1; transform: translateY(0); }
 }
 
-@media (max-width: 640px) {
-  .result-tabs { 
-    display: grid; 
-    grid-template-columns: repeat(3, 1fr); 
-    gap: 0.35rem; 
-    padding: 0.35rem;
-  }
-  .result-tabs button { padding: 0.6rem 0.25rem; font-size: 0.75rem; }
-}
-
-/* Promo ONDA Pro */
+/* Promo ONDA Pro - Default Mobile */
 .onda-pro-promo {
   background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
   border-radius: 20px;
-  padding: 2rem;
+  padding: 1.5rem;
   display: flex;
-  align-items: center;
-  gap: 2rem;
+  flex-direction: column;
+  text-align: center;
+  gap: 1.5rem;
   margin: 2rem 0;
   color: white;
   position: relative;
   overflow: hidden;
 }
-
 .promo-content { flex: 1; z-index: 2; }
 .promo-badge {
   display: inline-block;
@@ -693,9 +1009,9 @@ input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(3
 }
 .promo-content h3 { font-size: 1.5rem; margin-bottom: 0.75rem; color: white; }
 .promo-content p { color: #94a3b8; font-size: 0.9rem; margin-bottom: 1.5rem; line-height: 1.6; }
-.promo-actions { display: flex; gap: 1rem; }
+.promo-actions { display: flex; gap: 1rem; justify-content: center; }
 
-.btn-primary {
+.promo-actions .btn-primary {
   background: #3b82f6;
   color: white;
   border: none;
@@ -707,8 +1023,10 @@ input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(3
   gap: 0.5rem;
   cursor: pointer;
   transition: all 0.2s;
+  width: 100%;
+  justify-content: center;
 }
-.btn-primary:hover { background: #2563eb; transform: translateY(-2px); }
+.promo-actions .btn-primary:hover { background: #2563eb; transform: translateY(-2px); }
 
 .btn-outline-white {
   background: transparent;
@@ -718,9 +1036,10 @@ input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(3
   border-radius: 12px;
   font-weight: 700;
   cursor: pointer;
+  width: 100%;
 }
 
-.promo-icon { flex-shrink: 0; z-index: 2; }
+.promo-icon { display: none; }
 .phone-mockup {
   width: 120px;
   height: 220px;
@@ -739,33 +1058,54 @@ input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(3
   overflow: hidden;
 }
 
-@media (max-width: 768px) {
-  .onda-pro-promo { flex-direction: column; text-align: center; gap: 1.5rem; }
-  .promo-actions { justify-content: center; }
-  .phone-mockup { display: none; }
+/* ─────────────────────────────────────────────────────────────
+   Media Queries pour tablettes et ordinateurs (Desktop-First progressive enhancements)
+   ───────────────────────────────────────────────────────────── */
+
+@media (min-width: 641px) {
+  /* Header */
+  .tax-header { padding: 0 1.5rem; height: 58px; }
+  .back-btn { padding: 0.4rem 0.875rem; font-size: 0.85rem; }
+  .tax-title-main { font-size: 0.95rem; }
+  .tax-title-sub { display: block; font-size: 0.72rem; color: #64748b; }
+
+  /* Content spacing */
+  .tax-content { padding: 2rem 1rem; gap: 1.5rem; }
+
+  /* Welcome Banner */
+  .welcome-banner { padding: 1rem 1.25rem; }
+  .wb-content { gap: 0.875rem; }
+
+  /* Form spacing and layout */
+  .form-header { padding: 1.5rem 1.75rem; flex-direction: row; align-items: center; justify-content: space-between; gap: 1.5rem; }
+  .fh-left h2 { font-size: 1.05rem; }
+  .btn-assistant-trigger { width: auto; }
+  
+  .form-body { padding: 1.5rem 1.75rem; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+
+  /* Fields inputs */
+  input[type="text"], input[type="number"] { font-size: 0.9rem; padding: 0.625rem 0.875rem; }
+  .unit { padding: 0 0.75rem; font-size: 0.75rem; }
+
+  /* Secteurs */
+  .secteur-grid { grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
+  .secteur-btn { padding: 0.625rem 0.5rem; }
+
+  /* Form footer */
+  .form-footer { padding: 1rem 1.75rem 1.5rem; }
+  .btn-primary { width: auto; padding: 0.75rem 1.5rem; font-size: 0.9rem; }
+
+  /* Tabs */
+  .result-tabs { overflow-x: visible; }
+  .result-tabs button { flex: 1; padding: 0.75rem 1rem; font-size: 0.85rem; }
 }
 
-/* Mobile */
-@media (max-width: 640px) {
-  .tax-header { padding: 0 0.875rem; height: 52px; }
-  .back-btn { padding: 0.375rem 0.625rem; font-size: 0.8rem; }
-  .tax-title-main { font-size: 0.85rem; }
-  .tax-title-sub { display: none; }
-  .tax-content { padding: 0.75rem; gap: 0.875rem; }
-  .form-body { grid-template-columns: 1fr; padding: 0.875rem; gap: 1rem; }
-  .form-card-header { padding: 0.875rem; }
-  .form-card-header h2 { font-size: 0.95rem; }
-  .form-footer { padding: 0.875rem; }
-  .btn-primary { width: 100%; justify-content: center; padding: 0.875rem; font-size: 1rem; }
-  .secteur-grid { grid-template-columns: repeat(2, 1fr); gap: 0.375rem; }
-  .secteur-btn { padding: 0.5rem 0.375rem; }
-  .secteur-label { font-size: 0.68rem; }
-  input[type="text"], input[type="number"] { font-size: 1rem; padding: 0.75rem 0.875rem; }
-  .unit { font-size: 0.72rem; padding: 0 0.5rem; }
-}
-
-@media (min-width: 641px) and (max-width: 900px) {
-  .secteur-grid { grid-template-columns: repeat(4, 1fr); }
+@media (min-width: 769px) {
+  /* Promo ONDA Pro */
+  .onda-pro-promo { flex-direction: row; text-align: left; gap: 2rem; padding: 2rem; }
+  .promo-actions { justify-content: flex-start; }
+  .promo-actions .btn-primary, .btn-outline-white { width: auto; }
+  .promo-icon { display: block; flex-shrink: 0; z-index: 2; }
 }
 
 @media print {

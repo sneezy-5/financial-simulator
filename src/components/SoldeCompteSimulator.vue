@@ -1,5 +1,13 @@
 <script setup>
 import { ref, computed } from 'vue'
+import { localDb } from '../services/localDatabase.js'
+
+const props = defineProps({
+  country: {
+    type: String,
+    default: 'CI'
+  }
+})
 
 // ══════════════════════════════════════════════
 // DONNÉES MINIMALES REQUISES
@@ -19,7 +27,8 @@ const emp = ref({
   salaire_de_base: 0,
   sursalaire_primes: 0,
   // Congés
-  date_dernier_retour_conge: '', // Pour calculer auto depuis quand il travaille non stop
+  date_dernier_retour_conge: '', // Pour calculer auto depuis quand il travaille non stop (CI)
+  jours_conges_non_pris: 0, // Pour la saisie manuelle (BJ)
   // Gratification (13e mois)
   droit_gratification: false,
   base_gratification: '100_base', // '100_base', '75_base', '100_brut', '75_net', 'forfait'
@@ -120,55 +129,76 @@ const calc = computed(() => {
   const montantPreavis = Math.round(brut * preavisMoisReliquat);
   const preavisApplique = preavisPayable || preavisDeduction;
 
-  // ─── CONGÉS PAYÉS (Calcul 100% Automatique) ─────────────
-  // Droit local CI : 2.2 jours ouvrables par mois effectif
-  // On calcule *exactement* depuis la date d'embauche ou du DERNIER RETOUR DE CONGÉ
-  const dateDebutReferenceConge = emp.value.date_dernier_retour_conge 
-    ? new Date(emp.value.date_dernier_retour_conge) 
-    : new Date(de);
+  // ─── CONGÉS PAYÉS (Calcul Automatique CI ou Manuel BJ) ─────────────
+  let totalJoursCP = 0;
+  let montantConges = 0;
+  let cpMethod = 'CI'; // pour l'affichage
 
-  // Sécurité si retour de congé > sortie
-  if (dateDebutReferenceConge > ds) dateDebutReferenceConge.setTime(ds.getTime());
+  if (['BJ', 'TG'].includes(props.country)) {
+    cpMethod = props.country;
+    totalJoursCP = +emp.value.jours_conges_non_pris || 0;
+    // Formule Bénin/Togo : Salaire Mensuel Moyen * (Jours non pris / 30)
+    montantConges = Math.round(brut * (totalJoursCP / 30));
+  } else {
+    // Droit local CI : 2.2 jours ouvrables par mois effectif
+    // On calcule *exactement* depuis la date d'embauche ou du DERNIER RETOUR DE CONGÉ
+    const dateDebutReferenceConge = emp.value.date_dernier_retour_conge 
+      ? new Date(emp.value.date_dernier_retour_conge) 
+      : new Date(de);
 
-  let moisPeriode = (ds.getFullYear() - dateDebutReferenceConge.getFullYear()) * 12 + (ds.getMonth() - dateDebutReferenceConge.getMonth());
-  let joursFractionConge = ds.getDate() - dateDebutReferenceConge.getDate();
-  
-  if (joursFractionConge < 0) {
-      moisPeriode--;
-      joursFractionConge += 30; // Approx pour la mensualisation
+    // Sécurité si retour de congé > sortie
+    if (dateDebutReferenceConge > ds) dateDebutReferenceConge.setTime(ds.getTime());
+
+    let moisPeriode = (ds.getFullYear() - dateDebutReferenceConge.getFullYear()) * 12 + (ds.getMonth() - dateDebutReferenceConge.getMonth());
+    let joursFractionConge = ds.getDate() - dateDebutReferenceConge.getDate();
+    
+    if (joursFractionConge < 0) {
+        moisPeriode--;
+        joursFractionConge += 30; // Approx pour la mensualisation
+    }
+    // En CI, plus de 15 jours travaillés le mois de rupture équivaut à un mois entier pour les congés
+    if (joursFractionConge >= 15) moisPeriode++;
+    moisPeriode = Math.max(0, moisPeriode);
+    
+    // Total des jours
+    totalJoursCP = Math.round(moisPeriode * 2.2 * 10) / 10;
+    
+    // Base 26.4 jours par an = 1 mois de salaire 
+    const salJour = brut / 26.4; 
+    montantConges = Math.round(totalJoursCP * salJour);
   }
-  // En CI, plus de 15 jours travaillés le mois de rupture équivaut à un mois entier pour les congés
-  if (joursFractionConge >= 15) moisPeriode++;
-  moisPeriode = Math.max(0, moisPeriode);
-  
-  // Total des jours
-  const totalJoursCP = Math.round(moisPeriode * 2.2 * 10) / 10;
-  
-  // Base 26.4 jours par an = 1 mois de salaire 
-  const salJour = brut / 26.4; 
-  const montantConges = Math.round(totalJoursCP * salJour);
 
   // ─── INDEMNITÉ DE LICENCIEMENT / RETRAITE ──
-  // Décret N° 96-201 Code Travail CI
-  // 1-5 ans: 30%, 6-10 ans: 35%, >10 ans: 40%
+  // TG: 1-5 ans: 35%, 6-10 ans: 40%, >10 ans: 45%
+  // CI/BJ: 1-5 ans: 30%, 6-10 ans: 35%, >10 ans: 40%
   let montantIndemnite = 0
   if (emp.value.type_contrat === 'cdi' && (estLicenciement || estRetraite) && moisTotal >= 12) {
+    const t1 = props.country === 'TG' ? 0.35 : 0.30;
+    const t2 = props.country === 'TG' ? 0.40 : 0.35;
+    const t3 = props.country === 'TG' ? 0.45 : 0.40;
+    
     for (let a = 1; a <= ans; a++) {
-      if (a <= 5)       montantIndemnite += brut * 0.30
-      else if (a <= 10) montantIndemnite += brut * 0.35
-      else              montantIndemnite += brut * 0.40
+      if (a <= 5)       montantIndemnite += brut * t1;
+      else if (a <= 10) montantIndemnite += brut * t2;
+      else              montantIndemnite += brut * t3;
     }
     // Prorata mois partiels
-    const tauxDernier = (ans + 1) <= 5 ? 0.30 : (ans + 1) <= 10 ? 0.35 : 0.40
-    if (moisResto > 0) montantIndemnite += brut * tauxDernier * (moisResto / 12)
-    montantIndemnite = Math.round(montantIndemnite)
+    const tauxDernier = (ans + 1) <= 5 ? t1 : (ans + 1) <= 10 ? t2 : t3;
+    if (moisResto > 0) montantIndemnite += brut * tauxDernier * (moisResto / 12);
+    montantIndemnite = Math.round(montantIndemnite);
   }
 
   // ─── INDEMNITÉ FIN DE CDD ──────────────────
-  // Art. 14.5 : 3% du total des salaires versés
   let montantFinCDD = 0
   if (estFinCDD) {
-    montantFinCDD = Math.round(brut * moisTotal * 0.03)
+    if (props.country === 'TG' && ans >= 4) {
+      // Togo : 1 mois de salaire si 4 ans consécutifs
+      montantFinCDD = Math.round(brut);
+    } else if (props.country === 'CI') {
+      // CI : 3% du total des salaires versés
+      montantFinCDD = Math.round(brut * moisTotal * 0.03);
+    }
+    // Bénin (BJ) : Pas d'indemnité légale de fin de contrat définie par défaut
   }
 
   // ─── GRATIFICATION (13E MOIS) PRORATISÉE ─────────────
@@ -229,7 +259,9 @@ const calc = computed(() => {
     calcul: `${fcfa(brut)} F × ${preavisMoisReliquat} mois`,
     montant: montantPreavis,
     type: preavisDeduction ? 'retenue' : 'gain',
-    loi: 'Art. 16.11 CTCI / Décret N° 96-200 du 7 mars 1996 / CCI 1977 Art.34'
+    loi: props.country === 'TG' ? 'Code du travail togolais (Loi n° 2021‑012)' 
+       : props.country === 'BJ' ? 'Code du Travail Béninois (Loi n° 98‑004)' 
+       : 'Art. 16.11 CTCI / Décret N° 96-200 du 7 mars 1996 / CCI 1977 Art.34'
   })
 
   if (arrieres > 0) lignes.push({
@@ -238,36 +270,54 @@ const calc = computed(() => {
     calcul: 'Forfait saisi',
     montant: arrieres,
     type: 'gain',
-    loi: 'Art. 32.1 CTCI — Créances salariales exigibles'
+    loi: props.country === 'TG' ? 'Créances salariales exigibles (Togo)'
+       : props.country === 'BJ' ? 'Créances salariales exigibles (Bénin)' 
+       : 'Art. 32.1 CTCI — Créances salariales exigibles'
   })
 
   if (montantConges > 0) lignes.push({
     code: 'CP',
     libelle: `Indemnité comp. de Congés Payés — ${totalJoursCP} jours`,
-    calcul: `${totalJoursCP} jours × ${Math.round(salJour).toLocaleString('fr')} F/jr (Brut ÷ 26,4)`,
+    calcul: ['BJ', 'TG'].includes(props.country) 
+      ? `${totalJoursCP} jours × (${fcfa(brut)} F ÷ 30)`
+      : `${totalJoursCP} jours × ${Math.round(salJour).toLocaleString('fr')} F/jr (Brut ÷ 26,4)`,
     montant: montantConges,
     type: 'gain',
-    loi: 'Art. 25.1 CTCI — 2,2 jrs ouvr./mois — Loi n°2015-532'
+    loi: props.country === 'TG' ? 'Code du travail togolais — Jours non pris / 30'
+       : props.country === 'BJ' ? 'Code du Travail Béninois — Jours non pris / 30'
+       : 'Art. 25.1 CTCI — 2,2 jrs ouvr./mois — Loi n°2015-532'
   })
 
-  if (montantIndemnite > 0) lignes.push({
-    code: estRetraite ? 'IFR' : 'IL',
-    libelle: estRetraite ? 'Ind. de fin de carrière (retraite)' : `Ind. de licenciement — ${ans} an${ans > 1 ? 's' : ''}`,
-    calcul: ans <= 5
-      ? `${ans} an${ans>1?'s':''} × 30% × ${fcfa(brut)} F`
-      : (ans <= 10 ? `5×30% + ${ans-5}×35% + prorata` : `5×30% + 5×35% + ${ans-10}×40% + prorata`),
-    montant: montantIndemnite,
-    type: 'gain',
-    loi: 'Décret N° 96-201 du 7 mars 1996 (Art. 1-3) — (30%/35%/40%)'
-  })
+  if (montantIndemnite > 0) {
+    const t1Pct = props.country === 'TG' ? 35 : 30;
+    const t2Pct = props.country === 'TG' ? 40 : 35;
+    const t3Pct = props.country === 'TG' ? 45 : 40;
+    
+    lignes.push({
+      code: estRetraite ? 'IFR' : 'IL',
+      libelle: estRetraite ? 'Ind. de fin de carrière (retraite)' : `Ind. de licenciement — ${ans} an${ans > 1 ? 's' : ''}`,
+      calcul: ans <= 5
+        ? `${ans} an${ans>1?'s':''} × ${t1Pct}% × ${fcfa(brut)} F`
+        : (ans <= 10 ? `5×${t1Pct}% + ${ans-5}×${t2Pct}% + prorata` : `5×${t1Pct}% + 5×${t2Pct}% + ${ans-10}×${t3Pct}% + prorata`),
+      montant: montantIndemnite,
+      type: 'gain',
+      loi: props.country === 'TG' ? `Code du travail togolais — Barème (${t1Pct}%/${t2Pct}%/${t3Pct}%)`
+         : props.country === 'BJ' ? `Code du Travail Béninois — Barème (${t1Pct}%/${t2Pct}%/${t3Pct}%)`
+         : `Décret N° 96-201 du 7 mars 1996 (Art. 1-3) — (${t1Pct}%/${t2Pct}%/${t3Pct}%)`
+    })
+  }
 
   if (montantFinCDD > 0) lignes.push({
     code: 'ICDD',
     libelle: 'Indemnité de fin de CDD',
-    calcul: `3% × ${moisTotal} mois × ${fcfa(brut)} F`,
+    calcul: props.country === 'TG' 
+      ? `1 mois de salaire brut : ${fcfa(brut)} F`
+      : `3% × ${moisTotal} mois × ${fcfa(brut)} F`,
     montant: montantFinCDD,
     type: 'gain',
-    loi: 'Art. 14.5 CTCI — 3% des salaires bruts versés — Loi n°2015-532'
+    loi: props.country === 'TG' 
+      ? 'Code du travail togolais (Art. 54) — 1 mois de salaire (après 4 ans)'
+      : 'Art. 14.5 CTCI — 3% des salaires bruts versés — Loi n°2015-532'
   })
 
   if (montant13e > 0) lignes.push({
@@ -337,10 +387,22 @@ const generatePDF = async () => {
   }
   generating.value = true; errorMsg.value = null; generated.value = false; downloadUrl.value = null
   try {
+    // Check for default STC template
+    let htmlTemplate = null
+    try {
+      const templates = await localDb.getTemplates()
+      const defTpl = templates.find(t => t.isDefault && t.type === 'stc')
+      if (defTpl && defTpl.htmlTemplate) {
+        htmlTemplate = defTpl.htmlTemplate
+      }
+    } catch (e) {
+      console.warn('Erreur lecture template local', e)
+    }
+
     const res = await fetch('/api/rh/generate-stc', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ employee: emp.value, calculs: calc.value })
+      body: JSON.stringify({ employee: emp.value, calculs: calc.value, htmlTemplate })
     })
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Erreur serveur')
     downloadUrl.value = URL.createObjectURL(await res.blob())
@@ -529,23 +591,37 @@ const reset = () => { generated.value = false; downloadUrl.value = null; errorMs
           </div>
         </div>
 
-        <!-- BLOC 5 : CONGÉS PAYÉS 100% AUTOMATIQUE -->
+        <!-- BLOC 5 : CONGÉS PAYÉS -->
         <div class="form-bloc">
-          <div class="bloc-title"><span class="bloc-num">5</span> Congés payés (Calcul automatique)</div>
-          <div class="field-group">
-            <label>Date du dernier retour de congé payé
-              <span class="hint">Laissez vide si l'employé n'a JAMAIS pris de vrais congés payés.</span>
-            </label>
-            <input v-model="emp.date_dernier_retour_conge" type="date" class="inp" :max="emp.date_sortie" />
-          </div>
+          <div class="bloc-title"><span class="bloc-num">5</span> Congés payés ({{ ['BJ', 'TG'].includes(country) ? 'Saisie Manuelle' : 'Calcul Automatique' }})</div>
+          
+          <!-- Mode CI : Calcul automatique par dates -->
+          <template v-if="!['BJ', 'TG'].includes(country)">
+            <div class="field-group">
+              <label>Date du dernier retour de congé payé
+                <span class="hint">Laissez vide si l'employé n'a JAMAIS pris de vrais congés payés.</span>
+              </label>
+              <input v-model="emp.date_dernier_retour_conge" type="date" class="inp" :max="emp.date_sortie" />
+            </div>
 
-          <div class="auto-badge info" v-if="calc">
-            <span class="badge-icon">
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
-            </span>
-            <strong>{{ calc.moisPeriode }} mois complets</strong>
-            <span class="hint-inline">(Entre {{ emp.date_dernier_retour_conge ? 'retour de congé' : 'embauche' }} et sortie)</span>
-          </div>
+            <div class="auto-badge info" v-if="calc">
+              <span class="badge-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+              </span>
+              <strong>{{ calc.moisPeriode }} mois complets</strong>
+              <span class="hint-inline">(Entre {{ emp.date_dernier_retour_conge ? 'retour de congé' : 'embauche' }} et sortie)</span>
+            </div>
+          </template>
+
+          <!-- Mode BJ & TG : Saisie du reliquat de jours -->
+          <template v-else>
+            <div class="field-group">
+              <label>Jours de congés non pris
+                <span class="hint">Indiquez le reliquat exact de jours de congés payés dus.</span>
+              </label>
+              <input v-model="emp.jours_conges_non_pris" type="number" min="0" step="0.5" class="inp" placeholder="Ex: 12" />
+            </div>
+          </template>
           
           <div class="auto-badge success" v-if="calc">
             <span class="badge-icon">
@@ -1166,7 +1242,7 @@ const reset = () => { generated.value = false; downloadUrl.value = null; errorMs
 /* Modal références juridiques — :global car téléporté vers body (scoped ne s’applique pas) */
 :global(.refs-modal-overlay) {
   position: fixed; inset: 0;
-  background: rgba(15,23,42,0.65); backdrop-filter: blur(5px);
+  background: rgba(15, 23, 42, 0.3); backdrop-filter: blur(4px);
   z-index: 20000; display: flex; align-items: center; justify-content: center;
   padding: 1rem;
   animation: g-fadeIn 0.15s ease;

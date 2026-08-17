@@ -6,12 +6,22 @@ import HRPayroll from './components/HRPayroll.vue'
 import AppHome from './components/AppHome.vue'
 import TaxCalculatorEntreprise from './components/TaxCalculatorEntreprise.vue'
 import TaxOutilsFinanciers from './components/tax/TaxOutilsFinanciers.vue'
+import AuthModal from './components/AuthModal.vue'
+import BillingModal from './components/BillingModal.vue'
+import ProfileModal from './components/ProfileModal.vue'
+import { user, fetchMe, logout } from './services/auth'
+import { localDb } from './services/localDatabase.js'
+import { toastState, showToast } from './services/toast.js'
+import { confirmState, resolveConfirm } from './services/confirmModal.js'
+import { lastPaymentNotification } from './services/socketService.js'
 
 // ══════════════════════════════════════════════════════════════
 // STATE
 // ══════════════════════════════════════════════════════════════
 
 const step = ref(1)
+const urlParams = new URLSearchParams(window.location.search)
+const currentCountry = ref(urlParams.get('country') || 'CI')
 
 // Data
 const banques = ref([])
@@ -48,9 +58,54 @@ const showFullTable = ref(false)
 // CHARGEMENT
 // ══════════════════════════════════════════════════════════════
 
-// (Analytics logic moved to bottom)
-onMounted(async () => {
-  banques.value = await api.getBanques()
+const showAuthModal = ref(false)
+const showBillingModal = ref(false)
+const showProfileModal = ref(false)
+
+const loadBanques = async () => {
+  banques.value = await api.getBanques(currentCountry.value)
+  selectedBanque.value = null
+  selectedPret.value = null
+}
+
+const checkSchedule = async () => {
+  try {
+    const autoGen = await localDb.getSetting('autoGenerate', false)
+    if (autoGen) {
+      const genDay = await localDb.getSetting('generationDay', 25)
+      const today = new Date()
+      if (today.getDate() >= genDay) {
+         const lastGenMonth = await localDb.getSetting('lastGenerationMonth', -1)
+         if (lastGenMonth !== today.getMonth()) {
+           if (confirm(`📅 Rappel de paie : C'est le moment de générer la paie du mois ! (Paramétrée au ${genDay} du mois). Voulez-vous aller à l'espace RH maintenant ?`)) {
+              await localDb.saveSetting('lastGenerationMonth', today.getMonth())
+              naviguer('hr')
+           }
+         }
+      }
+    }
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+onMounted(() => {
+  loadBanques()
+  fetchMe() // Chargement du profil utilisateur si connecté
+  setTimeout(checkSchedule, 2000) // Delay the alert slightly after page load
+})
+watch(currentCountry, (newC) => {
+  const url = new URL(window.location)
+  url.searchParams.set('country', newC)
+  window.history.replaceState({}, '', url)
+  loadBanques()
+})
+
+// Notification temps réel : un paiement a été confirmé par le serveur via Socket.IO
+watch(lastPaymentNotification, (notification) => {
+  if (notification && notification.message) {
+    showToast(`💳 ${notification.message}`, 'success')
+  }
 })
 
 watch(selectedBanque, async (banque) => {
@@ -159,12 +214,70 @@ const fraisDossier = computed(() => {
 })
 const coutAssurance = computed(() => selectedPret.value ? montant.value * (selectedPret.value.assurance / 100) * (duree.value / 12) : 0)
 
+const assuranceMensuelle = computed(() => {
+  if (!selectedPret.value || !duree.value) return 0
+  return coutAssurance.value / duree.value
+})
+
+const mensualiteTotale = computed(() => {
+  return mensualite.value + assuranceMensuelle.value
+})
+
 // Charges totales client
 const totalChargesClient = computed(() => {
   return client.value.chargesLoyer + client.value.chargesCredits + client.value.autresCharges
 })
 
-const totalChargesApresPret = computed(() => totalChargesClient.value + mensualite.value)
+const totalChargesApresPret = computed(() => totalChargesClient.value + mensualiteTotale.value)
+
+// Calcul du Taux Effectif Global (TEG)
+const teg = computed(() => {
+  if (!selectedPret.value || !montant.value || !duree.value) return 0
+  
+  const P = montant.value
+  const n = duree.value
+  const rNominal = tauxEffectif.value
+  const assuranceAnnuelle = selectedPret.value.assurance || 0
+  const frais = fraisDossier.value
+  
+  // Si pas de frais de dossier et pas d'assurance, le TEG est égal au taux d'intérêt nominal
+  if (frais === 0 && assuranceAnnuelle === 0) {
+    return rNominal
+  }
+  
+  // Mensualité totale réelle (capital + intérêt + assurance)
+  const mensG = mensualiteTotale.value
+  
+  // Capital net reçu par l'emprunteur (après déduction des frais de dossier)
+  const capitalNet = P - frais
+  if (capitalNet <= 0 || mensG <= 0) {
+    return rNominal + assuranceAnnuelle
+  }
+  
+  // Résolution numérique dichotomique pour trouver le taux mensuel t_m
+  // tel que CapitalNet = mensG * (1 - (1 + t_m)^-n) / t_m
+  let low = 0
+  let high = 1.0 // 100% par mois maximum
+  for (let iter = 0; iter < 40; iter++) {
+    const mid = (low + high) / 2
+    let pv = 0
+    if (mid === 0) {
+      pv = mensG * n
+    } else {
+      pv = (mensG * (1 - Math.pow(1 + mid, -n))) / mid
+    }
+    
+    if (pv > capitalNet) {
+      low = mid
+    } else {
+      high = mid
+    }
+  }
+  
+  const tMensuel = (low + high) / 2
+  // TEG annuel = taux mensuel * 12 * 100 (norme nominale légale UEMOA/Afrique de l'Ouest)
+  return tMensuel * 12 * 100
+})
 
 // Quotités
 const quotiteUtilisee = computed(() => {
@@ -377,7 +490,7 @@ const amortissement = computed(() => {
   if (!selectedPret.value || !montant.value || !duree.value) return []
   const rows = []
   let solde = montant.value
-  const r = (selectedPret.value.taux / 100) / 12
+  const r = (tauxEffectif.value / 100) / 12
   const pmt = mensualite.value
   
   for (let i = 1; i <= duree.value; i++) {
@@ -396,15 +509,7 @@ const amortissement = computed(() => {
 const canProceedStep1 = computed(() => selectedBanque.value && selectedPret.value)
 const canProceedStep2 = computed(() => montant.value > 0 && duree.value > 0 && client.value.revenus > 0 && client.value.age > 0 && client.value.anciennete >= 0)
 
-// Toast notification
-const toast = ref({ show: false, message: '', type: 'error' })
-
-const showToast = (message, type = 'error') => {
-  toast.value = { show: true, message, type }
-  setTimeout(() => {
-    toast.value.show = false
-  }, 4000)
-}
+// Toast notification handled globally via src/services/toast.js
 
 // Validation des champs requis étape 2
 const getStep2Errors = () => {
@@ -439,20 +544,150 @@ const showHR = ref(false)
 // 'home' | 'loan' | 'tax' | 'hr'
 const currentModule = ref('home')
 
-function naviguer(module) {
+function syncUrlParams() {
+  try {
+    const params = new URLSearchParams()
+    if (showHR.value) {
+      params.set('module', 'hr')
+    } else if (currentModule.value && currentModule.value !== 'home') {
+      params.set('module', currentModule.value)
+    }
+    if (currentCountry.value && currentCountry.value !== 'CI') {
+      params.set('country', currentCountry.value)
+    }
+    const newSearch = params.toString() ? '?' + params.toString() : window.location.pathname
+    window.history.replaceState({}, '', newSearch)
+  } catch (e) { /* silent */ }
+}
+
+function naviguer(module, skipReload = false) {
+  const wasHR = currentModule.value === 'hr';
+  const isHR = module === 'hr';
+  
+  if (!skipReload && wasHR !== isHR && currentModule.value !== null) {
+    // Reload to ensure correct PWA manifest is loaded by the browser
+    let newUrl = window.location.pathname + '?module=' + module;
+    if (currentCountry.value && currentCountry.value !== 'CI') {
+      newUrl += '&country=' + currentCountry.value;
+    }
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      newUrl += '&source=classic';
+    }
+    window.location.href = newUrl;
+    return;
+  }
+
   currentModule.value = module
-  if (module === 'hr') { showHR.value = true; currentModule.value = 'home' }
-  else { showHR.value = false }
+  if (module === 'hr') { 
+    showHR.value = true
+  } else { 
+    showHR.value = false 
+  }
+  syncUrlParams()
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
+
+const hrInitialModule = ref(null)
+const hrInitialType = ref(null)
+const hrActiveModule = ref(null)
+const hrActiveType = ref(null)
+const isHRApp = ref(false)
+
+// ── Deeplink Handler (LinkedIn & URL Direct) ──────────────────
+function initDeeplink() {
+  try {
+    const searchParams = new URLSearchParams(window.location.search)
+    
+    // Détection agressive de l'app RH Pro
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+       // Si on est en PWA et qu'on n'a pas été redirigé depuis l'app classique
+       if (searchParams.get('source') !== 'classic') {
+          isHRApp.value = true
+       }
+    }
+    // Rétrocompatibilité
+    if (searchParams.get('source') === 'pwa_hr') {
+      isHRApp.value = true
+    }
+
+    // 1. Détection du Pays
+    const cParam = searchParams.get('country')
+    if (cParam && ['CI', 'BJ', 'TG', 'ML', 'BF', 'SN', 'CM', 'GA'].includes(cParam.toUpperCase())) {
+      currentCountry.value = cParam.toUpperCase()
+    }
+
+    // 2. Détection du Type RH / Sous-module (habituel, conges, import, solde)
+    const tParam = searchParams.get('type')
+    if (tParam) {
+      const typeLower = tParam.toLowerCase()
+      if (['habituel', 'conges'].includes(typeLower)) {
+        hrInitialModule.value = 'simulation'
+        hrInitialType.value = typeLower
+      } else if (['import', 'solde'].includes(typeLower)) {
+        hrInitialModule.value = typeLower
+      }
+    }
+
+    // 3. Détection du Module
+    const mParam = searchParams.get('module')
+    if (mParam) {
+      const modLower = mParam.toLowerCase()
+      if (modLower === 'payslip' || modLower === 'bulletin') {
+        naviguer('hr', true)
+      } else {
+        const validModules = ['home', 'loan', 'tax', 'hr', 'outils_pro']
+        if (validModules.includes(modLower)) {
+          naviguer(modLower, true)
+        }
+      }
+    }
+
+    // 4. Détection de l'accès Admin
+    if (searchParams.get('admin') === 'true') {
+      showAdmin.value = true
+    }
+    
+    // Initialisation du module actif
+    hrActiveModule.value = hrInitialModule.value
+    hrActiveType.value = hrInitialType.value
+  } catch (e) { /* silent */ }
+}
+
+const hrActiveModuleTitle = computed(() => {
+  if (!hrActiveModule.value) return 'Espace RH ONDA'
+  if (hrActiveModule.value === 'simulation') {
+    return hrActiveType.value === 'conges' ? 'Calcul de Congés' : 'Simuler un Bulletin'
+  }
+  const titles = {
+    import: 'Import en Masse',
+    solde: 'Solde de Tout Compte',
+    local_db: 'Base Locale & PWA',
+    directory: 'Annuaire Employés',
+    settings: 'Paramètres & Modèles'
+  }
+  return titles[hrActiveModule.value] || 'Module RH'
+})
+
+watch(currentCountry, () => {
+  syncUrlParams()
+})
 
 // Raccourci secret : Ctrl+Maj+A pour toggle admin
 const handleKeydown = (e) => {
   if (e.ctrlKey && e.shiftKey && e.key === 'A') {
+    // Bloquer l'accès si l'app est installée (PWA)
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+    if (isStandalone) {
+      console.warn("L'accès admin par raccourci clavier est désactivé dans la version installée.");
+      return;
+    }
     showAdmin.value = !showAdmin.value
   }
 }
-onMounted(() => window.addEventListener('keydown', handleKeydown))
+onMounted(() => {
+  window.addEventListener('keydown', handleKeydown)
+  initDeeplink()
+})
 
 // ══════════════════════════════════════════════════════════════
 // ANALYTICS & MONITORING
@@ -464,6 +699,10 @@ if (!clientId.value) {
   clientId.value = 'c_' + Math.random().toString(36).substring(2, 11)
   localStorage.setItem('onda_client_id', clientId.value)
 }
+
+// PWA Install Prompt
+const deferredPrompt = ref(null)
+const showInstallBanner = ref(false)
 
 async function logVisit(pageName) {
   try {
@@ -480,7 +719,24 @@ async function logVisit(pageName) {
 
 onMounted(() => {
   logVisit('home') // Log initial
+
+  // Écoute de l'événement d'installation PWA
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault()
+    deferredPrompt.value = e
+    showInstallBanner.value = true
+  })
 })
+
+const installApp = async () => {
+  if (!deferredPrompt.value) return
+  deferredPrompt.value.prompt()
+  const { outcome } = await deferredPrompt.value.userChoice
+  if (outcome === 'accepted') {
+    showInstallBanner.value = false
+  }
+  deferredPrompt.value = null
+}
 
 // Suivi des changements de module
 watch(currentModule, (newMod) => {
@@ -493,17 +749,34 @@ watch(currentModule, (newMod) => {
     
     <!-- Admin Dashboard Overlay -->
     <div v-if="showAdmin" style="position: fixed; inset: 0; background: #f1f5f9; z-index: 10000; overflow-y: auto;">
-      <div style="max-width: 1300px; margin: 0 auto; position: relative;">
-        <button @click="showAdmin = false" style="position: absolute; right: 1rem; top: 1rem; padding: 0.5rem 1rem; cursor: pointer;">Fermer ✕</button>
+      <button @click="showAdmin = false" class="admin-close-btn" title="Fermer la console d'administration">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        <span>Fermer l'Admin</span>
+      </button>
+      <div style="max-width: 1300px; margin: 0 auto; padding-top: 1rem;">
         <AdminDashboard />
       </div>
     </div>
 
+    <!-- Global Install Button (Classic App) -->
+    <button v-if="showInstallBanner && !showHR" @click="installApp" class="global-install-btn animate-in" title="Installer l'application sur votre appareil">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+      Installer l'Application
+    </button>
+
     <!-- MODULE : Accueil Dashboard -->
-    <AppHome v-if="!showAdmin && !showHR && currentModule === 'home'" @navigate="naviguer" />
+    <AppHome 
+      v-if="!showAdmin && !showHR && currentModule === 'home'" 
+      :country="currentCountry" 
+      @navigate="naviguer" 
+      @country-changed="(c) => currentCountry = c" 
+      @require-auth="showAuthModal = true"
+      @require-billing="showBillingModal = true"
+      @open-profile="showProfileModal = true"
+    />
 
     <!-- MODULE : Calculateur Impôt PME -->
-    <TaxCalculatorEntreprise v-else-if="!showAdmin && !showHR && currentModule === 'tax'" @retour="currentModule = 'home'" />
+    <TaxCalculatorEntreprise v-else-if="!showAdmin && !showHR && currentModule === 'tax'" :country="currentCountry" @retour="currentModule = 'home'" />
     
     <!-- MODULE : Boîte à Outils Pro -->
     <div v-else-if="!showAdmin && !showHR && currentModule === 'outils_pro'" class="animate-in" style="background: #f8fafc; min-height: 100vh;">
@@ -530,38 +803,112 @@ watch(currentModule, (newMod) => {
         <div class="hr-page-header-inner">
           <!-- Back Button (Left) -->
           <div class="hr-header-left">
-            <button @click="showHR = false" class="hr-back-button" title="Retour au simulateur">
+            <button v-if="hrActiveModule" @click="hrActiveModule = null; hrActiveType = null" class="hr-back-button" title="Retour au Bureau RH">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
-              <span>Simulateur</span>
+              <span>Bureau</span>
             </button>
+            <button v-else-if="!isHRApp" @click="naviguer('home')" class="hr-back-button" title="Retour au simulateur">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+              <span>Accueil</span>
+            </button>
+            <div v-else>
+              <!-- Espace vide pour garder le centrage du titre -->
+            </div>
           </div>
           
           <!-- Center Title (Mobile Optimized) -->
           <div class="hr-header-center">
              <div class="hr-app-badge">
-               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-               <span>Espace RH</span>
+               <svg v-if="!hrActiveModule" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+               <svg v-else xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
+               <span>{{ hrActiveModuleTitle }}</span>
              </div>
           </div>
 
-          <!-- Right Action (Empty for balance or User Initials) -->
+          <!-- Right Action (User Auth & Billing & Profile) -->
           <div class="hr-header-right">
-             <div class="hr-user-avatar">RH</div>
+             <div v-if="user" style="display: flex; align-items: center; gap: 0.6rem;">
+               <button v-if="showInstallBanner" @click="installApp" style="background: #10b981; color: white; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.75rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 2px 4px rgba(16,185,129,0.3);" title="Installer ONDA RH Pro sur votre appareil">
+                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                 Installer RH Pro
+               </button>
+               <button @click="showBillingModal = true" style="background: #ffffff; color: #0f172a; border: 1px solid #e2e8f0; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.75rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: all 0.2s;" title="Recharger mes crédits">
+                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: #f59e0b;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                 {{ user.credits || 0 }} crédits
+               </button>
+               <button @click="showProfileModal = true" style="background: #ffffff; color: #0f172a; border: 1px solid #e2e8f0; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.8rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.4rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05);" title="Mon Profil Client (Cliquer pour éditer)">
+                 <span style="width: 20px; height: 20px; border-radius: 50%; background: #4f46e5; color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 800;">
+                   {{ (user.name || user.companyName || user.email || 'U').substring(0, 1).toUpperCase() }}
+                 </span>
+                 <span style="max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #0f172a; font-weight: 800;">
+                   {{ user.companyName || user.name || user.email }}
+                 </span>
+               </button>
+               <button @click="logout" style="background: #ffffff; color: #dc2626; border: 1px solid #e2e8f0; font-weight: 600; font-size: 0.75rem; padding: 0.35rem 0.7rem; border-radius: 9999px; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: all 0.2s;" title="Se déconnecter">
+                 Déconnexion
+               </button>
+             </div>
+             <div v-else>
+               <button @click="showAuthModal = true" style="background: #10b981; color: white; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.5rem 0.85rem; border-radius: 0.5rem; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+                 <svg style="width: 14px; height: 14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"></path></svg>
+                 Connexion / Inscription
+               </button>
+             </div>
           </div>
         </div>
       </div>
       <!-- HR Page Content -->
       <div class="hr-page-content">
-        <HRPayroll />
+        <HRPayroll 
+          :country="currentCountry" 
+          :initialModule="hrInitialModule" 
+          :initialType="hrInitialType" 
+          :active-module="hrActiveModule" 
+          :active-type="hrActiveType" 
+          @update:active-module="(val) => hrActiveModule = val"
+          @update:active-type="(val) => hrActiveType = val"
+          @change-country="(c) => currentCountry = c" 
+        />
       </div>
     </div>
 
-    <!-- Toast Notification -->
-    <div v-if="toast.show" class="toast-notification" :class="toast.type">
-      <span class="toast-icon">{{ toast.type === 'error' ? '⚠️' : '✅' }}</span>
-      <span class="toast-message">{{ toast.message }}</span>
-      <button class="toast-close" @click="toast.show = false">×</button>
+    <!-- Toast Notification (Global) -->
+    <div v-if="toastState.show" class="toast-notification" :class="toastState.type" style="z-index: 999999;">
+      <span class="toast-icon">
+        <svg v-if="toastState.type === 'error'" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
+        <svg v-else-if="toastState.type === 'success'" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+        <svg v-else xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+      </span>
+      <span class="toast-message">{{ toastState.message }}</span>
+      <button class="toast-close" @click="toastState.show = false">×</button>
     </div>
+
+    <!-- Confirm Modal (Global) -->
+    <Transition name="confirm-fade">
+      <div v-if="confirmState.show" class="confirm-overlay" @click.self="resolveConfirm(false)">
+        <div class="confirm-modal" :class="confirmState.type">
+          <div class="confirm-header">
+            <div class="confirm-icon">
+              <svg v-if="confirmState.type === 'danger'" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+              <svg v-else-if="confirmState.type === 'warning'" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+              <svg v-else xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+            </div>
+            <div>
+              <h3 class="confirm-title">{{ confirmState.title }}</h3>
+            </div>
+          </div>
+          <p class="confirm-message">{{ confirmState.message }}</p>
+          <div class="confirm-actions">
+            <button class="confirm-btn-cancel" @click="resolveConfirm(false)">
+              {{ confirmState.cancelLabel }}
+            </button>
+            <button class="confirm-btn-ok" :class="confirmState.type" @click="resolveConfirm(true)">
+              {{ confirmState.confirmLabel }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
     
     
     <!-- Main Loan Simulator (visible only in 'loan' module) -->
@@ -1161,29 +1508,52 @@ watch(currentModule, (newMod) => {
         <!-- Stats -->
         <div class="key-stats-grid">
           <div class="key-stat-card highlight">
-             <div class="label">Mensualité</div>
-             <div class="value">{{ fcfa(mensualite) }}</div>
-             <div class="stat-desc">Ce que vous paierez chaque mois à la banque</div>
+             <div class="label">Mensualité Globale</div>
+             <div class="value">{{ fcfa(mensualiteTotale) }}</div>
+             <div class="stat-desc">Mensualité de base + Assurance obligatoire ({{ fcfa(assuranceMensuelle) }}/mois)</div>
           </div>
           <div class="key-stat-card">
-              <div class="label">Montant</div>
-              <div class="value">{{ fcfa(montant) }}</div>
-              <div class="stat-desc">Capital emprunté (hors frais annexes)</div>
+              <div class="label">Mensualité de Base</div>
+              <div class="value">{{ fcfa(mensualite) }}</div>
+              <div class="stat-desc">Capital et intérêts uniquement (hors assurance)</div>
           </div>
-          <div v-if="fraisDossier > 0" class="key-stat-card">
+          <div class="key-stat-card highlight-rate">
+             <div class="label">Taux Effectif Global (TEG)</div>
+             <div class="value text-success" style="color: #10b981; font-weight: 800;">{{ teg.toFixed(2) }}%</div>
+             <div class="stat-desc">Taux annuel réel (Taux Nominal + Assurance + Frais de dossier)</div>
+          </div>
+          <div class="key-stat-card">
               <div class="label">Frais de dossier</div>
               <div class="value text-info">{{ fcfa(fraisDossier) }}</div>
-              <div class="stat-desc">Frais d'ouverture de dossier appliqués par la banque</div>
+              <div class="stat-desc">Frais de dossier facturés par la banque au départ</div>
           </div>
           <div class="key-stat-card">
-              <div class="label">Coût total</div>
-              <div class="value">{{ fcfa(coutTotal + fraisDossier) }}</div>
-              <div class="stat-desc">Montant total à débourser (Crédit + Frais)</div>
+              <div class="label">Coût total réel</div>
+              <div class="value">{{ fcfa(coutTotal + fraisDossier + coutAssurance) }}</div>
+              <div class="stat-desc">Montant total déboursé (Crédit + Frais + Assurance)</div>
           </div>
           <div class="key-stat-card">
               <div class="label">Intérêts</div>
               <div class="value text-warning">{{ fcfa(totalInterets) }}</div>
               <div class="stat-desc">Coût du crédit (intérêts uniquement)</div>
+          </div>
+        </div>
+
+        <!-- Carte explicative TEG -->
+        <div class="card mb-6 educational-note-card" style="border-left: 4px solid #10b981; background: #f0fdf4;">
+          <div style="display: flex; gap: 0.75rem; padding: 1rem;">
+            <span style="color: #10b981; flex-shrink: 0; margin-top: 2px;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+            </span>
+            <div>
+              <strong style="color: #065f46; display: block; margin-bottom: 0.25rem;">Comprendre le Taux Effectif Global (TEG)</strong>
+              <p style="color: #047857; margin: 0; line-height: 1.5; font-size: 0.9rem;">
+                Le taux d'intérêt nominal affiché par la banque est de <strong>{{ tauxEffectif.toFixed(2) }}%</strong>. Cependant, le coût réel annuel de votre crédit est de <strong>{{ teg.toFixed(2) }}% (TEG)</strong>.
+              </p>
+              <p style="color: #047857; margin: 0.5rem 0 0 0; line-height: 1.5; font-size: 0.9rem;">
+                Ce TEG intègre l'ensemble des frais obligatoires imposés pour obtenir le prêt : les intérêts, la prime d'assurance décès/invalidité ({{ selectedPret?.assurance }}% par an) et les frais de dossier ({{ fcfa(fraisDossier) }}). C'est le taux le plus important pour comparer objectivement les offres.
+              </p>
+            </div>
           </div>
         </div>
 
@@ -1320,8 +1690,38 @@ watch(currentModule, (newMod) => {
       <p>Simulation indicative. Les conditions définitives dépendent de l'étude de votre dossier.</p>
     </div>
     </div><!-- end v-if !showHR -->
+
+    <!-- PWA Install Banner -->
+    <div v-if="showInstallBanner" class="pwa-banner animate-in">
+      <div class="pwa-banner-content">
+        <div class="pwa-icon">
+          <img src="/logo.png" alt="ONDA" />
+        </div>
+        <div class="pwa-text">
+          <strong>Installer ONDA Lite</strong>
+          <span>Accès rapide et hors ligne</span>
+        </div>
+      </div>
+      <div class="pwa-actions">
+        <button class="pwa-btn-install" @click="installApp">Installer</button>
+        <button class="pwa-btn-close" @click="showInstallBanner = false">✕</button>
+      </div>
+    </div>
+
   </div>
+
+  <!-- Modals (Auth, Billing, Profile) -->
+  <AuthModal :show="showAuthModal" @close="showAuthModal = false" />
+  <BillingModal :show="showBillingModal" @close="showBillingModal = false" />
+  <ProfileModal 
+    :show="showProfileModal" 
+    @close="showProfileModal = false" 
+    @open-billing="showProfileModal = false; showBillingModal = true" 
+  />
+
 </template>
+
+
 
 <style scoped>
 /* ─── HR FULL PAGE ─────────────────────────────────────────── */
@@ -1336,8 +1736,10 @@ watch(currentModule, (newMod) => {
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid rgba(226, 232, 240, 0.5);
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 1000;
   height: 64px;
   display: flex;
@@ -1437,6 +1839,7 @@ watch(currentModule, (newMod) => {
 
 .hr-page-content {
   padding: 1.5rem 1rem;
+  padding-top: calc(64px + 1.5rem);
   max-width: 1600px;
   margin: 0 auto;
   opacity: 0;
@@ -1444,8 +1847,8 @@ watch(currentModule, (newMod) => {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* Mobile Adjustments */
@@ -1595,6 +1998,100 @@ watch(currentModule, (newMod) => {
   from { transform: translateX(100%); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
 }
+
+/* ══ Confirm Modal ══ */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999998;
+  padding: 1rem;
+}
+.confirm-modal {
+  background: #fff;
+  border-radius: 20px;
+  padding: 2rem;
+  max-width: 420px;
+  width: 100%;
+  box-shadow: 0 25px 60px rgba(15,23,42,0.25);
+  animation: confirmPop 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.confirm-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.confirm-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  flex-shrink: 0;
+  background: #fee2e2;
+}
+.confirm-modal.warning .confirm-icon { background: #fef3c7; }
+.confirm-modal.info .confirm-icon { background: #dbeafe; }
+.confirm-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+.confirm-message {
+  color: #475569;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin: 0 0 1.75rem;
+}
+.confirm-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+.confirm-btn-cancel {
+  padding: 0.65rem 1.4rem;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #64748b;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.18s;
+}
+.confirm-btn-cancel:hover {
+  background: #e2e8f0;
+  color: #334155;
+}
+.confirm-btn-ok {
+  padding: 0.65rem 1.4rem;
+  border-radius: 10px;
+  border: none;
+  background: #ef4444;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.18s;
+  box-shadow: 0 4px 12px rgba(239,68,68,0.3);
+}
+.confirm-btn-ok.warning { background: #f59e0b; box-shadow: 0 4px 12px rgba(245,158,11,0.3); }
+.confirm-btn-ok.info { background: #3b82f6; box-shadow: 0 4px 12px rgba(59,130,246,0.3); }
+.confirm-btn-ok:hover { filter: brightness(1.1); transform: translateY(-1px); }
+@keyframes confirmPop {
+  from { transform: scale(0.85); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+.confirm-fade-enter-active, .confirm-fade-leave-active { transition: opacity 0.2s ease; }
+.confirm-fade-enter-from, .confirm-fade-leave-to { opacity: 0; }
 
 /* Bouton Accès RH */
 .btn-hr-access {
@@ -1749,6 +2246,137 @@ watch(currentModule, (newMod) => {
 }
 .key-stat-card.highlight .stat-desc {
   color: rgba(255, 255, 255, 0.9);
+}
+
+/* PWA Banner */
+.pwa-banner {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: white;
+  padding: 12px 16px;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px -5px rgba(0,0,0,0.2), 0 8px 10px -6px rgba(0,0,0,0.1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  z-index: 99999;
+  width: calc(100% - 32px);
+  max-width: 400px;
+  border: 1px solid #e2e8f0;
+}
+.pwa-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.pwa-icon img {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+.pwa-text {
+  display: flex;
+  flex-direction: column;
+}
+.pwa-text strong {
+  font-size: 0.95rem;
+  color: #0f172a;
+}
+.pwa-text span {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+.pwa-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pwa-btn-install {
+  background: #2563eb;
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.pwa-btn-install:hover {
+  background: #1d4ed8;
+}
+.pwa-btn-close {
+  background: transparent;
+  color: #94a3b8;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   BOUTON FERMER ADMIN HAUTE GAMME
+   ══════════════════════════════════════════════════════════════ */
+.admin-close-btn {
+  position: fixed;
+  top: 1.25rem;
+  right: 1.5rem;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(15, 23, 42, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  padding: 0.55rem 1.1rem;
+  border-radius: 9999px;
+  font-size: 0.825rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.3), 0 4px 6px -2px rgba(15, 23, 42, 0.1);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.admin-close-btn:hover {
+  background: #0f172a;
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 14px 30px -5px rgba(15, 23, 42, 0.45);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.global-install-btn {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: #4f46e5;
+  color: white;
+  border: none;
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: 9999px;
+  cursor: pointer;
+  box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.global-install-btn:hover {
+  background: #4338ca;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(79, 70, 229, 0.5);
 }
 </style>
 

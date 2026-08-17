@@ -5,6 +5,21 @@ const fs = require('fs');
 const path = require('path');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
+let PDFDocument, rgb;
+try {
+    const pdfLib = require('pdf-lib');
+    PDFDocument = pdfLib.PDFDocument;
+    rgb = pdfLib.rgb;
+} catch (e) {
+    console.warn("pdf-lib n'est pas installé, la génération de PDF visuels échouera.");
+}
+
+let puppeteer;
+try {
+    puppeteer = require('puppeteer');
+} catch (e) {
+    console.warn("puppeteer n'est pas installé, la génération HTML-to-PDF échouera.");
+}
 
 // Définition des polices
 const fonts = {
@@ -507,8 +522,8 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
     };
 }
 
-exports.processPayrollFile = async (dataPath, outputPath, templatePath = null) => {
-    return new Promise((resolve, reject) => {
+exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, mapping = null, htmlTemplate = null, country = 'CI') => {
+    return new Promise(async (resolve, reject) => {
         try {
             console.log(`[RH] Lecture Excel: ${dataPath}`);
             const workbook = XLSX.readFile(dataPath);
@@ -552,26 +567,63 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null) =
             const indexBy = (arr, key) => arr.reduce((acc, item) => ({ ...acc, [item[key]]: item }), {});
             const remuMap = indexBy(remuList, 'id_employe');
 
-            const fullEmployees = employesList.map(emp => ({
-                ...emp,
-                ...(remuMap[emp.id_employe] || {})
-            }));
+            const fullEmployees = employesList.map(emp => {
+                const merged = {
+                    ...emp,
+                    ...(remuMap[emp.id_employe] || {})
+                };
+
+                // Application du Smart Mapping si fourni
+                if (mapping) {
+                    const mappedEmp = {};
+                    for (const [standardKey, fileHeader] of Object.entries(mapping)) {
+                        if (fileHeader && merged[fileHeader] !== undefined) {
+                            mappedEmp[standardKey] = merged[fileHeader];
+                        }
+                    }
+                    // On fusionne pour garder les champs originaux en backup
+                    return { ...merged, ...mappedEmp };
+                }
+
+                return merged;
+            });
 
             // Output init
-            const isDocxMode = !!templatePath;
+            const isDocxMode = !!templatePath && templatePath.toLowerCase().endsWith('.docx');
+            const isHtmlTemplateMode = !!htmlTemplate;
             let docTemplateContent = null;
-            if (isDocxMode) docTemplateContent = fs.readFileSync(templatePath, 'binary');
+            if (templatePath) docTemplateContent = fs.readFileSync(templatePath);
 
             const output = fs.createWriteStream(outputPath);
             const archive = archiver('zip', { zlib: { level: 9 } });
+            
+            let totalMasseSalariale = 0;
+            let totalCNPS = 0;
+            let totalImpots = 0;
 
-            output.on('close', () => resolve({ count: fullEmployees.length, type: isDocxMode ? 'docx' : 'pdf' }));
+            output.on('close', () => resolve({ 
+                count: fullEmployees.length, 
+                type: isDocxMode ? 'docx' : 'pdf',
+                totalMasseSalariale,
+                totalCNPS,
+                totalImpots
+            }));
             archive.on('error', (err) => reject(err));
             archive.pipe(output);
 
-            fullEmployees.forEach((emp, index) => {
+            const promises = [];
+            let browser = null;
+            if (isHtmlTemplateMode && puppeteer) {
+                browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+            }
+
+            for (const [index, emp] of fullEmployees.entries()) {
                 try {
-                    const calculs = calculateSalaryRules(emp);
+                    const calculs = exports.calculateSinglePayroll({ ...emp, pays: country });
+                    totalMasseSalariale += calculs.gainsTotaux || 0;
+                    totalCNPS += calculs.salarial.cnps || 0;
+                    totalImpots += calculs.salarial.irpp || calculs.salarial.its || 0;
+
                     const rawName = String(emp['nom'] || `Emp${index}`);
                     const safeName = rawName.replace(/[^a-z0-9]/gi, '_');
 
@@ -583,10 +635,78 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null) =
 
                     if (isDocxMode) {
                         const viewData = { ...emp, ...calculs, date_jour: new Date().toLocaleDateString() };
-                        const zip = new PizZip(docTemplateContent);
+                        const zip = new PizZip(docTemplateContent.toString('binary'));
                         const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
                         doc.render(viewData);
                         archive.append(doc.getZip().generate({ type: 'nodebuffer' }), { name: `${finalFileName}.docx` });
+                    } else if (isHtmlTemplateMode) {
+                        const entNom = (companyInfo.nom_entreprise || emp.nom_entreprise || 'ENTREPRISE').toUpperCase();
+                        const viewData = {
+                            ...emp,
+                            ...calculs,
+                            date_jour: new Date().toLocaleDateString(),
+                            nom_entreprise: entNom
+                        };
+                        promises.push((async () => {
+                            if (!puppeteer) throw new Error("puppeteer module not found. Run npm install puppeteer");
+
+                            // Replacements
+                            let html = htmlTemplate;
+                            // Format FCFA
+                            const formatFCFA = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+
+                            for (const key of Object.keys(viewData)) {
+                                const val = viewData[key];
+                                const strVal = typeof val === 'number' ? formatFCFA(val) : (val || '');
+                                // Remplacer dynamiquement les {clé} dans le HTML
+                                const regex = new RegExp(`{${key}}`, 'g');
+                                html = html.replace(regex, strVal);
+                            }
+
+                            // Nettoyer les variables restantes non mappées
+                            html = html.replace(/{[^}]+}/g, '0');
+
+                            const fullHtml = `
+                            <!DOCTYPE html>
+                            <html>
+                            <head>
+                                <meta charset="utf-8">
+                                <script src="https://cdn.tailwindcss.com"></script>
+                                <style>
+                                    body { 
+                                        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; 
+                                        background: white; 
+                                        color: #1f2937;
+                                        font-size: 11px;
+                                        line-height: 1.3;
+                                        text-align: left;
+                                    }
+                                    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                                    /* Force compact table rows */
+                                    table { font-size: 11px; border-collapse: collapse; }
+                                    td, th { padding: 2px 8px !important; }
+                                    h1 { font-size: 15px !important; margin: 4px 0 !important; }
+                                    h2 { font-size: 13px !important; margin: 3px 0 !important; }
+                                    h3 { font-size: 12px !important; margin: 2px 0 !important; }
+                                    p { margin: 2px 0 !important; }
+                                    /* Reduce all large spacings */
+                                    .mt-4, .mt-6, .mt-8, .mb-4, .mb-6, .mb-8, .my-4, .my-6, .my-8 { margin-top: 8px !important; margin-bottom: 8px !important; }
+                                    .pt-4, .pt-6, .pt-8, .pb-4, .pb-6, .pb-8, .py-4, .py-6, .py-8 { padding-top: 4px !important; padding-bottom: 4px !important; }
+                                </style>
+                            </head>
+                            <body class="p-6">
+                                ${html}
+                            </body>
+                            </html>
+                            `;
+
+                            const page = await browser.newPage();
+                            await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
+                            const pdfBytes = await page.pdf({ format: 'A4', printBackground: true });
+                            await page.close();
+
+                            archive.append(Buffer.from(pdfBytes), { name: `${finalFileName}.pdf` });
+                        })());
                     } else {
                         const docDefinition = generatePdfDefinition(emp, calculs, companyInfo);
                         const pdfDoc = printer.createPdfKitDocument(docDefinition);
@@ -599,11 +719,17 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null) =
                         pdfDoc.end();
                     }
                 } catch (err) {
-                    console.error("Error creating PDF for " + emp.nom, err);
+                    console.error("Error creating document for " + emp.nom, err);
                 }
-            });
+            } // end for
 
-            setTimeout(() => archive.finalize(), 500);
+            Promise.all(promises).then(async () => {
+                if (browser) await browser.close();
+                setTimeout(() => archive.finalize(), 500);
+            }).catch(async (err) => {
+                if (browser) await browser.close();
+                reject(err);
+            });
 
         } catch (e) { reject(e); }
     });
@@ -612,21 +738,937 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null) =
 /**
  * Calcul des règles pour un employé unique (simulation manuelle)
  */
+function calculateBeninSalaryRules(employee) {
+    // 1. Calcul des éléments de base (identique à calculateSalaryRules)
+    const salaireBaseMensuel = parseFloat(employee['salaire_base'] || 0);
+    const joursDansLeMois = 30;
+    const joursBasePaie = parseFloat(employee['jours_travailles'] || 26);
+    const joursAbsences = parseFloat(employee['absences_jours'] || 0);
+    const autoConges = !!employee['auto_conges'];
+    let joursConges = parseFloat(employee['jours_conges_pris'] || 0);
+
+    if (autoConges) {
+        const dateRefStr = employee['date_dernier_conge'] || employee['date_embauche'];
+        if (dateRefStr) {
+            const dRef = new Date(dateRefStr);
+            const paieMois = parseInt(employee['mois'] || new Date().getMonth() + 1);
+            const paieAnnee = parseInt(employee['annee'] || new Date().getFullYear());
+            const dNow = new Date(paieAnnee, paieMois - 1, 1);
+            const diffMois = (dNow.getFullYear() - dRef.getFullYear()) * 12 + (dNow.getMonth() - dRef.getMonth());
+            if (diffMois > 0) {
+                joursConges = Math.min(30, Math.floor(diffMois * 2.2));
+            }
+        }
+    }
+
+    const joursTrav = Math.max(0, joursBasePaie - joursAbsences - joursConges);
+    const joursCP = joursConges;
+
+    const salaireBase = Math.round((salaireBaseMensuel / joursDansLeMois) * joursTrav);
+    const sursalaireTotal = parseFloat(employee['sursalaire'] || 0);
+    const sursalaire = Math.round((sursalaireTotal / joursDansLeMois) * joursTrav);
+
+    const primeTransportMensuel = parseFloat(employee['prime_transport'] || 0);
+    const primeTransport = (employee['bulletin_type'] === 'conges') ? 0 : Math.round((primeTransportMensuel / joursBasePaie) * joursTrav);
+    const primeLogement = parseFloat(employee['prime_logement'] || 0);
+
+    const nbHeuresSup = parseFloat(employee['heures_sup_nb'] || 0);
+    const coefHS = parseFloat(employee['heures_sup_coef'] || 1.15);
+    const tauxHoraire = salaireBaseMensuel > 0 ? Math.round(salaireBaseMensuel / 173.33) : 0;
+    const montantHeuresSup = Math.round(nbHeuresSup * tauxHoraire * coefHS);
+
+    // Primes et autres éléments
+    const primesList = Array.isArray(employee['primes']) ? employee['primes'] : [];
+    const primesImposables = primesList.filter(p => p.imposable).reduce((acc, p) => acc + (+p.montant || 0), 0);
+    const primesNonImposablesRub = primesList.filter(p => !p.imposable).reduce((acc, p) => acc + (+p.montant || 0), 0);
+    const gratification = parseFloat(employee['gratification'] || 0);
+
+    const salaireBrut = salaireBase + sursalaire + montantHeuresSup + primesImposables + gratification;
+    const brutImposable = salaireBrut;
+    const gainsTotaux = salaireBrut + primeTransport + primeLogement + primesNonImposablesRub;
+
+    // Calculs spécifiques Bénin
+    const baseFiscale = brutImposable;
+    const impotEmployeur = Math.round(baseFiscale * 0.04); // VPS = 4%
+    const totalFiscalEmployeur = impotEmployeur;
+
+    const plafondCNSS = 1200000;
+    const baseCNSS = Math.min(brutImposable, plafondCNSS);
+
+    const cnssPF = Math.round(baseCNSS * 0.09);
+    const cnssRetraitePat = Math.round(baseCNSS * 0.064);
+    const tauxATPat = parseFloat(employee['taux_at'] || 0.01);
+    const cnssAT = Math.round(baseCNSS * tauxATPat);
+
+    const totalSocialEmployeur = cnssPF + cnssRetraitePat + cnssAT;
+    const totalPatronal = totalFiscalEmployeur + totalSocialEmployeur;
+
+    // Charges salariales
+    const cnssSal = Math.round(baseCNSS * 0.036);
+    const salImposable = brutImposable - cnssSal; // La particularité du Bénin
+
+    const tranches = [
+        { plafond: 60000, taux: 0.00 },
+        { plafond: 150000, taux: 0.10 },
+        { plafond: 250000, taux: 0.15 },
+        { plafond: 500000, taux: 0.19 },
+        { plafond: Infinity, taux: 0.30 }
+    ];
+    let itsFinal = 0;
+    let prec = 0;
+    for (const { plafond, taux } of tranches) {
+        if (salImposable <= prec) break;
+        itsFinal += (Math.min(salImposable, plafond) - prec) * taux;
+        prec = plafond;
+    }
+    itsFinal = Math.round(itsFinal);
+
+    let redevanceSpeciale = 0;
+    if (salImposable > 60000) {
+        const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+        if (moisNum === 3) redevanceSpeciale = 1000;
+        else if (moisNum === 6) redevanceSpeciale = 3000;
+    }
+
+    const acompte = parseFloat(employee['acompte'] || 0);
+    const avance = parseFloat(employee['avance'] || 0);
+    const opposition = parseFloat(employee['opposition'] || 0);
+    const autres = parseFloat(employee['autres_retenues'] || 0);
+
+    const impots = itsFinal + redevanceSpeciale;
+    const totalRetenuesDiverses = acompte + avance + opposition + autres;
+    const totalRetenues = impots + cnssSal + totalRetenuesDiverses;
+
+    const netAPayerRaw = gainsTotaux - totalRetenues;
+    const netAPayer = Math.max(0, netAPayerRaw);
+
+    const autresTaxesSalariales = [];
+    if (redevanceSpeciale > 0) {
+        autresTaxesSalariales.push({ code: '411', label: 'REDEVANCE SPECIALE ORTB/SRTB', base: null, montant: redevanceSpeciale });
+    }
+
+    return {
+        brut: salaireBrut, salaireBase, salaireBaseMensuel, sursalaire,
+        primeAnciennete: 0, ansAnciennete: 0, ancienneteTxt: '____', allocationConges: 0, joursCP,
+        gratification, preavisVal: 0, indemLicenciement: 0, indemTransac: 0, fraisFuneraires: 0,
+        primesImposables, primesNonImposablesRub, montantHeuresSup, nbHeuresSup, coefHS, tauxHoraire,
+        primeTransport, primeLogement,
+        brutImposable, gainsTotaux, baseCNPS: baseCNSS, baseCNPS_PfAtAm: baseCNSS, parts: 0, totalPersonnesCMU: 0,
+        patronal: {
+            impotEmployeur, fdfpTA: 0, fdfpFPC: 0, totalFiscal: totalFiscalEmployeur,
+            cnpsPF: cnssPF, cnpsAM: 0, cnpsAT: cnssAT, cnpsRetraite: cnssRetraitePat, cmu: 0,
+            totalSocial: totalSocialEmployeur, grandTotal: totalPatronal
+        },
+        salarial: {
+            its: itsFinal, ricf: 0, baseITS: salImposable, is: 0, cn: 0, igr: 0, cnps: cnssSal, cmu: 0,
+            acompte, avance, opposition, autres, total: totalRetenues, regime: '2024',
+            autresTaxes: autresTaxesSalariales
+        },
+        netAPayer
+    };
+}
+
+function generateBeninPdfDefinition(employee, calc, companyInfo = {}) {
+    const GRAY_BORDER = '#cbd5e1';
+    const NAVY_HEADER = '#1e293b';
+
+    const company = {
+        nom: companyInfo.nom_entreprise || employee.nom_entreprise || "VOTRE ENTREPRISE",
+        adresse: companyInfo.adresse || employee.adresse || '',
+        cnps: companyInfo.numero_cnps || employee.numero_cnps || '____',
+        contribuable: companyInfo.numero_contribuable || employee.numero_contribuable || '____',
+        cc: companyInfo.numero_cc || employee.numero_cc || '____'
+    };
+
+    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+    const annee = parseInt(employee.annee || new Date().getFullYear());
+    const dernierJour = new Date(annee, moisNum, 0).getDate();
+    const moisNoms = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+    const moisNom = moisNoms[moisNum - 1];
+
+    // 1. GAINS TABLE BODY
+    const gainsBody = [
+        [
+            { text: 'RUBRIQUES DE GAINS (ÉLÉMENTS DE RÉMUNÉRATION)', fillColor: '#f8fafc', bold: true, fontSize: 8, color: '#334155', border: [false, true, false, true] },
+            { text: 'Base', fillColor: '#f8fafc', bold: true, alignment: 'right', fontSize: 8, color: '#334155', border: [false, true, false, true] },
+            { text: 'Taux', fillColor: '#f8fafc', bold: true, alignment: 'center', fontSize: 8, color: '#334155', border: [false, true, false, true] },
+            { text: 'Montant (FCFA)', fillColor: '#f8fafc', bold: true, alignment: 'right', fontSize: 8, color: '#334155', border: [false, true, false, true] }
+        ]
+    ];
+
+    // 1. Salaire de base
+    gainsBody.push([
+        { text: '1. Salaire de base', fontSize: 8, border: [false, false, false, false] },
+        { text: '', border: [false, false, false, false] },
+        { text: '', border: [false, false, false, false] },
+        { text: fcfa(calc.salaireBase), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+    ]);
+
+    // 2. Heures sup
+    if (calc.montantHeuresSup > 0) {
+        gainsBody.push([
+            { text: '2. Heures supplémentaires', fontSize: 8, border: [false, false, false, false] },
+            { text: fcfa(calc.tauxHoraire), alignment: 'right', fontSize: 8, border: [false, false, false, false] },
+            { text: calc.nbHeuresSup + 'h', alignment: 'center', fontSize: 8, border: [false, false, false, false] },
+            { text: fcfa(calc.montantHeuresSup), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+        ]);
+    }
+
+    // 3. Primes (rendement, fonction, etc.)
+    const totalPrimes = (calc.primeAnciennete || 0) + (calc.sursalaire || 0) + (calc.primesImposables || 0) + (calc.primesNonImposablesRub || 0);
+    if (totalPrimes > 0) {
+        gainsBody.push([
+            { text: '3. Primes (rendement, fonction, ancienneté, etc.)', fontSize: 8, border: [false, false, false, false] },
+            { text: '', border: [false, false, false, false] },
+            { text: '', border: [false, false, false, false] },
+            { text: fcfa(totalPrimes), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+        ]);
+    }
+
+    // 4. Indemnités (transport, logement, représentation, etc.)
+    const totalIndemnites = (calc.primeTransport || 0) + (calc.primeLogement || 0);
+    if (totalIndemnites > 0) {
+        gainsBody.push([
+            { text: '4. Indemnités (transport, logement, etc.)', fontSize: 8, border: [false, false, false, false] },
+            { text: '', border: [false, false, false, false] },
+            { text: '', border: [false, false, false, false] },
+            { text: fcfa(totalIndemnites), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+        ]);
+    }
+
+    // 5. Gratifications / Congés Payés
+    if (calc.allocationConges > 0) {
+        gainsBody.push([
+            { text: '5. Gratifications / Congés Payés', fontSize: 8, border: [false, false, false, false] },
+            { text: '', border: [false, false, false, false] },
+            { text: '', border: [false, false, false, false] },
+            { text: fcfa(calc.allocationConges), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+        ]);
+    }
+
+    // TOTAL SALAIRE BRUT (A)
+    gainsBody.push([
+        { text: 'TOTAL SALAIRE BRUT (A)', fillColor: '#f1f5f9', bold: true, fontSize: 8.5, border: [false, true, false, true], colSpan: 3 },
+        {}, {},
+        { text: fcfa(calc.gainsTotaux) + ' FCFA', fillColor: '#f1f5f9', bold: true, alignment: 'right', fontSize: 8.5, border: [false, true, false, true] }
+    ]);
+
+
+    // 2. RETENUES TABLE BODY
+    const retenuesBody = [
+        [
+            { text: 'RETENUES LÉGALES ET AUTRES RETENUES', fillColor: '#f8fafc', bold: true, fontSize: 8, color: '#334155', border: [false, true, false, true] },
+            { text: 'Base', fillColor: '#f8fafc', bold: true, alignment: 'right', fontSize: 8, color: '#334155', border: [false, true, false, true] },
+            { text: 'Taux', fillColor: '#f8fafc', bold: true, alignment: 'center', fontSize: 8, color: '#334155', border: [false, true, false, true] },
+            { text: 'Montant (FCFA)', fillColor: '#f8fafc', bold: true, alignment: 'right', fontSize: 8, color: '#334155', border: [false, true, false, true] }
+        ]
+    ];
+
+    // 1. CNSS salariale
+    retenuesBody.push([
+        { text: '1. CNSS – part salariale', fontSize: 8, border: [false, false, false, false] },
+        { text: '(A)', alignment: 'right', fontSize: 8, border: [false, false, false, false] },
+        { text: '3,6%', alignment: 'center', fontSize: 8, border: [false, false, false, false] },
+        { text: fcfa(calc.salarial.cnps), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+    ]);
+
+    // 2. Salaire imposable (B)
+    retenuesBody.push([
+        { text: '2. Salaire imposable (B)', fontSize: 8, bold: true, border: [false, false, false, false] },
+        { text: '(A) – CNSS', alignment: 'right', fontSize: 8, border: [false, false, false, false] },
+        { text: '', border: [false, false, false, false] },
+        { text: fcfa(calc.salarial.baseITS), alignment: 'right', bold: true, fontSize: 8, border: [false, false, false, false] }
+    ]);
+
+    // 3. IRPP
+    retenuesBody.push([
+        { text: '3. IRPP (Impôt sur le Revenu des Personnes Physiques)', fontSize: 8, border: [false, false, false, false] },
+        { text: '(B)', alignment: 'right', fontSize: 8, border: [false, false, false, false] },
+        { text: 'barème', alignment: 'center', fontSize: 8, border: [false, false, false, false] },
+        { text: fcfa(calc.salarial.its), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+    ]);
+
+    // 4. Autres taxes (ex: ORTB)
+    if (calc.salarial.autresTaxes && calc.salarial.autresTaxes.length > 0) {
+        calc.salarial.autresTaxes.forEach(t => {
+            retenuesBody.push([
+                { text: '4. ' + t.label, fontSize: 8, border: [false, false, false, false] },
+                { text: '', border: [false, false, false, false] },
+                { text: '', border: [false, false, false, false] },
+                { text: fcfa(t.montant), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+            ]);
+        });
+    }
+
+    // 5. Autres retenues (acompte, etc.)
+    const firstOtherTax = calc.salarial.autresTaxes && calc.salarial.autresTaxes[0] ? calc.salarial.autresTaxes[0].montant : 0;
+    const resteRetenues = calc.salarial.total - calc.salarial.its - calc.salarial.cnps - firstOtherTax;
+    if (resteRetenues > 0) {
+        retenuesBody.push([
+            { text: '5. Autres retenues autorisées (avances, acomptes, etc.)', fontSize: 8, border: [false, false, false, false] },
+            { text: '', border: [false, false, false, false] },
+            { text: '', border: [false, false, false, false] },
+            { text: fcfa(resteRetenues), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+        ]);
+    }
+
+    // TOTAL DES RETENUES (C)
+    retenuesBody.push([
+        { text: 'TOTAL DES RETENUES (C)', fillColor: '#f1f5f9', bold: true, fontSize: 8.5, border: [false, true, false, true], colSpan: 3 },
+        {}, {},
+        { text: fcfa(calc.salarial.total) + ' FCFA', fillColor: '#f1f5f9', bold: true, alignment: 'right', fontSize: 8.5, border: [false, true, false, true] }
+    ]);
+
+    const virementStr = employee.virement ? 'Virement bancaire' : 'Espèces';
+    const ribStr = (employee.virement && employee.rib) ? employee.rib : '';
+
+    return {
+        pageSize: 'A4',
+        pageMargins: [40, 35, 40, 35],
+        content: [
+            // EN-TÊTE OFFICIEL BÉNIN
+            {
+                table: {
+                    widths: ['*'],
+                    body: [
+                        [
+                            {
+                                stack: [
+                                    { text: 'RÉPUBLIQUE DU BÉNIN', alignment: 'center', fontSize: 9, bold: true, color: '#475569' },
+                                    { text: company.nom.toUpperCase(), alignment: 'center', fontSize: 13, bold: true, color: NAVY_HEADER, margin: [0, 3, 0, 0] },
+                                    { text: company.adresse, alignment: 'center', fontSize: 8, color: '#64748b' },
+                                    { text: 'NIF : ' + company.contribuable + '   |   RCCM : ' + company.cc + '   |   Code CNSS : ' + company.cnps, alignment: 'center', fontSize: 7.5, color: '#475569', margin: [0, 4, 0, 0] }
+                                ],
+                                border: [false, false, false, true]
+                            }
+                        ]
+                    ]
+                },
+                layout: { hLineColor: function () { return GRAY_BORDER; } }
+            },
+
+            // TITRE
+            { text: 'BULLETIN DE PAIE', alignment: 'center', fontSize: 13, bold: true, color: NAVY_HEADER, margin: [0, 12, 0, 12] },
+
+            // CARTOUCHE EMPLOYEUR & SALARIÉ
+            {
+                columns: [
+                    {
+                        stack: [
+                            { text: 'Période de paie : ' + moisNom + ' ' + annee, fontSize: 8.5, bold: true },
+                            { text: 'Date de paiement : ' + dernierJour + '/' + String(moisNum).padStart(2, '0') + '/' + annee, fontSize: 8, color: '#475569', margin: [0, 2, 0, 0] }
+                        ],
+                        width: '35%'
+                    },
+                    {
+                        stack: [
+                            { text: 'EMPLOYEUR :', fontSize: 8.5, bold: true, color: NAVY_HEADER },
+                            { text: company.nom, fontSize: 8, margin: [0, 2, 0, 0] }
+                        ],
+                        width: '30%'
+                    },
+                    {
+                        stack: [
+                            { text: 'SALARIÉ :', fontSize: 8.5, bold: true, color: NAVY_HEADER },
+                            { text: (employee.nom || '').toUpperCase() + ' ' + (employee.prenom || ''), fontSize: 8, bold: true, margin: [0, 2, 0, 0] },
+                            { text: 'Matricule : ' + (employee.matricule || '____') + '   |   N° CNSS : ' + (employee.num_secu || '____'), fontSize: 7.5, color: '#475569', margin: [0, 2, 0, 0] },
+                            { text: 'Fonction : ' + (employee.poste || '____'), fontSize: 7.5, color: '#475569', margin: [0, 1, 0, 0] }
+                        ],
+                        width: '35%'
+                    }
+                ]
+            },
+
+            { text: '', margin: [0, 10] },
+            { text: 'DÉTAIL DE LA RÉMUNÉRATION', fontSize: 9.5, bold: true, color: NAVY_HEADER, margin: [0, 0, 0, 4] },
+
+            // TABLE 1 : GAINS
+            {
+                table: { headerRows: 1, widths: ['50%', '15%', '15%', '20%'], body: gainsBody },
+                layout: { hLineWidth: function (i, node) { return (i === 0 || i === node.table.body.length) ? 1 : 0.5; }, vLineWidth: function () { return 0; }, hLineColor: function () { return GRAY_BORDER; } }
+            },
+
+            { text: '', margin: [0, 8] },
+
+            // TABLE 2 : RETENUES
+            {
+                table: { headerRows: 1, widths: ['50%', '15%', '15%', '20%'], body: retenuesBody },
+                layout: { hLineWidth: function (i, node) { return (i === 0 || i === node.table.body.length) ? 1 : 0.5; }, vLineWidth: function () { return 0; }, hLineColor: function () { return GRAY_BORDER; } }
+            },
+
+            { text: '', margin: [0, 10] },
+
+            // TABLE 3 : RÉCAPITULATIF NET
+            {
+                table: {
+                    widths: ['75%', '25%'],
+                    body: [
+                        [
+                            { text: 'Salaire brut (A)', fontSize: 8, border: [false, false, false, false] },
+                            { text: fcfa(calc.gainsTotaux) + ' FCFA', alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+                        ],
+                        [
+                            { text: 'Moins : Total des retenues (C)', fontSize: 8, border: [false, false, false, false] },
+                            { text: fcfa(calc.salarial.total) + ' FCFA', alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+                        ],
+                        [
+                            { text: 'NET À PAYER (D = A – C)', fillColor: NAVY_HEADER, color: 'white', bold: true, fontSize: 9.5, margin: [4, 6, 4, 6], border: [false, false, false, false] },
+                            { text: fcfa(calc.netAPayer) + ' FCFA', fillColor: NAVY_HEADER, color: 'white', bold: true, fontSize: 9.5, alignment: 'right', margin: [4, 6, 4, 6], border: [false, false, false, false] }
+                        ]
+                    ]
+                },
+                layout: { hLineWidth: function () { return 0.5; }, vLineWidth: function () { return 0; }, hLineColor: function () { return GRAY_BORDER; } }
+            },
+
+            { text: '', margin: [0, 12] },
+
+            // MODE DE PAIEMENT & ARRETE
+            {
+                table: {
+                    widths: ['*'],
+                    body: [
+                        [
+                            {
+                                stack: [
+                                    { text: 'MODE DE PAIEMENT : ' + virementStr.toUpperCase(), fontSize: 8.5, bold: true, color: NAVY_HEADER },
+                                    (ribStr ? { text: 'Numéro de compte : ' + ribStr, fontSize: 8, color: '#475569', margin: [0, 2, 0, 0] } : {}),
+                                    { text: 'Arrêté le présent bulletin à la somme de : ' + fcfa(calc.netAPayer) + ' francs CFA.', fontSize: 8, italics: true, color: '#334155', margin: [0, 4, 0, 0] }
+                                ],
+                                border: [true, true, true, true],
+                                margin: [8, 8, 8, 8],
+                                fillColor: '#f8fafc'
+                            }
+                        ]
+                    ]
+                },
+                layout: { hLineColor: function () { return GRAY_BORDER; }, vLineColor: function () { return GRAY_BORDER; } }
+            },
+
+            { text: '', margin: [0, 15] },
+
+            // SIGNATURES
+            {
+                columns: [
+                    {
+                        stack: [
+                            { text: 'Pour l\'employeur,', fontSize: 8.5, bold: true, color: NAVY_HEADER },
+                            { text: 'Nom et qualité :', fontSize: 7.5, color: '#64748b', margin: [0, 2, 0, 0] },
+                            { text: 'Signature et cachet :', fontSize: 7.5, color: '#64748b', margin: [0, 2, 0, 0] }
+                        ]
+                    },
+                    { text: '' },
+                    {
+                        stack: [
+                            { text: 'Lu et approuvé,', fontSize: 8.5, bold: true, color: NAVY_HEADER },
+                            { text: 'Le salarié,', fontSize: 7.5, color: '#64748b', margin: [0, 2, 0, 0] },
+                            { text: 'Nom et signature :', fontSize: 7.5, color: '#64748b', margin: [0, 2, 0, 0] }
+                        ]
+                    }
+                ]
+            }
+        ],
+        defaultStyle: { font: 'Roboto', fontSize: 8 }
+    };
+}
+
+function calculateTogoSalaryRules(employee) {
+    const salaireBaseMensuel = parseFloat(employee['salaire_base'] || 0);
+    const joursDansLeMois = 30;
+    const joursBasePaie = parseFloat(employee['jours_travailles'] || 26);
+    const joursAbsences = parseFloat(employee['absences_jours'] || 0);
+    const autoConges = !!employee['auto_conges'];
+    let joursConges = parseFloat(employee['jours_conges_pris'] || 0);
+
+    if (autoConges) {
+        const dateRefStr = employee['date_dernier_conge'] || employee['date_embauche'];
+        if (dateRefStr) {
+            const dRef = new Date(dateRefStr);
+            const paieMois = parseInt(employee['mois'] || new Date().getMonth() + 1);
+            const paieAnnee = parseInt(employee['annee'] || new Date().getFullYear());
+            const dNow = new Date(paieAnnee, paieMois - 1, 1);
+            const diffMois = (dNow.getFullYear() - dRef.getFullYear()) * 12 + (dNow.getMonth() - dRef.getMonth());
+            if (diffMois > 0) {
+                joursConges = Math.min(30, Math.floor(diffMois * 2.2));
+            }
+        }
+    }
+
+    const joursTrav = Math.max(0, joursBasePaie - joursAbsences - joursConges);
+    const joursCP = joursConges;
+
+    const salaireBase = Math.round((salaireBaseMensuel / joursDansLeMois) * joursTrav);
+    const sursalaireTotal = parseFloat(employee['sursalaire'] || 0);
+    const sursalaire = Math.round((sursalaireTotal / joursDansLeMois) * joursTrav);
+
+    let ansAnciennete = 0;
+    let tauxAnciennete = 0;
+    let primeAnciennete = 0;
+    if (employee.date_embauche) {
+        const emb = new Date(employee.date_embauche);
+        const paieMois = parseInt(employee.mois || new Date().getMonth() + 1);
+        const paieAnnee = parseInt(employee.annee || new Date().getFullYear());
+        const paieDate = new Date(paieAnnee, paieMois - 1, 30);
+        ansAnciennete = Math.floor(Math.abs(paieDate - emb) / (1000 * 60 * 60 * 24 * 365.25));
+        if (ansAnciennete >= 2) {
+            tauxAnciennete = Math.min(5 + Math.floor((ansAnciennete - 2) / 3) * 2, 35);
+            primeAnciennete = Math.round(salaireBaseMensuel * (tauxAnciennete / 100));
+        }
+    }
+
+    const primeTransportMensuel = parseFloat(employee['prime_transport'] || 0);
+    const primeTransport = (employee['bulletin_type'] === 'conges') ? 0 : Math.round((primeTransportMensuel / joursBasePaie) * joursTrav);
+    const primeLogement = parseFloat(employee['prime_logement'] || 0);
+
+    const nbHeuresSup = parseFloat(employee['heures_sup_nb'] || 0);
+    const coefHS = parseFloat(employee['heures_sup_coef'] || 1.15);
+    const tauxHoraire = salaireBaseMensuel > 0 ? Math.round(salaireBaseMensuel / 173.33) : 0;
+    const montantHeuresSup = Math.round(nbHeuresSup * tauxHoraire * coefHS);
+
+    const primesList = Array.isArray(employee['primes']) ? employee['primes'] : [];
+    const primesImposables = primesList.filter(p => p.imposable).reduce((acc, p) => acc + (+p.montant || 0), 0);
+    const primesNonImposablesRub = primesList.filter(p => !p.imposable).reduce((acc, p) => acc + (+p.montant || 0), 0);
+    const gratification = parseFloat(employee['gratification'] || 0);
+
+    const salaireBrut = salaireBase + sursalaire + primeAnciennete + montantHeuresSup + primesImposables + gratification;
+    const brutImposable = salaireBrut + primeTransport + primeLogement;
+    const gainsTotaux = brutImposable + primesNonImposablesRub;
+
+    const plafondCNSS = 1500000;
+    const baseCNSS = Math.min(brutImposable, plafondCNSS);
+
+    const cnssSal = Math.round(baseCNSS * 0.04);
+    const inamSal = Math.round(baseCNSS * 0.05);
+    const totalSocialSalarial = cnssSal + inamSal;
+
+    const revenuApresCotisations = Math.max(0, brutImposable - totalSocialSalarial);
+    const revenuAnnuel = revenuApresCotisations * 12;
+    const abattementAnnuel = Math.min(revenuAnnuel, 10000000) * 0.28;
+    const abattementMensuel = Math.round(abattementAnnuel / 12);
+
+    const revenuNetImposableAnnuel = Math.max(0, revenuAnnuel - abattementAnnuel);
+    const revenuNetImposableMensuel = Math.round(revenuNetImposableAnnuel / 12);
+
+    const tranches = [
+        { plafond: 900000, taux: 0.00 },
+        { plafond: 3000000, taux: 0.03 },
+        { plafond: 6000000, taux: 0.10 },
+        { plafond: 9000000, taux: 0.15 },
+        { plafond: 12000000, taux: 0.20 },
+        { plafond: 15000000, taux: 0.25 },
+        { plafond: 20000000, taux: 0.30 },
+        { plafond: Infinity, taux: 0.35 }
+    ];
+
+    let irppAnnuel = 0;
+    let prec = 0;
+    for (const { plafond, taux } of tranches) {
+        if (revenuNetImposableAnnuel <= prec) break;
+        irppAnnuel += (Math.min(revenuNetImposableAnnuel, plafond) - prec) * taux;
+        prec = plafond;
+    }
+    const irppMensuel = Math.round(irppAnnuel / 12);
+
+    const cnssPat = Math.round(baseCNSS * 0.175);
+    const inamPat = Math.round(baseCNSS * 0.05);
+    const impotEmployeur = Math.round(brutImposable * 0.01);
+    const totalSocialEmployeur = cnssPat + inamPat;
+    const totalPatronal = totalSocialEmployeur + impotEmployeur;
+
+    const acompte = parseFloat(employee['acompte'] || 0);
+    const avance = parseFloat(employee['avance'] || 0);
+    const opposition = parseFloat(employee['opposition'] || 0);
+    const autres = parseFloat(employee['autres_retenues'] || 0);
+    const totalRetenuesDiverses = acompte + avance + opposition + autres;
+
+    const totalRetenues = totalSocialSalarial + irppMensuel + totalRetenuesDiverses;
+    const netAPayer = Math.max(0, gainsTotaux - totalRetenues);
+
+    return {
+        brut: salaireBrut, salaireBase, salaireBaseMensuel, sursalaire,
+        primeAnciennete, ansAnciennete, tauxAnciennete, ancienneteTxt: ansAnciennete + ' an(s)', allocationConges: 0, joursCP,
+        gratification, preavisVal: 0, indemLicenciement: 0, indemTransac: 0, fraisFuneraires: 0,
+        primesImposables, primesNonImposablesRub, montantHeuresSup, nbHeuresSup, coefHS, tauxHoraire,
+        primeTransport, primeLogement,
+        brutImposable, gainsTotaux, baseCNPS: baseCNSS, baseCNPS_PfAtAm: baseCNSS, parts: 0, totalPersonnesCMU: 0,
+        revenuApresCotisations, abattementMensuel, revenuNetImposableMensuel, totalRetenuesDiverses,
+        patronal: {
+            impotEmployeur, fdfpTA: 0, fdfpFPC: 0, totalFiscal: impotEmployeur,
+            cnpsPF: 0, cnpsAM: inamPat, cnpsAT: 0, cnpsRetraite: cnssPat, cmu: inamPat,
+            totalSocial: totalSocialEmployeur, grandTotal: totalPatronal
+        },
+        salarial: {
+            its: irppMensuel, irpp: irppMensuel, ricf: 0, baseITS: revenuNetImposableMensuel, baseIRPP: revenuNetImposableMensuel,
+            is: 0, cn: 0, igr: 0, cnps: cnssSal, inam: inamSal, cmu: inamSal,
+            acompte, avance, opposition, autres, total: totalRetenues, regime: '2026',
+            autresTaxes: []
+        },
+        netAPayer
+    };
+}
+
+function generateTogoPdfDefinition(employee, calc, companyInfo = {}) {
+    const GRAY_BORDER = '#cbd5e1';
+    const NAVY_HEADER = '#1e293b';
+
+    const company = {
+        nom: companyInfo.nom_entreprise || employee.nom_entreprise || "VOTRE ENTREPRISE",
+        adresse: companyInfo.adresse || employee.adresse || '',
+        cnps: companyInfo.numero_cnps || employee.numero_cnps || '____',
+        contribuable: companyInfo.numero_contribuable || employee.numero_contribuable || '____',
+        cc: companyInfo.numero_cc || employee.numero_cc || '____'
+    };
+
+    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+    const annee = parseInt(employee.annee || new Date().getFullYear());
+    const dernierJour = new Date(annee, moisNum, 0).getDate();
+    const moisNoms = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+    const moisNom = moisNoms[moisNum - 1];
+
+    const gainsBody = [
+        [
+            { text: 'RUBRIQUES DE GAINS (RÉMUNÉRATION)', fillColor: '#f8fafc', bold: true, fontSize: 8, color: '#334155', border: [false, true, false, true] },
+            { text: 'Base', fillColor: '#f8fafc', bold: true, alignment: 'right', fontSize: 8, color: '#334155', border: [false, true, false, true] },
+            { text: 'Taux', fillColor: '#f8fafc', bold: true, alignment: 'center', fontSize: 8, color: '#334155', border: [false, true, false, true] },
+            { text: 'Montant (FCFA)', fillColor: '#f8fafc', bold: true, alignment: 'right', fontSize: 8, color: '#334155', border: [false, true, false, true] }
+        ],
+        [
+            { text: '1. Salaire de base', fontSize: 8, border: [false, false, false, false] },
+            { text: '', border: [false, false, false, false] },
+            { text: '', border: [false, false, false, false] },
+            { text: fcfa(calc.salaireBase), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+        ]
+    ];
+
+    if (calc.primeAnciennete > 0) {
+        gainsBody.push([
+            { text: '2. Prime d\'ancienneté (' + calc.ansAnciennete + ' ans)', fontSize: 8, border: [false, false, false, false] },
+            { text: 'catégorie', alignment: 'right', fontSize: 8, border: [false, false, false, false] },
+            { text: (calc.tauxAnciennete || 0) + '%', alignment: 'center', fontSize: 8, border: [false, false, false, false] },
+            { text: fcfa(calc.primeAnciennete), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+        ]);
+    }
+
+    if (calc.montantHeuresSup > 0) {
+        gainsBody.push([
+            { text: '3. Heures supplémentaires', fontSize: 8, border: [false, false, false, false] },
+            { text: fcfa(calc.tauxHoraire), alignment: 'right', fontSize: 8, border: [false, false, false, false] },
+            { text: calc.nbHeuresSup + 'h', alignment: 'center', fontSize: 8, border: [false, false, false, false] },
+            { text: fcfa(calc.montantHeuresSup), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+        ]);
+    }
+
+    const totalPrimes = (calc.sursalaire || 0) + (calc.primesImposables || 0) + (calc.primesNonImposablesRub || 0);
+    if (totalPrimes > 0) {
+        gainsBody.push([
+            { text: '4. Primes (rendement, assiduité, etc.)', fontSize: 8, border: [false, false, false, false] },
+            { text: '', border: [false, false, false, false] },
+            { text: '', border: [false, false, false, false] },
+            { text: fcfa(totalPrimes), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+        ]);
+    }
+
+    const totalIndem = (calc.primeTransport || 0) + (calc.primeLogement || 0);
+    if (totalIndem > 0) {
+        gainsBody.push([
+            { text: '5. Indemnités (transport, logement)', fontSize: 8, border: [false, false, false, false] },
+            { text: '', border: [false, false, false, false] },
+            { text: '', border: [false, false, false, false] },
+            { text: fcfa(totalIndem), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+        ]);
+    }
+
+    gainsBody.push([
+        { text: 'TOTAL SALAIRE BRUT (A)', fillColor: '#f1f5f9', bold: true, fontSize: 8.5, border: [false, true, false, true], colSpan: 3 },
+        {}, {},
+        { text: fcfa(calc.gainsTotaux) + ' FCFA', fillColor: '#f1f5f9', bold: true, alignment: 'right', fontSize: 8.5, border: [false, true, false, true] }
+    ]);
+
+    const socialBody = [
+        [
+            { text: 'RETENUES SOCIALES SALARIALES', fillColor: '#f8fafc', bold: true, fontSize: 8, color: '#334155', border: [false, true, false, true] },
+            { text: 'Base', fillColor: '#f8fafc', bold: true, alignment: 'right', fontSize: 8, color: '#334155', border: [false, true, false, true] },
+            { text: 'Taux', fillColor: '#f8fafc', bold: true, alignment: 'center', fontSize: 8, color: '#334155', border: [false, true, false, true] },
+            { text: 'Montant (FCFA)', fillColor: '#f8fafc', bold: true, alignment: 'right', fontSize: 8, color: '#334155', border: [false, true, false, true] }
+        ],
+        [
+            { text: '1. CNSS – part salariale (Vieillesse, Invalidité)', fontSize: 8, border: [false, false, false, false] },
+            { text: '(A)', alignment: 'right', fontSize: 8, border: [false, false, false, false] },
+            { text: '4,0%', alignment: 'center', fontSize: 8, border: [false, false, false, false] },
+            { text: fcfa(calc.salarial.cnps), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+        ],
+        [
+            { text: '2. Assurance Maladie (INAM / AMU)', fontSize: 8, border: [false, false, false, false] },
+            { text: '(A)', alignment: 'right', fontSize: 8, border: [false, false, false, false] },
+            { text: '5,0%', alignment: 'center', fontSize: 8, border: [false, false, false, false] },
+            { text: fcfa(calc.salarial.inam || calc.salarial.cmu), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+        ],
+        [
+            { text: 'TOTAL COTISATIONS SOCIALES SALARIALES (B)', fillColor: '#f1f5f9', bold: true, fontSize: 8.5, border: [false, true, false, true], colSpan: 3 },
+            {}, {},
+            { text: fcfa(calc.salarial.cnps + (calc.salarial.inam || calc.salarial.cmu)) + ' FCFA', fillColor: '#f1f5f9', bold: true, alignment: 'right', fontSize: 8.5, border: [false, true, false, true] }
+        ],
+        [
+            { text: 'REVENU APRÈS COTISATIONS SOCIALES (C = A – B)', fillColor: '#f8fafc', bold: true, fontSize: 8.5, border: [false, false, false, true], colSpan: 3 },
+            {}, {},
+            { text: fcfa(calc.revenuApresCotisations) + ' FCFA', fillColor: '#f8fafc', bold: true, alignment: 'right', fontSize: 8.5, border: [false, false, false, true] }
+        ]
+    ];
+
+    const virementStr = employee.virement ? 'Virement bancaire' : 'Espèces';
+    const ribStr = (employee.virement && employee.rib) ? employee.rib : '';
+
+    return {
+        pageSize: 'A4',
+        pageMargins: [40, 35, 40, 35],
+        content: [
+            {
+                table: {
+                    widths: ['*'],
+                    body: [
+                        [
+                            {
+                                stack: [
+                                    { text: 'RÉPUBLIQUE TOGOLAISE', alignment: 'center', fontSize: 9, bold: true, color: '#475569' },
+                                    { text: company.nom.toUpperCase(), alignment: 'center', fontSize: 13, bold: true, color: NAVY_HEADER, margin: [0, 3, 0, 0] },
+                                    { text: company.adresse, alignment: 'center', fontSize: 8, color: '#64748b' },
+                                    { text: 'NIF : ' + company.contribuable + '   |   RCCM : ' + company.cc + '   |   Code CNSS : ' + company.cnps, alignment: 'center', fontSize: 7.5, color: '#475569', margin: [0, 4, 0, 0] }
+                                ],
+                                border: [false, false, false, true]
+                            }
+                        ]
+                    ]
+                },
+                layout: { hLineColor: function () { return GRAY_BORDER; } }
+            },
+
+            { text: 'BULLETIN DE PAIE', alignment: 'center', fontSize: 13, bold: true, color: NAVY_HEADER, margin: [0, 10, 0, 10] },
+
+            {
+                columns: [
+                    {
+                        stack: [
+                            { text: 'Période de paie : ' + moisNom + ' ' + annee, fontSize: 8.5, bold: true },
+                            { text: 'Date de paiement : ' + dernierJour + '/' + String(moisNum).padStart(2, '0') + '/' + annee, fontSize: 8, color: '#475569', margin: [0, 2, 0, 0] }
+                        ],
+                        width: '35%'
+                    },
+                    {
+                        stack: [
+                            { text: 'EMPLOYEUR :', fontSize: 8.5, bold: true, color: NAVY_HEADER },
+                            { text: company.nom, fontSize: 8, margin: [0, 2, 0, 0] }
+                        ],
+                        width: '30%'
+                    },
+                    {
+                        stack: [
+                            { text: 'SALARIÉ :', fontSize: 8.5, bold: true, color: NAVY_HEADER },
+                            { text: (employee.nom || '').toUpperCase() + ' ' + (employee.prenom || ''), fontSize: 8, bold: true, margin: [0, 2, 0, 0] },
+                            { text: 'Matricule : ' + (employee.matricule || '____') + '   |   N° CNSS : ' + (employee.num_secu || '____'), fontSize: 7.5, color: '#475569', margin: [0, 2, 0, 0] },
+                            { text: 'Fonction : ' + (employee.poste || '____'), fontSize: 7.5, color: '#475569', margin: [0, 1, 0, 0] }
+                        ],
+                        width: '35%'
+                    }
+                ]
+            },
+
+            { text: '', margin: [0, 8] },
+            { text: 'DÉTAIL DE LA RÉMUNÉRATION (TOGO)', fontSize: 9.5, bold: true, color: NAVY_HEADER, margin: [0, 0, 0, 4] },
+
+            {
+                table: { headerRows: 1, widths: ['50%', '15%', '15%', '20%'], body: gainsBody },
+                layout: { hLineWidth: function (i, node) { return (i === 0 || i === node.table.body.length) ? 1 : 0.5; }, vLineWidth: function () { return 0; }, hLineColor: function () { return GRAY_BORDER; } }
+            },
+
+            { text: '', margin: [0, 6] },
+
+            {
+                table: { headerRows: 1, widths: ['50%', '15%', '15%', '20%'], body: socialBody },
+                layout: { hLineWidth: function (i, node) { return (i === 0 || i === node.table.body.length) ? 1 : 0.5; }, vLineWidth: function () { return 0; }, hLineColor: function () { return GRAY_BORDER; } }
+            },
+
+            { text: '', margin: [0, 6] },
+
+            {
+                table: {
+                    headerRows: 1,
+                    widths: ['75%', '25%'],
+                    body: [
+                        [
+                            { text: 'IMPÔT SUR LE REVENU DES PERSONNES PHYSIQUES (IRPP)', fillColor: '#f8fafc', bold: true, fontSize: 8, color: '#334155', border: [false, true, false, true] },
+                            { text: 'Montant (FCFA)', fillColor: '#f8fafc', bold: true, alignment: 'right', fontSize: 8, color: '#334155', border: [false, true, false, true] }
+                        ],
+                        [
+                            { text: 'Revenu après cotisations sociales (C)', fontSize: 8, border: [false, false, false, false] },
+                            { text: fcfa(calc.revenuApresCotisations), alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+                        ],
+                        [
+                            { text: 'Moins : Abattement professionnel 28 % (plafonné)', fontSize: 8, border: [false, false, false, false] },
+                            { text: '- ' + fcfa(calc.abattementMensuel), alignment: 'right', fontSize: 8, color: '#dc2626', border: [false, false, false, false] }
+                        ],
+                        [
+                            { text: 'REVENU NET IMPOSABLE MENSUEL (D)', fontSize: 8, bold: true, border: [false, false, false, false] },
+                            { text: fcfa(calc.revenuNetImposableMensuel) + ' FCFA', alignment: 'right', bold: true, fontSize: 8, border: [false, false, false, false] }
+                        ],
+                        [
+                            { text: 'IRPP MENSUEL RETENU À LA SOURCE (E)', fillColor: '#f1f5f9', bold: true, fontSize: 8.5, border: [false, true, false, true] },
+                            { text: fcfa(calc.salarial.irpp || calc.salarial.its) + ' FCFA', fillColor: '#f1f5f9', bold: true, alignment: 'right', fontSize: 8.5, border: [false, true, false, true] }
+                        ]
+                    ]
+                },
+                layout: { hLineWidth: function (i, node) { return (i === 0 || i === node.table.body.length) ? 1 : 0.5; }, vLineWidth: function () { return 0; }, hLineColor: function () { return GRAY_BORDER; } }
+            },
+
+            { text: '', margin: [0, 8] },
+
+            {
+                table: {
+                    widths: ['75%', '25%'],
+                    body: [
+                        [
+                            { text: 'Salaire brut (A)', fontSize: 8, border: [false, false, false, false] },
+                            { text: fcfa(calc.gainsTotaux) + ' FCFA', alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+                        ],
+                        [
+                            { text: 'Moins : Cotisations sociales salariales (B)', fontSize: 8, border: [false, false, false, false] },
+                            { text: fcfa(calc.salarial.cnps + (calc.salarial.inam || calc.salarial.cmu)) + ' FCFA', alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+                        ],
+                        [
+                            { text: 'Moins : IRPP mensuel (E)', fontSize: 8, border: [false, false, false, false] },
+                            { text: fcfa(calc.salarial.irpp || calc.salarial.its) + ' FCFA', alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+                        ],
+                        (calc.totalRetenuesDiverses > 0 ? [
+                            { text: 'Moins : Autres retenues (F)', fontSize: 8, border: [false, false, false, false] },
+                            { text: fcfa(calc.totalRetenuesDiverses) + ' FCFA', alignment: 'right', fontSize: 8, border: [false, false, false, false] }
+                        ] : [{ text: '', colSpan: 2, border: [false, false, false, false] }, {}]),
+                        [
+                            { text: 'NET À PAYER (A – B – E – F)', fillColor: NAVY_HEADER, color: 'white', bold: true, fontSize: 9.5, margin: [4, 5, 4, 5], border: [false, false, false, false] },
+                            { text: fcfa(calc.netAPayer) + ' FCFA', fillColor: NAVY_HEADER, color: 'white', bold: true, fontSize: 9.5, alignment: 'right', margin: [4, 5, 4, 5], border: [false, false, false, false] }
+                        ]
+                    ]
+                },
+                layout: { hLineWidth: function () { return 0.5; }, vLineWidth: function () { return 0; }, hLineColor: function () { return GRAY_BORDER; } }
+            },
+
+            { text: '', margin: [0, 8] },
+
+            {
+                table: {
+                    widths: ['*'],
+                    body: [
+                        [
+                            {
+                                stack: [
+                                    { text: 'MODE DE PAIEMENT : ' + virementStr.toUpperCase(), fontSize: 8.5, bold: true, color: NAVY_HEADER },
+                                    (ribStr ? { text: 'Numéro de compte : ' + ribStr, fontSize: 8, color: '#475569', margin: [0, 2, 0, 0] } : {}),
+                                    { text: 'Arrêté le présent bulletin à la somme de : ' + fcfa(calc.netAPayer) + ' francs CFA.', fontSize: 8, italics: true, color: '#334155', margin: [0, 3, 0, 0] }
+                                ],
+                                border: [true, true, true, true],
+                                margin: [6, 6, 6, 6],
+                                fillColor: '#f8fafc'
+                            }
+                        ]
+                    ]
+                },
+                layout: { hLineColor: function () { return GRAY_BORDER; }, vLineColor: function () { return GRAY_BORDER; } }
+            },
+
+            { text: '', margin: [0, 10] },
+
+            {
+                columns: [
+                    {
+                        stack: [
+                            { text: 'Pour l\'employeur,', fontSize: 8.5, bold: true, color: NAVY_HEADER },
+                            { text: 'Nom et qualité :', fontSize: 7.5, color: '#64748b', margin: [0, 2, 0, 0] },
+                            { text: 'Signature et cachet :', fontSize: 7.5, color: '#64748b', margin: [0, 2, 0, 0] }
+                        ]
+                    },
+                    { text: '' },
+                    {
+                        stack: [
+                            { text: 'Lu et approuvé,', fontSize: 8.5, bold: true, color: NAVY_HEADER },
+                            { text: 'Le salarié,', fontSize: 7.5, color: '#64748b', margin: [0, 2, 0, 0] },
+                            { text: 'Nom et signature :', fontSize: 7.5, color: '#64748b', margin: [0, 2, 0, 0] }
+                        ]
+                    }
+                ]
+            }
+        ],
+        defaultStyle: { font: 'Roboto', fontSize: 8 }
+    };
+}
+
 exports.calculateSinglePayroll = (employee) => {
+    if (employee.pays === 'BJ') return calculateBeninSalaryRules(employee);
+    if (employee.pays === 'TG') return calculateTogoSalaryRules(employee);
     return calculateSalaryRules(employee);
 };
 
 /**
  * Génère un PDF individuel et retourne un Buffer
  */
-exports.generateSinglePdf = (employee, calculs, companyInfo = {}) => {
-    return new Promise((resolve, reject) => {
+exports.generateSinglePdf = (employee, calculs, companyInfo = {}, htmlTemplate = null) => {
+    return new Promise(async (resolve, reject) => {
         try {
+            if (htmlTemplate) {
+                if (!puppeteer) {
+                    return reject(new Error("puppeteer module not found. Run npm install puppeteer"));
+                }
+                const viewData = {
+                    ...employee,
+                    ...calculs,
+                    date_jour: new Date().toLocaleDateString(),
+                    nom_entreprise: (companyInfo.nom_entreprise || employee.nom_entreprise || 'ENTREPRISE').toUpperCase()
+                };
+                let html = htmlTemplate;
+                const formatFCFA = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+
+                for (const key of Object.keys(viewData)) {
+                    const val = viewData[key];
+                    const strVal = typeof val === 'number' ? formatFCFA(val) : (val || '');
+                    const regex = new RegExp(`{${key}}`, 'g');
+                    html = html.replace(regex, strVal);
+                }
+                html = html.replace(/{[^}]+}/g, '0');
+
+                const fullHtml = `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <script src="https://cdn.tailwindcss.com"></script>
+                    <style>
+                        body { font-family: sans-serif; background: white; font-size: 11px; line-height: 1.3; }
+                        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                        table { font-size: 11px; border-collapse: collapse; }
+                        td, th { padding: 2px 8px !important; }
+                    </style>
+                </head>
+                <body class="p-6">${html}</body>
+                </html>
+                `;
+
+                const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+                const page = await browser.newPage();
+                await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
+                const pdfBytes = await page.pdf({ format: 'A4', printBackground: true });
+                await browser.close();
+                
+                return resolve(Buffer.from(pdfBytes));
+            }
             const now = new Date();
             if (employee.mois) now.setMonth(parseInt(employee.mois) - 1);
             if (employee.annee) now.setFullYear(parseInt(employee.annee));
 
-            const docDefinition = generatePdfDefinition(employee, calculs, companyInfo);
+            let docDefinition;
+            if (employee.pays === 'BJ') {
+                docDefinition = generateBeninPdfDefinition(employee, calculs, companyInfo);
+            } else if (employee.pays === 'TG') {
+                docDefinition = generateTogoPdfDefinition(employee, calculs, companyInfo);
+            } else {
+                docDefinition = generatePdfDefinition(employee, calculs, companyInfo);
+            }
+
             const pdfDoc = printer.createPdfKitDocument(docDefinition);
             const chunks = [];
             pdfDoc.on('data', (chunk) => chunks.push(chunk));
@@ -642,9 +1684,56 @@ exports.generateSinglePdf = (employee, calculs, companyInfo = {}) => {
 /**
  * Génère le PDF du Solde de Tout Compte
  */
-exports.generateStcPdf = (employee, calculs) => {
-    return new Promise((resolve, reject) => {
+exports.generateStcPdf = (employee, calculs, htmlTemplate = null) => {
+    return new Promise(async (resolve, reject) => {
         try {
+            if (htmlTemplate) {
+                if (!puppeteer) {
+                    return reject(new Error("puppeteer module not found. Run npm install puppeteer"));
+                }
+                const viewData = {
+                    ...employee,
+                    ...calculs,
+                    date_jour: new Date().toLocaleDateString(),
+                    nom_entreprise: (employee.nom_entreprise || 'ENTREPRISE').toUpperCase()
+                };
+                let html = htmlTemplate;
+                const formatFCFA = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+
+                for (const key of Object.keys(viewData)) {
+                    const val = viewData[key];
+                    const strVal = typeof val === 'number' ? formatFCFA(val) : (val || '');
+                    const regex = new RegExp(`{${key}}`, 'g');
+                    html = html.replace(regex, strVal);
+                }
+                html = html.replace(/{[^}]+}/g, '0');
+
+                const fullHtml = `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <script src="https://cdn.tailwindcss.com"></script>
+                    <style>
+                        body { font-family: sans-serif; background: white; font-size: 11px; line-height: 1.3; }
+                        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                        table { font-size: 11px; border-collapse: collapse; }
+                        td, th { padding: 2px 8px !important; }
+                    </style>
+                </head>
+                <body class="p-6">${html}</body>
+                </html>
+                `;
+
+                const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+                const page = await browser.newPage();
+                await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
+                const pdfBytes = await page.pdf({ format: 'A4', printBackground: true });
+                await browser.close();
+                
+                return resolve(Buffer.from(pdfBytes));
+            }
+
             const emp = employee;
             const c = calculs;
 
@@ -822,6 +1911,139 @@ exports.generateStcPdf = (employee, calculs) => {
             pdfDoc.on('end', () => resolve(Buffer.concat(chunks)));
             pdfDoc.on('error', err => reject(err));
             pdfDoc.end();
+        } catch (e) { reject(e); }
+    });
+};
+
+// ─── processPayrollJson ────────────────────────────────────────────────────────
+
+exports.processPayrollJson = async (employeesList, outputPath, templatePath = null, mapping = null, htmlTemplate = null, country = 'CI') => {
+    return new Promise(async (resolve, reject) => {
+        try {
+            console.log(`[RH] Lecture depuis JSON (Base Locale)`);
+            if (!employeesList || employeesList.length === 0) return reject(new Error(`La liste des employés est vide`));
+
+            const firstEmp = employeesList[0] || {};
+            const companyInfo = {
+                nom_entreprise: firstEmp.nom_entreprise || 'Mon Entreprise',
+                adresse: firstEmp.adresse || '',
+                numero_cnps: firstEmp.numero_cnps || '',
+                numero_contribuable: firstEmp.numero_contribuable || '',
+            };
+
+            const fullEmployees = employeesList;
+
+            // Output init
+            const isDocxMode = !!templatePath && templatePath.toLowerCase().endsWith('.docx');
+            const isHtmlTemplateMode = !!htmlTemplate;
+            let docTemplateContent = null;
+            if (templatePath) docTemplateContent = fs.readFileSync(templatePath);
+
+            const output = fs.createWriteStream(outputPath);
+            const archive = archiver('zip', { zlib: { level: 9 } });
+            
+            let totalMasseSalariale = 0;
+            let totalCNPS = 0;
+            let totalImpots = 0;
+
+            output.on('close', () => resolve({ 
+                count: fullEmployees.length, 
+                type: isDocxMode ? 'docx' : 'pdf',
+                totalMasseSalariale,
+                totalCNPS,
+                totalImpots
+            }));
+            archive.on('error', (err) => reject(err));
+            archive.pipe(output);
+
+            const promises = [];
+            let browser = null;
+            if (isHtmlTemplateMode && puppeteer) {
+                browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+            }
+
+            for (const [index, emp] of fullEmployees.entries()) {
+                try {
+                    const calculs = exports.calculateSinglePayroll({ ...emp, pays: country });
+                    totalMasseSalariale += calculs.gainsTotaux || 0;
+                    totalCNPS += calculs.salarial.cnps || 0;
+                    totalImpots += calculs.salarial.irpp || calculs.salarial.its || 0;
+
+                    const moisNoms = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+                    const moisNom = moisNoms[parseInt(emp.mois || new Date().getMonth() + 1) - 1] || 'Mois';
+                    const annee = emp.annee || new Date().getFullYear();
+                    const entNom = (companyInfo.nom_entreprise || emp.nom_entreprise || 'ENTREPRISE').toUpperCase();
+                    const salNom = (emp.nom || `Employe${index}`).toUpperCase();
+                    const finalFileName = `BULLETIN DE PAIE - ${entNom} - ${salNom} - ${moisNom} ${annee}`;
+
+                    if (isHtmlTemplateMode) {
+                        const viewData = {
+                            ...emp,
+                            ...calculs,
+                            date_jour: new Date().toLocaleDateString(),
+                            nom_entreprise: entNom
+                        };
+                        promises.push((async () => {
+                            if (!puppeteer) throw new Error("puppeteer module not found. Run npm install puppeteer");
+                            let html = htmlTemplate;
+                            const formatFCFA = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+
+                            for (const key of Object.keys(viewData)) {
+                                const val = viewData[key];
+                                const strVal = typeof val === 'number' ? formatFCFA(val) : (val || '');
+                                const regex = new RegExp(`{${key}}`, 'g');
+                                html = html.replace(regex, strVal);
+                            }
+                            html = html.replace(/{[^}]+}/g, '0');
+
+                            const fullHtml = `
+                            <!DOCTYPE html>
+                            <html>
+                            <head>
+                                <meta charset="utf-8">
+                                <script src="https://cdn.tailwindcss.com"></script>
+                                <style>
+                                    body { font-family: sans-serif; background: white; font-size: 11px; line-height: 1.3; }
+                                    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                                    table { font-size: 11px; border-collapse: collapse; }
+                                    td, th { padding: 2px 8px !important; }
+                                </style>
+                            </head>
+                            <body class="p-6">${html}</body>
+                            </html>
+                            `;
+
+                            const page = await browser.newPage();
+                            await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
+                            const pdfBytes = await page.pdf({ format: 'A4', printBackground: true });
+                            await page.close();
+
+                            archive.append(Buffer.from(pdfBytes), { name: `${finalFileName}.pdf` });
+                        })());
+                    } else {
+                        const docDefinition = generatePdfDefinition(emp, calculs, companyInfo);
+                        const pdfDoc = printer.createPdfKitDocument(docDefinition);
+                        let chunks = [];
+                        pdfDoc.on('data', (chunk) => chunks.push(chunk));
+                        pdfDoc.on('end', () => {
+                            const result = Buffer.concat(chunks);
+                            archive.append(result, { name: `${finalFileName}.pdf` });
+                        });
+                        pdfDoc.end();
+                    }
+                } catch (err) {
+                    console.error("Error creating document for " + emp.nom, err);
+                }
+            } // end for
+
+            Promise.all(promises).then(async () => {
+                if (browser) await browser.close();
+                setTimeout(() => archive.finalize(), 500);
+            }).catch(async (err) => {
+                if (browser) await browser.close();
+                reject(err);
+            });
+
         } catch (e) { reject(e); }
     });
 };
