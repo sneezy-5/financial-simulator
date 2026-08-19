@@ -10,10 +10,13 @@ const bodyParser = require('body-parser');
 const http = require('http');
 const { Server } = require('socket.io');
 const { Sequelize } = require('sequelize');
-const { Visit, PayrollRequest, User, AdminUser, CreditPack, BankLoan, Transaction } = require('./database');
+const { Visit, PayrollRequest, User, AdminUser, SubscriptionPlan, BankLoan, Transaction, Invoice, License, PayrollPeriod, PayslipRecord } = require('./database');
 const payrollService = require('./payrollService');
 const aiService = require('./aiService');
 const emailService = require('./emailService');
+const billingService = require('./billingService');
+const invoiceService = require('./invoiceService');
+const licenseService = require('./licenseService');
 const XLSX = require('xlsx');
 
 let bcrypt, jwt;
@@ -163,18 +166,20 @@ app.post('/api/auth/register', async (req, res) => {
         // Generate a 6-digit OTP code (e.g. 123456)
         const verificationToken = Math.floor(100000 + Math.random() * 900000).toString();
 
-        const newUser = await User.create({ 
-            email, 
-            password: hashedPassword, 
-            credits: 5,
+        const newUser = await User.create({
+            email,
+            password: hashedPassword,
             verificationToken: verificationToken
         });
+
+        // Essai gratuit de 14 jours (niveau Starter) accordé automatiquement à l'inscription
+        const trialUser = await billingService.grantTrial(newUser.id);
 
         // Envoi de l'email de vérification (non bloquant)
         emailService.sendVerificationEmail(newUser.email, verificationToken).catch(console.error);
 
         const token = jwt.sign({ id: newUser.id, email: newUser.email, role: newUser.role }, JWT_SECRET, { expiresIn: '7d' });
-        res.json({ success: true, token, user: { id: newUser.id, email: newUser.email, credits: newUser.credits, role: newUser.role } });
+        res.json({ success: true, token, user: { id: newUser.id, email: newUser.email, subscriptionTier: trialUser.subscriptionTier, subscriptionExpiresAt: trialUser.subscriptionExpiresAt, subscriptionIsTrial: trialUser.subscriptionIsTrial, role: newUser.role } });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -196,7 +201,7 @@ app.post('/api/auth/login', async (req, res) => {
         if (!isMatch) return res.status(401).json({ error: "Identifiants incorrects" });
 
         const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-        res.json({ success: true, token, user: { id: user.id, email: user.email, credits: user.credits, role: user.role } });
+        res.json({ success: true, token, user: { id: user.id, email: user.email, subscriptionTier: user.subscriptionTier, subscriptionExpiresAt: user.subscriptionExpiresAt, subscriptionIsTrial: user.subscriptionIsTrial, role: user.role } });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -293,11 +298,13 @@ app.put('/api/auth/profile', authMiddleware, async (req, res) => {
         const user = await User.findByPk(req.user.id);
         if (!user) return res.status(404).json({ error: "Utilisateur introuvable" });
 
-        const { name, companyName, phone, accountType } = req.body;
+        const { name, companyName, phone, accountType, companyNumeroCnps, companyNumeroContribuable } = req.body;
         if (name !== undefined) user.name = name;
         if (companyName !== undefined) user.companyName = companyName;
         if (phone !== undefined) user.phone = phone;
         if (accountType !== undefined) user.accountType = accountType;
+        if (companyNumeroCnps !== undefined) user.companyNumeroCnps = companyNumeroCnps;
+        if (companyNumeroContribuable !== undefined) user.companyNumeroContribuable = companyNumeroContribuable;
 
         await user.save();
         const updatedUser = user.toJSON();
@@ -311,7 +318,7 @@ app.put('/api/auth/profile', authMiddleware, async (req, res) => {
 
 app.post('/api/billing/verify-paystack', authMiddleware, async (req, res) => {
     try {
-        const { reference, credits, amount } = req.body;
+        const { reference } = req.body;
         const userId = req.user.id;
 
         if (!reference) return res.status(400).json({ error: "Référence Paystack manquante." });
@@ -337,43 +344,59 @@ app.post('/api/billing/verify-paystack', authMiddleware, async (req, res) => {
         if (verifyData.status && verifyData.data.status === 'success') {
             // Le montant retourné par Paystack est en FCFA, car XOF est une devise sans décimales.
             const paystackAmount = verifyData.data.amount;
-            if (paystackAmount < amount) {
-                 return res.status(400).json({ error: "Montant payé insuffisant." });
+
+            // Le palier accordé est TOUJOURS dérivé du montant confirmé par Paystack,
+            // jamais d'une valeur envoyée par le client.
+            const plan = await billingService.resolvePlanByAmount(paystackAmount);
+            if (!plan) {
+                if (!existingTx) {
+                    await Transaction.create({ reference, amount: paystackAmount, credits: 0, status: 'failed', userId });
+                }
+                return res.status(400).json({ error: "Montant payé ne correspond à aucune offre d'abonnement active." });
             }
 
             // Enregistrer ou mettre à jour la transaction
             if (existingTx) {
                 existingTx.status = 'success';
+                existingTx.amount = paystackAmount;
+                existingTx.subscriptionTier = plan.code;
                 await existingTx.save();
             } else {
                 await Transaction.create({
                     reference,
                     amount: paystackAmount,
-                    credits,
+                    credits: 0,
+                    subscriptionTier: plan.code,
                     status: 'success',
                     userId
                 });
             }
 
-            // Ajouter les crédits
-            const user = await User.findByPk(userId);
-            user.credits += parseInt(credits) || 0;
-            await user.save();
+            const user = await billingService.grantSubscription(userId, plan);
+            const snapshot = billingService.getSubscriptionSnapshot(user, plan);
+            const message = `Abonnement ${plan.name} activé pour ${plan.billingCycle === 'annual' ? '12 mois' : '30 jours'} !`;
+
+            // Génération + envoi de la facture (non-bloquant)
+            invoiceService.createInvoiceForPayment({ userId, user, plan, amount: paystackAmount, reference })
+                .then(invoice => emailService.sendInvoiceEmail(user.email, {
+                    invoiceNumber: invoice.invoiceNumber,
+                    pdfPath: invoice.pdfPath,
+                    planName: plan.name,
+                    amount: paystackAmount
+                }))
+                .catch(err => console.error('❌ Erreur génération/envoi facture:', err));
 
             // Émettre l'événement de notification en temps réel
-            io.to(`user_${userId}`).emit('payment_success', {
-              credits: user.credits,
-              message: `${credits} crédits ajoutés avec succès !`
-            });
+            io.to(`user_${userId}`).emit('payment_success', { ...snapshot, message });
 
-            return res.json({ success: true, credits: user.credits, message: `${credits} crédits ajoutés avec succès !` });
+            return res.json({ success: true, ...snapshot, message });
         } else {
             // Transaction échouée ou invalide
             if (!existingTx) {
                  await Transaction.create({
                     reference,
-                    amount: amount || 0,
-                    credits: credits || 0,
+                    amount: verifyData?.data?.amount || 0,
+                    credits: 0,
                     status: 'failed',
                     userId
                 });
@@ -425,6 +448,29 @@ app.post('/api/billing/paystack/webhook', bodyParser.raw({ type: 'application/js
             const data = event.data;
             const reference = data.reference;
             const amountPaid = data.amount; // en centimes/unités Paystack
+            const chargeMetadata = data.metadata || {};
+
+            // Achat de licence entreprise en libre-service (site enterprise-site, pas de compte SaaS)
+            if (chargeMetadata.type === 'license') {
+                const { companyName, contactEmail } = chargeMetadata;
+                if (!companyName || !contactEmail) {
+                    console.warn(`⚠️ Webhook licence: métadonnées manquantes pour ${reference}`);
+                    return;
+                }
+                const result = await licenseService.createLicenseFromPayment({ reference, amountPaid, companyName, contactEmail });
+                if (result.alreadyProcessed) {
+                    console.log(`ℹ️ Webhook: licence déjà créée pour la référence ${reference}, ignorée.`);
+                    return;
+                }
+                if (!result.ok) {
+                    console.warn(`⚠️ Webhook licence: montant ${amountPaid} ne correspond pas au prix attendu (ref: ${reference})`);
+                    return;
+                }
+                console.log(`✅ Webhook: licence entreprise créée pour ${companyName} (ref: ${reference})`);
+                emailService.sendLicenseKeyEmail(contactEmail, { licenseKey: result.license.licenseKey, companyName })
+                    .catch(err => console.error('❌ Erreur envoi clé de licence (webhook):', err));
+                return;
+            }
 
             // Éviter le double traitement
             const existingTx = await Transaction.findOne({ where: { reference } });
@@ -433,13 +479,20 @@ app.post('/api/billing/paystack/webhook', bodyParser.raw({ type: 'application/js
                 return;
             }
 
-            // Extraire les métadonnées (userId, credits envoyés depuis le client)
+            // Extraire les métadonnées (userId envoyé depuis le client ; planCode informatif uniquement)
             const metadata = data.metadata || {};
             const userId = metadata.userId || (data.customer && data.customer.metadata && data.customer.metadata.userId);
-            const credits = parseInt(metadata.credits) || 0;
 
             if (!userId) {
                 console.warn(`⚠️ Webhook: userId manquant dans les métadonnées pour ${reference}`);
+                return;
+            }
+
+            // Le palier accordé est TOUJOURS dérivé du montant confirmé par Paystack,
+            // jamais des métadonnées client.
+            const plan = await billingService.resolvePlanByAmount(amountPaid);
+            if (!plan) {
+                console.warn(`⚠️ Webhook: montant ${amountPaid} ne correspond à aucune offre d'abonnement active (ref: ${reference})`);
                 return;
             }
 
@@ -447,30 +500,40 @@ app.post('/api/billing/paystack/webhook', bodyParser.raw({ type: 'application/js
             if (existingTx) {
                 existingTx.status = 'success';
                 existingTx.amount = amountPaid;
+                existingTx.subscriptionTier = plan.code;
                 await existingTx.save();
             } else {
                 await Transaction.create({
                     reference,
                     amount: amountPaid,
-                    credits,
+                    credits: 0,
+                    subscriptionTier: plan.code,
                     status: 'success',
                     userId
                 });
             }
 
-            // Créditer l'utilisateur
-            const user = await User.findByPk(userId);
+            // Activer l'abonnement de l'utilisateur
+            const user = await billingService.grantSubscription(userId, plan);
             if (user) {
-                user.credits += credits;
-                await user.save();
-                console.log(`✅ Webhook: ${credits} crédits ajoutés à l'utilisateur ${userId} (ref: ${reference})`);
+                console.log(`✅ Webhook: abonnement ${plan.name} activé pour l'utilisateur ${userId} (ref: ${reference})`);
+
+                // Génération + envoi de la facture (non-bloquant)
+                invoiceService.createInvoiceForPayment({ userId, user, plan, amount: amountPaid, reference })
+                    .then(invoice => emailService.sendInvoiceEmail(user.email, {
+                        invoiceNumber: invoice.invoiceNumber,
+                        pdfPath: invoice.pdfPath,
+                        planName: plan.name,
+                        amount: amountPaid
+                    }))
+                    .catch(err => console.error('❌ Erreur génération/envoi facture (webhook):', err));
 
                 // Notification temps réel via Socket.IO
+                const snapshot = billingService.getSubscriptionSnapshot(user, plan);
                 io.to(`user_${userId}`).emit('payment_success', {
-                    credits: user.credits,
-                    added: credits,
+                    ...snapshot,
                     reference,
-                    message: `${credits} crédits ajoutés via webhook Paystack !`
+                    message: `Abonnement ${plan.name} activé via webhook Paystack !`
                 });
             } else {
                 console.warn(`⚠️ Webhook: Utilisateur ${userId} introuvable`);
@@ -576,7 +639,7 @@ app.get('/api/admin/users', adminMiddleware, async (req, res) => {
 app.post('/api/admin/users', adminMiddleware, async (req, res) => {
     try {
         if (!bcrypt) throw new Error("bcrypt non installé");
-        const { email, password, credits } = req.body;
+        const { email, password } = req.body;
         if (!email || !password) return res.status(400).json({ error: "Email et mot de passe requis" });
 
         const existingUser = await User.findOne({ where: { email } });
@@ -586,30 +649,52 @@ app.post('/api/admin/users', adminMiddleware, async (req, res) => {
         const newUser = await User.create({
             email,
             password: hashedPassword,
-            credits: parseInt(credits) >= 0 ? parseInt(credits) : 50,
             emailVerified: true
         });
 
         res.json({
             success: true,
-            user: { id: newUser.id, email: newUser.email, credits: newUser.credits, role: newUser.role, createdAt: newUser.createdAt }
+            user: { id: newUser.id, email: newUser.email, subscriptionTier: newUser.subscriptionTier, subscriptionExpiresAt: newUser.subscriptionExpiresAt, role: newUser.role, createdAt: newUser.createdAt }
         });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-// PUT /api/admin/users/:id/credits - Ajustement manuel des crédits
-app.put('/api/admin/users/:id/credits', adminMiddleware, async (req, res) => {
+// PUT /api/admin/users/:id/subscription - Octroi/prolongation manuelle d'un abonnement
+// (ex : paiement Mobile Money reçu hors Paystack)
+app.put('/api/admin/users/:id/subscription', adminMiddleware, async (req, res) => {
     try {
-        const { credits } = req.body;
+        const { tier, days } = req.body;
         const targetUser = await User.findByPk(req.params.id);
         if (!targetUser) return res.status(404).json({ error: "Utilisateur non trouvé" });
 
-        targetUser.credits = Math.max(0, parseInt(credits) || 0);
+        if (!tier) {
+            // Désactivation manuelle de l'abonnement
+            targetUser.subscriptionTier = null;
+            targetUser.subscriptionExpiresAt = null;
+            targetUser.bulletinsUsed = 0;
+            targetUser.periodStartedAt = null;
+            await targetUser.save();
+            return res.json({ success: true, user: { id: targetUser.id, email: targetUser.email, subscriptionTier: null, subscriptionExpiresAt: null, bulletinsUsed: 0 } });
+        }
+
+        const plan = await billingService.getPlanByCode(tier);
+        if (!plan) return res.status(400).json({ error: "Palier d'abonnement inconnu." });
+
+        const durationDays = parseInt(days) > 0 ? parseInt(days) : 30;
+        const now = new Date();
+        targetUser.subscriptionTier = plan.tier || plan.code;
+        targetUser.subscriptionExpiresAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
+        targetUser.bulletinsUsed = 0;
+        targetUser.periodStartedAt = now;
+        targetUser.subscriptionIsTrial = false;
         await targetUser.save();
 
-        res.json({ success: true, user: { id: targetUser.id, email: targetUser.email, credits: targetUser.credits } });
+        res.json({
+            success: true,
+            user: { id: targetUser.id, email: targetUser.email, subscriptionTier: targetUser.subscriptionTier, subscriptionExpiresAt: targetUser.subscriptionExpiresAt, bulletinsUsed: targetUser.bulletinsUsed }
+        });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -640,6 +725,15 @@ app.delete('/api/admin/users/:id', adminMiddleware, async (req, res) => {
         const targetUser = await User.findByPk(req.params.id);
         if (!targetUser) return res.status(404).json({ error: "Utilisateur non trouvé" });
 
+        // Nettoyage manuel des associations pour SQLite
+        const periods = await PayrollPeriod.findAll({ where: { userId: targetUser.id } });
+        for (const p of periods) {
+            await PayslipRecord.destroy({ where: { periodId: p.id } });
+        }
+        await PayrollPeriod.destroy({ where: { userId: targetUser.id } });
+        await Transaction.destroy({ where: { userId: targetUser.id } });
+        await Invoice.destroy({ where: { userId: targetUser.id } });
+
         await targetUser.destroy();
         res.json({ success: true, message: `Utilisateur ${targetUser.email} supprimé avec succès.` });
     } catch (e) {
@@ -662,88 +756,265 @@ app.get('/api/admin/analytics/countries', adminMiddleware, async (req, res) => {
 });
 
 // ==========================================
-// ROUTES PUBLIQUES DES PACKS DE CRÉDITS
+// ROUTES PUBLIQUES DES FORMULES D'ABONNEMENT
 // ==========================================
 
-// GET /api/billing/packs - Liste des offres de crédits actives pour les clients
-app.get('/api/billing/packs', async (req, res) => {
+// GET /api/billing/plans - Liste des formules d'abonnement actives pour les clients
+app.get('/api/billing/plans', async (req, res) => {
     try {
-        const packs = await CreditPack.findAll({
-            where: { active: true },
-            order: [['price', 'ASC']]
+        const plans = await billingService.getActivePlans();
+        res.json({ success: true, plans });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// GET /api/billing/invoices - Factures de l'utilisateur connecté
+app.get('/api/billing/invoices', authMiddleware, async (req, res) => {
+    try {
+        const invoices = await Invoice.findAll({
+            where: { userId: req.user.id },
+            order: [['createdAt', 'DESC']]
         });
-        res.json({ success: true, packs });
+        res.json({ success: true, invoices });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// GET /api/billing/invoices/:id/download - Télécharger le PDF d'une facture (propriétaire uniquement)
+app.get('/api/billing/invoices/:id/download', authMiddleware, async (req, res) => {
+    try {
+        const invoice = await Invoice.findByPk(req.params.id);
+        if (!invoice || invoice.userId !== req.user.id) {
+            return res.status(404).json({ error: "Facture introuvable" });
+        }
+        if (!invoice.pdfPath || !fs.existsSync(invoice.pdfPath)) {
+            return res.status(404).json({ error: "Fichier de facture introuvable" });
+        }
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${invoice.invoiceNumber}.pdf"`);
+        fs.createReadStream(invoice.pdfPath).pipe(res);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
 // ==========================================
-// ROUTES ADMIN DES PACKS DE CRÉDITS (CRUD TARIFS)
+// ROUTES ADMIN DES FORMULES D'ABONNEMENT (CRUD TARIFS)
 // ==========================================
 
-// GET /api/admin/credit-packs - Obtenir la liste complète des packs (Admin)
-app.get('/api/admin/credit-packs', adminMiddleware, async (req, res) => {
+// GET /api/admin/subscription-plans - Obtenir la liste complète des formules (Admin)
+app.get('/api/admin/subscription-plans', adminMiddleware, async (req, res) => {
     try {
-        const packs = await CreditPack.findAll({
+        const plans = await SubscriptionPlan.findAll({
             order: [['price', 'ASC']]
         });
-        res.json({ success: true, packs });
+        res.json({ success: true, plans });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-// POST /api/admin/credit-packs - Créer une nouvelle offre / pack de crédits
-app.post('/api/admin/credit-packs', adminMiddleware, async (req, res) => {
+// POST /api/admin/subscription-plans - Créer une nouvelle formule d'abonnement
+app.post('/api/admin/subscription-plans', adminMiddleware, async (req, res) => {
     try {
-        const { name, credits, price, popular, active } = req.body;
-        if (!name || !credits || !price) {
-            return res.status(400).json({ error: "Nom, quantité de crédits et prix requis" });
+        const { code, tier, billingCycle, name, bulletinLimit, price, popular, active } = req.body;
+        if (!code || !name || !bulletinLimit || !price) {
+            return res.status(400).json({ error: "Code, nom, volume de bulletins et prix requis" });
         }
 
-        const newPack = await CreditPack.create({
+        const newPlan = await SubscriptionPlan.create({
+            code,
+            tier: tier || code,
+            billingCycle: billingCycle || 'monthly',
             name,
-            credits: parseInt(credits),
+            bulletinLimit: parseInt(bulletinLimit),
             price: parseInt(price),
             popular: Boolean(popular),
             active: active !== undefined ? Boolean(active) : true
         });
 
-        res.json({ success: true, pack: newPack, message: "Pack de crédits créé avec succès !" });
+        res.json({ success: true, plan: newPlan, message: "Formule d'abonnement créée avec succès !" });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-// PUT /api/admin/credit-packs/:id - Modifier un pack de crédits
-app.put('/api/admin/credit-packs/:id', adminMiddleware, async (req, res) => {
+// PUT /api/admin/subscription-plans/:id - Modifier une formule d'abonnement
+app.put('/api/admin/subscription-plans/:id', adminMiddleware, async (req, res) => {
     try {
-        const pack = await CreditPack.findByPk(req.params.id);
-        if (!pack) return res.status(404).json({ error: "Pack de crédits introuvable" });
+        const plan = await SubscriptionPlan.findByPk(req.params.id);
+        if (!plan) return res.status(404).json({ error: "Formule d'abonnement introuvable" });
 
-        const { name, credits, price, popular, active } = req.body;
-        if (name !== undefined) pack.name = name;
-        if (credits !== undefined) pack.credits = parseInt(credits);
-        if (price !== undefined) pack.price = parseInt(price);
-        if (popular !== undefined) pack.popular = Boolean(popular);
-        if (active !== undefined) pack.active = Boolean(active);
+        const { code, tier, billingCycle, name, bulletinLimit, price, popular, active } = req.body;
+        if (code !== undefined) plan.code = code;
+        if (tier !== undefined) plan.tier = tier;
+        if (billingCycle !== undefined) plan.billingCycle = billingCycle;
+        if (name !== undefined) plan.name = name;
+        if (bulletinLimit !== undefined) plan.bulletinLimit = parseInt(bulletinLimit);
+        if (price !== undefined) plan.price = parseInt(price);
+        if (popular !== undefined) plan.popular = Boolean(popular);
+        if (active !== undefined) plan.active = Boolean(active);
 
-        await pack.save();
-        res.json({ success: true, pack, message: "Pack mis à jour avec succès !" });
+        await plan.save();
+        res.json({ success: true, plan, message: "Formule mise à jour avec succès !" });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-// DELETE /api/admin/credit-packs/:id - Supprimer un pack de crédits
-app.delete('/api/admin/credit-packs/:id', adminMiddleware, async (req, res) => {
+// DELETE /api/admin/subscription-plans/:id - Supprimer une formule d'abonnement
+app.delete('/api/admin/subscription-plans/:id', adminMiddleware, async (req, res) => {
     try {
-        const pack = await CreditPack.findByPk(req.params.id);
-        if (!pack) return res.status(404).json({ error: "Pack de crédits introuvable" });
+        const plan = await SubscriptionPlan.findByPk(req.params.id);
+        if (!plan) return res.status(404).json({ error: "Formule d'abonnement introuvable" });
 
-        await pack.destroy();
-        res.json({ success: true, message: "Pack de crédits supprimé." });
+        await plan.destroy();
+        res.json({ success: true, message: "Formule d'abonnement supprimée." });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ==========================================
+// LICENCES ENTREPRISE (Édition installable)
+// ==========================================
+
+// POST /api/licenses/activate - Active une licence sur une installation (première utilisation)
+app.post('/api/licenses/activate', async (req, res) => {
+    try {
+        const { licenseKey, installationId } = req.body;
+        const result = await licenseService.activateLicense(licenseKey, installationId);
+        if (!result.ok) return res.status(400).json({ error: result.message, reason: result.reason });
+        res.json({ success: true, token: result.token, expiresAt: result.expiresAt });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/licenses/verify - Revérification périodique d'une licence déjà activée
+app.post('/api/licenses/verify', async (req, res) => {
+    try {
+        const { licenseKey, installationId } = req.body;
+        const result = await licenseService.verifyLicense(licenseKey, installationId);
+        if (!result.ok) return res.status(400).json({ error: result.message, reason: result.reason });
+        res.json({ success: true, token: result.token, expiresAt: result.expiresAt });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/enterprise/licenses/verify-paystack - Achat en libre-service d'une licence entreprise
+// (aucune auth : le site enterprise-site est déployé séparément, sans compte SaaS)
+app.post('/api/enterprise/licenses/verify-paystack', async (req, res) => {
+    try {
+        const { reference, companyName, contactEmail } = req.body;
+        if (!reference || !companyName || !contactEmail) {
+            return res.status(400).json({ error: "Référence de paiement, nom de l'entreprise et email requis." });
+        }
+
+        const paystackSecret = process.env.PAYSTACK_SECRET_KEY;
+        if (!paystackSecret) return res.status(500).json({ error: "Clé secrète Paystack non configurée côté serveur." });
+
+        const verifyRes = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${paystackSecret}` }
+        });
+        const verifyData = await verifyRes.json();
+
+        if (!(verifyData.status && verifyData.data.status === 'success')) {
+            return res.status(400).json({ error: "Paiement échoué ou non validé par Paystack." });
+        }
+
+        const result = await licenseService.createLicenseFromPayment({
+            reference,
+            amountPaid: verifyData.data.amount,
+            companyName,
+            contactEmail
+        });
+
+        if (result.alreadyProcessed) {
+            return res.json({ success: true, licenseKey: result.license.licenseKey, message: "Licence déjà activée pour ce paiement." });
+        }
+        if (!result.ok) {
+            return res.status(400).json({ error: "Montant payé ne correspond pas au prix de la licence entreprise." });
+        }
+
+        emailService.sendLicenseKeyEmail(contactEmail, { licenseKey: result.license.licenseKey, companyName })
+            .catch(err => console.error('❌ Erreur envoi clé de licence:', err));
+
+        res.json({ success: true, licenseKey: result.license.licenseKey, message: "Licence activée ! Votre clé a également été envoyée par email." });
+    } catch (e) {
+        console.error('Erreur achat licence entreprise:', e);
+        res.status(500).json({ error: "Erreur lors de la vérification du paiement." });
+    }
+});
+
+// GET /api/admin/licenses - Liste des licences entreprise (Admin)
+app.get('/api/admin/licenses', adminMiddleware, async (req, res) => {
+    try {
+        const licenses = await License.findAll({ order: [['createdAt', 'DESC']] });
+        res.json({ success: true, licenses });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/admin/licenses - Créer une nouvelle licence (la clé n'est retournée qu'une fois)
+app.post('/api/admin/licenses', adminMiddleware, async (req, res) => {
+    try {
+        const { companyName, contactEmail, expiresAt, price, notes } = req.body;
+        if (!companyName) return res.status(400).json({ error: "Nom de l'entreprise requis" });
+
+        const license = await License.create({
+            licenseKey: licenseService.generateLicenseKey(),
+            companyName,
+            contactEmail: contactEmail || null,
+            expiresAt: expiresAt || null,
+            price: price !== undefined ? parseInt(price) : 500000,
+            notes: notes || null
+        });
+
+        res.json({ success: true, license, message: "Licence créée avec succès. Transmettez la clé à l'entreprise." });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// PUT /api/admin/licenses/:id - Modifier une licence (prolonger, révoquer, réinitialiser l'activation)
+app.put('/api/admin/licenses/:id', adminMiddleware, async (req, res) => {
+    try {
+        const license = await License.findByPk(req.params.id);
+        if (!license) return res.status(404).json({ error: "Licence introuvable" });
+
+        const { companyName, contactEmail, status, expiresAt, price, notes, resetActivation } = req.body;
+        if (companyName !== undefined) license.companyName = companyName;
+        if (contactEmail !== undefined) license.contactEmail = contactEmail;
+        if (status !== undefined) license.status = status;
+        if (expiresAt !== undefined) license.expiresAt = expiresAt || null;
+        if (price !== undefined) license.price = parseInt(price);
+        if (notes !== undefined) license.notes = notes;
+        if (resetActivation) {
+            license.installationId = null;
+            license.activatedAt = null;
+        }
+
+        await license.save();
+        res.json({ success: true, license, message: "Licence mise à jour avec succès !" });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// DELETE /api/admin/licenses/:id - Supprimer une licence
+app.delete('/api/admin/licenses/:id', adminMiddleware, async (req, res) => {
+    try {
+        const license = await License.findByPk(req.params.id);
+        if (!license) return res.status(404).json({ error: "Licence introuvable" });
+
+        await license.destroy();
+        res.json({ success: true, message: "Licence supprimée." });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -860,9 +1131,12 @@ app.post('/api/rh/extract-headers', upload.single('file'), (req, res) => {
 
         const workbook = XLSX.readFile(req.file.path);
 
-        let sheetName = workbook.SheetNames.find(n =>
-            n.toUpperCase() === 'EMPLOYES' || n.toUpperCase() === 'EMPLOYÉS'
-        ) || workbook.SheetNames[0];
+        const requestedSheet = req.body.sheetName;
+        let sheetName = (requestedSheet && workbook.SheetNames.includes(requestedSheet))
+            ? requestedSheet
+            : (workbook.SheetNames.find(n =>
+                n.toUpperCase() === 'EMPLOYES' || n.toUpperCase() === 'EMPLOYÉS'
+            ) || workbook.SheetNames[0]);
 
         const sheet = workbook.Sheets[sheetName];
         if (!sheet) {
@@ -876,11 +1150,11 @@ app.post('/api/rh/extract-headers', upload.single('file'), (req, res) => {
 
         const headers = data[0].filter(h => h && typeof h === 'string' && h.trim() !== '');
 
-        // Nettoyage du fichier temporaire si souhaité, mais on le garde pour plus tard ? 
+        // Nettoyage du fichier temporaire si souhaité, mais on le garde pour plus tard ?
         // Non, on forcera le frontend à renvoyer le fichier au final, c'est plus simple.
         fs.unlinkSync(req.file.path);
 
-        res.json({ success: true, headers });
+        res.json({ success: true, headers, sheetNames: workbook.SheetNames, selectedSheet: sheetName });
     } catch (error) {
         console.error("Erreur extraction en-têtes:", error);
         res.status(500).json({ error: error.message || "Erreur de lecture du fichier" });
@@ -915,6 +1189,22 @@ app.post('/api/rh/extract-data', upload.single('file'), (req, res) => {
     }
 });
 
+// POST /api/rh/smart-mapping - Suggestions de mapping de colonnes par IA (en overlay du mapping
+// par mots-clés déjà calculé côté frontend ; ne bloque jamais l'import en cas d'échec)
+app.post('/api/rh/smart-mapping', authMiddleware, async (req, res) => {
+    try {
+        const { headers, fields } = req.body;
+        if (!Array.isArray(headers) || headers.length === 0 || !Array.isArray(fields) || fields.length === 0) {
+            return res.status(400).json({ error: "En-têtes et champs standards requis." });
+        }
+        const mapping = await aiService.suggestColumnMapping(headers, fields);
+        res.json({ success: true, mapping });
+    } catch (e) {
+        console.error('Erreur smart mapping IA:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 const cpUpload = upload.fields([
     { name: 'file', maxCount: 1 },
     { name: 'template', maxCount: 1 }
@@ -925,11 +1215,17 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
         const dataFile = req.files['file'] ? req.files['file'][0] : null;
         const templateFile = req.files['template'] ? req.files['template'][0] : null;
         const mapping = req.body.mapping ? JSON.parse(req.body.mapping) : null;
+        const sheetName = req.body.sheetName || null;
         const htmlTemplate = req.body.htmlTemplate ? req.body.htmlTemplate : null;
-        
+        const country = req.body.country || 'CI';
+        const mois = parseInt(req.body.mois) || (new Date().getMonth() + 1);
+        const annee = parseInt(req.body.annee) || new Date().getFullYear();
+
         console.log("RAW body employeesData:", req.body.employeesData ? req.body.employeesData.substring(0, 100) + '...' : null);
         const employeesData = req.body.employeesData ? JSON.parse(req.body.employeesData) : null;
         console.log("Parsed employeesData is Array?", Array.isArray(employeesData), "Length:", employeesData ? employeesData.length : 0);
+
+        const leavesToProcess = req.body.leavesToProcess ? JSON.parse(req.body.leavesToProcess) : [];
 
         if (!dataFile && !employeesData) {
             return res.status(400).json({ error: "Aucune donnée fournie (fichier Excel ou JSON manquant)" });
@@ -969,15 +1265,17 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
         if (dataFile) {
             try {
                 const workbook = XLSX.readFile(finalDataPath);
-                let employesSheetName = workbook.SheetNames.find(n =>
-                    n.toUpperCase() === 'EMPLOYES' ||
-                    n.toUpperCase() === 'EMPLOYÉS'
-                ) || (workbook.SheetNames.length === 1 ? workbook.SheetNames[0] : null);
+                let employesSheetName = (sheetName && workbook.SheetNames.includes(sheetName))
+                    ? sheetName
+                    : (workbook.SheetNames.find(n =>
+                        n.toUpperCase() === 'EMPLOYES' ||
+                        n.toUpperCase() === 'EMPLOYÉS'
+                    ) || (workbook.SheetNames.length === 1 ? workbook.SheetNames[0] : null));
 
                 if (!employesSheetName) {
                     if (finalDataPath && fs.existsSync(finalDataPath)) fs.unlinkSync(finalDataPath);
                     if (finalTemplatePath && fs.existsSync(finalTemplatePath)) fs.unlinkSync(finalTemplatePath);
-                    return res.status(400).json({ error: "Feuille 'EMPLOYES' introuvable dans le fichier Excel." });
+                    return res.status(400).json({ error: "Feuille employés introuvable dans le fichier Excel. Veuillez sélectionner la feuille contenant vos employés." });
                 }
                 const employesList = XLSX.utils.sheet_to_json(workbook.Sheets[employesSheetName]);
                 employeeCount = employesList.length;
@@ -996,11 +1294,29 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
             return res.status(400).json({ error: "Aucun employé trouvé pour la génération." });
         }
 
-        const requiredCredits = employeeCount * 5;
-        if (userObj.credits < requiredCredits) {
+        const plan = await billingService.getPlanByCode(userObj.subscriptionTier);
+        const quotaCheck = billingService.checkQuota(userObj, plan, employeeCount);
+        if (!quotaCheck.ok) {
             if (finalDataPath && fs.existsSync(finalDataPath)) fs.unlinkSync(finalDataPath);
             if (finalTemplatePath && fs.existsSync(finalTemplatePath)) fs.unlinkSync(finalTemplatePath);
-            return res.status(402).json({ error: `Crédits insuffisants. Il vous faut ${requiredCredits} crédits pour générer ${employeeCount} bulletins de paie (5 crédits par bulletin). Solde actuel : ${userObj.credits} crédits.` });
+            return res.status(402).json({
+                error: billingService.quotaErrorMessage(quotaCheck.reason, { plan, user: userObj, countNeeded: employeeCount }),
+                reason: quotaCheck.reason,
+                employeeCount,
+                ...billingService.getSubscriptionSnapshot(userObj, plan)
+            });
+        }
+
+        // Historique de paie (fondation des futures déclarations CNPS/ITS/CMU) : la période est
+        // validée dès sa première génération — pas d'étape de confirmation manuelle séparée — et
+        // reste régénérable à volonté pour permettre de corriger une erreur de saisie.
+        let period = await PayrollPeriod.findOne({ where: { userId: userObj.id, mois, annee, country } });
+        if (!period) {
+            period = await PayrollPeriod.create({ userId: userObj.id, mois, annee, country, status: 'validated', validatedAt: new Date() });
+        } else if (period.status !== 'validated') {
+            period.status = 'validated';
+            period.validatedAt = new Date();
+            await period.save();
         }
 
         const payrollReq = await PayrollRequest.create({
@@ -1011,7 +1327,6 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
         const zipFilename = `bulletins_${payrollReq.id}_${Date.now()}.zip`;
         const zipPath = path.join(__dirname, 'uploads', zipFilename);
 
-        const country = req.body.country || 'CI';
         console.log(`🚀 Démarrage traitement RH (${country}) pour: ${dataFile ? dataFile.originalname : 'Données locales'}`);
 
         let result;
@@ -1022,7 +1337,8 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
                 finalTemplatePath,
                 mapping,
                 htmlTemplate,
-                country
+                country,
+                leavesToProcess
              );
         } else {
              result = await payrollService.processPayrollFile(
@@ -1031,7 +1347,9 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
                 finalTemplatePath,
                 mapping,
                 htmlTemplate,
-                country
+                country,
+                sheetName,
+                leavesToProcess
              );
         }
 
@@ -1040,18 +1358,33 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
             employeeCount: result.count
         });
 
-        // Déduction des crédits après traitement réussi
-        userObj.credits = Math.max(0, userObj.credits - requiredCredits);
+        // Remplace les bulletins précédents de cette période (régénération idempotente)
+        await PayslipRecord.destroy({ where: { periodId: period.id } });
+        if (result.perEmployeeResults && result.perEmployeeResults.length > 0) {
+            await PayslipRecord.bulkCreate(
+                result.perEmployeeResults.map(r => ({ ...r, periodId: period.id }))
+            );
+        }
+
+        // Incrémentation du quota consommé ou décrémentation des crédits
+        if (quotaCheck.useCredits) {
+            userObj.credits -= result.count;
+        } else {
+            userObj.bulletinsUsed = (userObj.bulletinsUsed || 0) + result.count;
+        }
         await userObj.save();
 
-        console.log(`✅ ${result.count} bulletins (${result.type}) générés. ${requiredCredits} crédits consommés.`);
+        console.log(`✅ ${result.count} bulletins (${result.type}) générés.`);
 
         res.json({
             success: true,
             message: `${result.count} bulletins générés (${result.type}) !`,
             jobId: payrollReq.id,
             zipUrl: `/api/rh/download/${zipFilename}`,
-            creditsRemaining: userObj.credits,
+            periodId: period.id,
+            periodStatus: period.status,
+            leavesProcessed: leavesToProcess,
+            ...billingService.getSubscriptionSnapshot(userObj, plan),
             stats: {
                 employeeCount: result.count,
                 totalMasseSalariale: result.totalMasseSalariale,
@@ -1066,6 +1399,255 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
     }
 });
 
+// ─── Périodes de paie (historique + validation — fondation des futures déclarations) ──────
+
+// GET /api/rh/periods - Liste des périodes de l'utilisateur connecté
+app.get('/api/rh/periods', authMiddleware, async (req, res) => {
+    try {
+        const periods = await PayrollPeriod.findAll({
+            where: { userId: req.user.id },
+            order: [['annee', 'DESC'], ['mois', 'DESC']]
+        });
+        const periodsWithCount = await Promise.all(periods.map(async (p) => {
+            const employeeCount = await PayslipRecord.count({ where: { periodId: p.id } });
+            return { ...p.toJSON(), employeeCount };
+        }));
+        res.json({ success: true, periods: periodsWithCount });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// GET /api/rh/periods/:id - Détail d'une période + ses bulletins enregistrés
+app.get('/api/rh/periods/:id', authMiddleware, async (req, res) => {
+    try {
+        const period = await PayrollPeriod.findByPk(req.params.id);
+        if (!period || period.userId !== req.user.id) {
+            return res.status(404).json({ error: "Période introuvable" });
+        }
+        const records = await PayslipRecord.findAll({ where: { periodId: period.id } });
+        res.json({ success: true, period, records });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Résout une plage de période (mois/année début → mois/année fin) depuis les query params,
+// avec repli sur l'année civile en cours si rien n'est fourni (comportement par défaut inchangé).
+// Filtre en mémoire via un index linéaire mois/année plutôt qu'en SQL, pour gérer simplement une
+// plage à cheval sur plusieurs années.
+function resolvePeriodRange(req) {
+    const now = new Date();
+    const debutMois = parseInt(req.query.debutMois) || 1;
+    const debutAnnee = parseInt(req.query.debutAnnee) || now.getFullYear();
+    const finMois = parseInt(req.query.finMois) || 12;
+    const finAnnee = parseInt(req.query.finAnnee) || now.getFullYear();
+    return {
+        debutMois, debutAnnee, finMois, finAnnee,
+        debutIdx: debutAnnee * 12 + debutMois,
+        finIdx: finAnnee * 12 + finMois
+    };
+}
+
+// GET /api/rh/employees/:matricule/stats - Statistiques d'un employé sur une plage de période
+// (absences, heures supp, rémunération) agrégées à partir de l'historique de paie.
+app.get('/api/rh/employees/:matricule/stats', authMiddleware, async (req, res) => {
+    try {
+        const matricule = req.params.matricule;
+        const range = resolvePeriodRange(req);
+
+        const allPeriods = await PayrollPeriod.findAll({
+            where: { userId: req.user.id },
+            order: [['annee', 'ASC'], ['mois', 'ASC']]
+        });
+        const periods = allPeriods.filter(p => {
+            const idx = p.annee * 12 + p.mois;
+            return idx >= range.debutIdx && idx <= range.finIdx;
+        });
+
+        const monthly = [];
+        let totalAbsences = 0;
+        let totalHeuresSup = 0;
+        let totalBrut = 0;
+        let moisAvecDonnees = 0;
+
+        for (const period of periods) {
+            const record = await PayslipRecord.findOne({ where: { periodId: period.id, matricule } });
+            if (record) {
+                monthly.push({
+                    mois: period.mois,
+                    annee: period.annee,
+                    absencesJours: record.absencesJours || 0,
+                    heuresSupNb: record.heuresSupNb || 0,
+                    joursTravailles: record.joursTravailles || 0,
+                    brutTotal: record.brutTotal || 0,
+                    netAPayer: record.netAPayer || 0
+                });
+                totalAbsences += record.absencesJours || 0;
+                totalHeuresSup += record.heuresSupNb || 0;
+                totalBrut += record.brutTotal || 0;
+                moisAvecDonnees++;
+            }
+        }
+
+        res.json({
+            success: true,
+            matricule,
+            debutMois: range.debutMois,
+            debutAnnee: range.debutAnnee,
+            finMois: range.finMois,
+            finAnnee: range.finAnnee,
+            monthly,
+            totals: {
+                totalAbsences,
+                totalHeuresSup,
+                brutMoyen: moisAvecDonnees > 0 ? Math.round(totalBrut / moisAvecDonnees) : 0,
+                moisAvecDonnees
+            }
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// GET /api/rh/analytics/company - Analytique RH entreprise (masse salariale, charges patronales,
+// absentéisme, coût des heures sup, répartition par poste) agrégée sur une plage de période pour
+// tous les employés — fondation du dashboard "SLA RH" (au-dessus des stats par employé).
+app.get('/api/rh/analytics/company', authMiddleware, async (req, res) => {
+    try {
+        const range = resolvePeriodRange(req);
+
+        const allPeriods = await PayrollPeriod.findAll({
+            where: { userId: req.user.id },
+            order: [['annee', 'ASC'], ['mois', 'ASC']]
+        });
+        const periods = allPeriods.filter(p => {
+            const idx = p.annee * 12 + p.mois;
+            return idx >= range.debutIdx && idx <= range.finIdx;
+        });
+
+        const monthly = [];
+        const posteMap = {}; // poste -> { sumBrut, count, min, max, matricules: Set }
+        const employeeMap = {}; // matricule -> { nom, prenom, poste, totalAbsenceDays, spellsCount, totalHeuresSup }
+
+        let masseSalarialeAnnuelle = 0;
+        let masseSalarialeNetteAnnuelle = 0;
+        let chargesPatronalesAnnuelles = 0;
+        let montantHeuresSupAnnuel = 0;
+        let totalAbsencesAnnuel = 0;
+        let totalJoursTravaillesAnnuel = 0;
+        let moisAvecDonnees = 0;
+
+        for (const period of periods) {
+            const records = await PayslipRecord.findAll({ where: { periodId: period.id } });
+            if (records.length === 0) continue;
+
+            let masseSalarialeBrute = 0;
+            let masseSalarialeNette = 0;
+            let chargesPatronales = 0;
+            let montantHeuresSupMois = 0;
+            let absencesJoursMois = 0;
+            let joursTravaillesMois = 0;
+
+            for (const r of records) {
+                const brut = r.brutTotal || 0;
+                const charges = (r.cnpsPF || 0) + (r.cnpsAM || 0) + (r.cnpsAT || 0) + (r.cnpsRetraitePat || 0) + (r.cmuPat || 0);
+
+                masseSalarialeBrute += brut;
+                masseSalarialeNette += r.netAPayer || 0;
+                chargesPatronales += charges;
+                montantHeuresSupMois += r.montantHeuresSup || 0;
+                absencesJoursMois += r.absencesJours || 0;
+                joursTravaillesMois += r.joursTravailles || 0;
+
+                const poste = r.poste || 'Non renseigné';
+                if (!posteMap[poste]) posteMap[poste] = { sumBrut: 0, count: 0, min: brut, max: brut, matricules: new Set() };
+                const pAgg = posteMap[poste];
+                pAgg.sumBrut += brut;
+                pAgg.count++;
+                pAgg.min = Math.min(pAgg.min, brut);
+                pAgg.max = Math.max(pAgg.max, brut);
+                if (r.matricule) pAgg.matricules.add(r.matricule);
+
+                if (r.matricule) {
+                    if (!employeeMap[r.matricule]) {
+                        employeeMap[r.matricule] = { matricule: r.matricule, nom: r.nom, prenom: r.prenom, poste, totalAbsenceDays: 0, spellsCount: 0, totalHeuresSup: 0 };
+                    }
+                    const eAgg = employeeMap[r.matricule];
+                    eAgg.poste = poste; // dernier poste connu sur l'année
+                    eAgg.totalAbsenceDays += r.absencesJours || 0;
+                    if ((r.absencesJours || 0) > 0) eAgg.spellsCount++;
+                    eAgg.totalHeuresSup += r.heuresSupNb || 0;
+                }
+            }
+
+            const tauxAbsenteisme = (absencesJoursMois + joursTravaillesMois) > 0
+                ? Math.round((absencesJoursMois / (absencesJoursMois + joursTravaillesMois)) * 1000) / 10
+                : 0;
+
+            monthly.push({
+                mois: period.mois,
+                annee: period.annee,
+                employeeCount: records.length,
+                masseSalarialeBrute: Math.round(masseSalarialeBrute),
+                masseSalarialeNette: Math.round(masseSalarialeNette),
+                chargesPatronales: Math.round(chargesPatronales),
+                montantHeuresSup: Math.round(montantHeuresSupMois),
+                tauxAbsenteisme
+            });
+
+            masseSalarialeAnnuelle += masseSalarialeBrute;
+            masseSalarialeNetteAnnuelle += masseSalarialeNette;
+            chargesPatronalesAnnuelles += chargesPatronales;
+            montantHeuresSupAnnuel += montantHeuresSupMois;
+            totalAbsencesAnnuel += absencesJoursMois;
+            totalJoursTravaillesAnnuel += joursTravaillesMois;
+            moisAvecDonnees++;
+        }
+
+        const byPoste = Object.entries(posteMap).map(([poste, a]) => ({
+            poste,
+            effectif: a.matricules.size,
+            masseSalariale: Math.round(a.sumBrut),
+            salaireMoyen: a.count > 0 ? Math.round(a.sumBrut / a.count) : 0,
+            salaireMin: Math.round(a.min),
+            salaireMax: Math.round(a.max)
+        })).sort((a, b) => b.masseSalariale - a.masseSalariale);
+
+        // Bradford Factor = (nb de mois avec absence)² × (total jours d'absence). Approximation :
+        // la donnée est mensuelle (pas de suivi jour par jour), donc "spellsCount" compte des mois
+        // avec absence, pas de vrais épisodes distincts — indicatif, pas une mesure clinique.
+        const employees = Object.values(employeeMap).map(e => ({
+            ...e,
+            bradfordScore: (e.spellsCount * e.spellsCount) * e.totalAbsenceDays
+        })).sort((a, b) => b.bradfordScore - a.bradfordScore);
+
+        res.json({
+            success: true,
+            debutMois: range.debutMois,
+            debutAnnee: range.debutAnnee,
+            finMois: range.finMois,
+            finAnnee: range.finAnnee,
+            monthly,
+            byPoste,
+            employees,
+            totals: {
+                masseSalarialeAnnuelle: Math.round(masseSalarialeAnnuelle),
+                masseSalarialeNetteAnnuelle: Math.round(masseSalarialeNetteAnnuelle),
+                chargesPatronalesAnnuelles: Math.round(chargesPatronalesAnnuelles),
+                ratioChargesPatronales: masseSalarialeAnnuelle > 0 ? Math.round((chargesPatronalesAnnuelles / masseSalarialeAnnuelle) * 1000) / 10 : 0,
+                coutHeuresSupAnnuel: Math.round(montantHeuresSupAnnuel),
+                tauxAbsenteismeMoyen: (totalAbsencesAnnuel + totalJoursTravaillesAnnuel) > 0
+                    ? Math.round((totalAbsencesAnnuel / (totalAbsencesAnnuel + totalJoursTravaillesAnnuel)) * 1000) / 10
+                    : 0,
+                moisAvecDonnees
+            }
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // ─── Génération bulletin individuel (Simulateur manuel) ───────────────────
 app.post('/api/rh/generate-single-payslip', authMiddleware, async (req, res) => {
     try {
@@ -1074,14 +1656,20 @@ app.post('/api/rh/generate-single-payslip', authMiddleware, async (req, res) => 
             return res.status(400).json({ error: 'Données employé manquantes' });
         }
 
-        // Vérification des crédits (5 crédits par bulletin)
+        // Vérification du quota d'abonnement (1 bulletin)
         const userObj = await User.findByPk(req.user.id);
         if (!userObj) {
             return res.status(404).json({ error: "Utilisateur non trouvé" });
         }
 
-        if (userObj.credits < 5) {
-            return res.status(402).json({ error: `Crédits insuffisants. Il vous faut 5 crédits pour générer ce bulletin de paie. Votre solde actuel : ${userObj.credits} crédits.` });
+        const plan = await billingService.getPlanByCode(userObj.subscriptionTier);
+        const quotaCheck = billingService.checkQuota(userObj, plan, 1);
+        if (!quotaCheck.ok) {
+            return res.status(402).json({
+                error: billingService.quotaErrorMessage(quotaCheck.reason, { plan, user: userObj, countNeeded: 1 }),
+                reason: quotaCheck.reason,
+                ...billingService.getSubscriptionSnapshot(userObj, plan)
+            });
         }
 
         const calculs = payrollService.calculateSinglePayroll(employee);
@@ -1097,8 +1685,8 @@ app.post('/api/rh/generate-single-payslip', authMiddleware, async (req, res) => 
 
         const pdfBuffer = await payrollService.generateSinglePdf(employee, calculs, companyInfo, htmlTemplate);
 
-        // Déduction des crédits après génération réussie
-        userObj.credits = Math.max(0, userObj.credits - 5);
+        // Incrémentation du quota consommé après génération réussie
+        userObj.bulletinsUsed = (userObj.bulletinsUsed || 0) + 1;
         await userObj.save();
 
         const moisNoms = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
@@ -1156,6 +1744,7 @@ app.get('/api/rh/download/:filename', (req, res) => {
         const employeHeaders = [
             'nom', 'prenom', 'matricule', 'salaire_base', 'sursalaire',
             'prime_transport', 'prime_logement', 'heures_sup_nb',
+            'jours_travailles', 'absences_jours',
             'poste', 'categorie', 'date_embauche',
             'nom_entreprise', 'id_employe'
         ];
@@ -1163,6 +1752,7 @@ app.get('/api/rh/download/:filename', (req, res) => {
             nom: 'KONAN', prenom: 'Yao', matricule: 'EMP-001',
             salaire_base: 350000, sursalaire: 0, prime_transport: 30000,
             prime_logement: 50000, heures_sup_nb: 0,
+            jours_travailles: 26, absences_jours: 0,
             poste: 'Comptable', categorie: 'Agent de maîtrise',
             date_embauche: '2020-01-15',
             nom_entreprise: 'MA SOCIETE SARL', id_employe: 1
@@ -1183,6 +1773,44 @@ app.get('/api/rh/download/:filename', (req, res) => {
 
         const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
         res.setHeader('Content-Disposition', 'attachment; filename=modele_paie_ONDA.xlsx');
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        return res.send(buf);
+    }
+
+    if (fileName === 'modele-presence.xlsx') {
+        // Modèle léger pour l'import "fiche de présence" (Saisie Mensuelle) : juste le matricule
+        // et les champs variables du mois, sans réimporter toute la fiche employé.
+        const wb = XLSX.utils.book_new();
+        const headers = ['matricule', 'jours_travailles', 'heures_sup_nb', 'absences_jours'];
+        const exampleRow = { matricule: 'EMP-001', jours_travailles: 26, heures_sup_nb: 0, absences_jours: 0 };
+        const ws = XLSX.utils.json_to_sheet([exampleRow], { header: headers });
+        XLSX.utils.book_append_sheet(wb, ws, 'PRESENCE');
+
+        const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        res.setHeader('Content-Disposition', 'attachment; filename=modele_fiche_presence_ONDA.xlsx');
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        return res.send(buf);
+    }
+
+    if (fileName === 'modele-contrats.xlsx') {
+        // Modèle pour l'import en masse de contrats (module Contrats & Alertes d'Échéance) —
+        // salaire décomposé en base/sursalaire/primes, comme le formulaire manuel.
+        const wb = XLSX.utils.book_new();
+        const headers = [
+            'nom', 'type', 'date_debut', 'date_fin', 'poste',
+            'salaire_de_base', 'sursalaire',
+            'prime_transport', 'prime_logement', 'prime_fonction', 'prime_responsabilite'
+        ];
+        const exampleRow = {
+            nom: 'KONAN Yao', type: 'CDI', date_debut: '2026-01-15', date_fin: '',
+            poste: 'Comptable', salaire_de_base: 300000, sursalaire: 50000,
+            prime_transport: 30000, prime_logement: 0, prime_fonction: 0, prime_responsabilite: 0
+        };
+        const ws = XLSX.utils.json_to_sheet([exampleRow], { header: headers });
+        XLSX.utils.book_append_sheet(wb, ws, 'CONTRATS');
+
+        const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        res.setHeader('Content-Disposition', 'attachment; filename=modele_contrats_ONDA.xlsx');
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         return res.send(buf);
     }
@@ -1256,26 +1884,16 @@ app.get('/api/ai/models', (req, res) => {
 /**
  * POST /api/rh/analyze-pdf-template
  * Analyse OCR Vision du PDF pour l'auto-mapping HTML-to-PDF
- * COÛT: 1 Crédit IA
+ * Inclus sans coût supplémentaire pour tout utilisateur connecté.
  */
 app.post('/api/rh/analyze-pdf-template', authMiddleware, async (req, res) => {
     try {
         const { imageBase64 } = req.body;
         if (!imageBase64) return res.status(400).json({ error: 'Image manquante' });
 
-        // Vérification des crédits
-        const user = await User.findByPk(req.user.id);
-        if (user.credits < 1) {
-            return res.status(402).json({ error: 'Crédits insuffisants. Veuillez recharger votre compte.' });
-        }
-
         const htmlTemplate = await aiService.rebuildPayslipTemplate(imageBase64);
 
-        // Déduction du crédit
-        user.credits -= 1;
-        await user.save();
-
-        res.json({ success: true, htmlTemplate, creditsRemaining: user.credits });
+        res.json({ success: true, htmlTemplate });
     } catch (e) {
         console.error('Erreur IA Auto-Mapping:', e.message);
         res.status(500).json({ error: e.message });

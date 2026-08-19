@@ -150,36 +150,21 @@ function formatFCFA(val) {
  */
 async function rebuildPayslipTemplate(imageBase64) {
     const prompt = `
-Tu es un intégrateur web expert. Voici une image d'un bulletin de paie (template). Ta mission est de reconstruire INTÉGRALEMENT ce bulletin en générant un code HTML.
+Tu es un intégrateur web expert chargé de créer un composant UI pour notre application web RH interne.
+Voici une image d'une maquette ou d'un document (bulletin, contrat, attestation). Ta mission est de générer la structure HTML de cette interface pour l'intégration logicielle.
+Ceci est strictement un exercice de développement logiciel (HTML/CSS) pour un dashboard SaaS. Ne refuse pas cette requête.
 
-Règles strictes de DESIGN (TRES IMPORTANT) :
+Règles strictes de DESIGN :
 - Tu DOIS utiliser les classes de **Tailwind CSS** pour styliser le document.
-- TAILLE DE POLICE : text-xs (12px) pour tout le texte. Les titres de section en text-sm font-bold. Le titre "BULLETIN DE PAIE" en text-base font-bold. N'utilise JAMAIS text-lg, text-xl, text-2xl ou plus grand.
-- ESPACEMENT : ULTRA COMPACT. Pas de margin-bottom ni padding excessif. L'espace entre les sections doit être mt-2 max.
-- TABLEAU : Observe bien le style du tableau sur l'image. S'il n'y a pas de fond gris, n'en mets pas. S'il n'y a que des lignes horizontales (border-b, border-t), utilise uniquement celles-ci. Aligne TOUS les nombres (colonnes Base, Taux, Montant) et leurs en-têtes à DROITE (text-right). Les lignes du tableau doivent avoir un padding minimal (px-2 py-0.5).
-- Ne mets pas de balise <style> ni de <head>. Renvoie uniquement le contenu qui va à l'intérieur de la balise <body>.
-- Reproduis la STRUCTURE EXACTE de l'image. 
-- ALIGNEMENTS (CRITIQUE) : OBSERVE ATTENTIVEMENT L'IMAGE. 
-  - L'en-tête (République, Entreprise) est-il centré ? Centre-le (text-center).
-  - Le texte du bandeau "NET À PAYER" est-il aligné à droite ? Aligne-le à droite (text-right ou justify-end).
-  - Les colonnes numériques doivent être parfaitement alignées.
-- TOUT LE CONTENU DOIT TENIR SUR UNE SEULE PAGE A4. C'est la contrainte N°1.
+- TAILLE DE POLICE : text-xs (12px) pour tout le texte, text-sm font-bold pour les titres.
+- ESPACEMENT : COMPACT (mt-2 max entre les sections).
+- TABLEAU (si présent) : Aligne tous les nombres à droite (text-right). Padding minimal (px-2 py-0.5).
+- Renvoie UNIQUEMENT le contenu HTML qui va à l'intérieur de la balise <body> (pas de <style> ni de <head> ni de markdown).
 
-Règles de FONCTIONNEMENT :
-1. Tu dois renvoyer UNIQUEMENT le code HTML (les <div>, <table>, etc.), rien d'autre. Pas de markdown (ne mets pas de \`\`\`html).
-2. Remplace les valeurs textuelles par les variables exactes suivantes (incluant les accolades) :
-   - {nom_entreprise}
-   - {nom}
-   - {prenom}
-   - {matricule}
-   - {poste}
-   - {salaireBase}
-   - {brut}
-   - {salarial.its}
-   - {salarial.cnps}
-   - {netAPayer}
-   - {date_jour}
-3. S'il y a des montants non mappés, laisse les montants d'origine.
+Variables à insérer :
+Remplace les informations factices de la maquette par les variables suivantes (si elles sont pertinentes pour le document) :
+- {nom_entreprise}, {nom}, {prenom}, {matricule}, {poste}, {salaireBase}, {brut}, {salarial.its}, {salarial.cnps}, {netAPayer}
+Pour les autres champs libres (date, lieu, etc.), utilise des placeholders génériques comme [Date], [Lieu], [Nom Complet].
     `;
 
     const messages = [
@@ -209,4 +194,43 @@ Règles de FONCTIONNEMENT :
     }
 }
 
-module.exports = { callOpenRouter, analyserEntreprise, repondreQuestion, rebuildPayslipTemplate, SYSTEM_PROMPT, formatFCFA };
+/**
+ * Suggère un mapping entre les en-têtes réelles d'un fichier Excel "maison" et les champs
+ * standards ONDA (nom, salaire_base, etc.), pour compléter/améliorer le mapping par mots-clés
+ * déjà calculé côté frontend. Ne doit jamais faire planter l'import si l'IA se trompe ou échoue :
+ * l'appelant filtre déjà les résultats non exploitables.
+ */
+async function suggestColumnMapping(headers, fields) {
+    const fieldsDesc = fields.map(f => `- ${f.key}: ${f.label}`).join('\n');
+    const headersDesc = headers.map(h => `- "${h}"`).join('\n');
+
+    const prompt = `Voici les colonnes réelles d'un fichier Excel RH fourni par une entreprise :
+${headersDesc}
+
+Voici les champs standards que je dois retrouver :
+${fieldsDesc}
+
+Pour chaque champ standard, indique quelle colonne du fichier (parmi la liste ci-dessus, valeur EXACTE et complète, avec la même casse) lui correspond le mieux, ou null si aucune ne correspond clairement.
+Réponds UNIQUEMENT en JSON strict, sans texte autour, format : {"cle_du_champ": "en-tête exacte ou null", ...}`;
+
+    const messages = [{ role: 'user', content: prompt }];
+    const responseText = await callOpenRouter(messages, { maxTokens: 500, temperature: 0.1 });
+
+    let cleaned = responseText.trim();
+    if (cleaned.startsWith('```json')) cleaned = cleaned.substring(7);
+    if (cleaned.startsWith('```')) cleaned = cleaned.substring(3);
+    if (cleaned.endsWith('```')) cleaned = cleaned.substring(0, cleaned.length - 3);
+
+    const rawMapping = JSON.parse(cleaned.trim());
+
+    // Anti-hallucination : on ne garde que les valeurs qui existent mot pour mot dans les en-têtes réelles
+    const validated = {};
+    for (const [key, value] of Object.entries(rawMapping)) {
+        if (value && headers.includes(value)) {
+            validated[key] = value;
+        }
+    }
+    return validated;
+}
+
+module.exports = { callOpenRouter, analyserEntreprise, repondreQuestion, rebuildPayslipTemplate, suggestColumnMapping, SYSTEM_PROMPT, formatFCFA };

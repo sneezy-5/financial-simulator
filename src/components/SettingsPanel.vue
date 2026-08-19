@@ -3,6 +3,7 @@ import { ref, onMounted, watch } from 'vue'
 import { localDb } from '../services/localDatabase.js'
 import { showToast } from '../services/toast.js'
 import { showConfirm } from '../services/confirmModal.js'
+import { user, updateProfile } from '../services/auth.js'
 
 const props = defineProps({
   country: {
@@ -21,6 +22,8 @@ watch(() => props.country, (newVal) => {
   selectedCountry.value = newVal
 })
 
+watch(user, () => syncCompanyProfile())
+
 const countries = [
   { code: 'CI', flagUrl: 'https://flagcdn.com/w40/ci.png', name: 'Côte d\'Ivoire', desc: 'Réglementation fiscale UEMOA (ITS, CNSS, IGR...)' },
   { code: 'BJ', flagUrl: 'https://flagcdn.com/w40/bj.png', name: 'Bénin', desc: 'Réglementation fiscale Bénin (AIB, CNSS, VPS...)' },
@@ -38,6 +41,36 @@ const scheduleSettings = ref({
   generationDay: 25,
   defaultTemplateId: null
 })
+
+// Profil entreprise (numéros CNPS/contribuable employeur) — persistant côté serveur,
+// nécessaire pour l'historique de paie et les futures déclarations réglementaires
+const companyProfileForm = ref({
+  companyNumeroCnps: '',
+  companyNumeroContribuable: ''
+})
+const companyProfileSaving = ref(false)
+
+const syncCompanyProfile = () => {
+  if (user.value) {
+    companyProfileForm.value.companyNumeroCnps = user.value.companyNumeroCnps || ''
+    companyProfileForm.value.companyNumeroContribuable = user.value.companyNumeroContribuable || ''
+  }
+}
+
+const saveCompanyProfile = async () => {
+  try {
+    companyProfileSaving.value = true
+    await updateProfile({
+      companyNumeroCnps: companyProfileForm.value.companyNumeroCnps,
+      companyNumeroContribuable: companyProfileForm.value.companyNumeroContribuable
+    })
+    showToast('Profil entreprise enregistré.', 'success')
+  } catch (e) {
+    showToast('Erreur : ' + e.message, 'error')
+  } finally {
+    companyProfileSaving.value = false
+  }
+}
 
 const showUploadModal = ref(false)
 const newTemplateName = ref('')
@@ -60,6 +93,7 @@ const loadData = async () => {
 
 onMounted(() => {
   loadData()
+  syncCompanyProfile()
   if (!document.getElementById('pdfjs-lib-settings')) {
     const script = document.createElement('script')
     script.id = 'pdfjs-lib-settings'
@@ -234,6 +268,26 @@ const saveScheduleSettings = async () => {
           </div>
           <div v-if="selectedCountry === c.code" style="width: 20px; height: 20px; border-radius: 50%; background: #3b82f6; color: white; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: bold;">✓</div>
         </div>
+      </div>
+
+      <div style="border-top: 1px solid #e2e8f0; padding-top: 24px;">
+        <h3 style="margin: 0 0 8px 0; color: #0f172a;">Profil Entreprise</h3>
+        <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 16px;">
+          Ces informations seront utilisées pour l'historique de paie et les futures déclarations réglementaires (CNPS, DGI, CMU).
+        </p>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; max-width: 640px;">
+          <div class="form-group">
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 6px;">Numéro CNPS Employeur</label>
+            <input v-model="companyProfileForm.companyNumeroCnps" type="text" placeholder="ex. 987654-B" style="width: 100%; padding: 0.75rem 1rem; border-radius: 10px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
+          </div>
+          <div class="form-group">
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 6px;">Numéro Contribuable / NIF</label>
+            <input v-model="companyProfileForm.companyNumeroContribuable" type="text" placeholder="ex. CI-2024-123456A" style="width: 100%; padding: 0.75rem 1rem; border-radius: 10px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
+          </div>
+        </div>
+        <button @click="saveCompanyProfile" :disabled="companyProfileSaving" style="margin-top: 16px; background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 700; box-shadow: 0 4px 12px rgba(59,130,246,0.25);">
+          {{ companyProfileSaving ? 'Enregistrement...' : 'Enregistrer le profil entreprise' }}
+        </button>
       </div>
     </div>
 

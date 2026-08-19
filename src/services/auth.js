@@ -8,8 +8,13 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
 // Callback appelé quand le serveur confirme un paiement via Socket.IO
 const onPaymentSuccess = (data) => {
-  if (user.value && data.credits !== undefined) {
-    user.value.credits = data.credits;
+  if (user.value && data.subscriptionTier !== undefined) {
+    Object.assign(user.value, {
+      subscriptionTier: data.subscriptionTier,
+      subscriptionExpiresAt: data.subscriptionExpiresAt,
+      subscriptionIsTrial: data.subscriptionIsTrial,
+      bulletinsUsed: data.bulletinsUsed
+    });
   }
 };
 
@@ -78,19 +83,26 @@ export const logout = () => {
     setAuth(null, null);
 };
 
-export const verifyPaystackPayment = async (reference, credits, amount) => {
+export const verifyPaystackPayment = async (reference, planCode) => {
     if (!token.value) throw new Error('Non connecté');
     const res = await fetch(`${API_URL}/billing/verify-paystack`, {
         method: 'POST',
-        headers: { 
+        headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token.value}`
         },
-        body: JSON.stringify({ reference, credits, amount })
+        body: JSON.stringify({ reference, planCode })
     });
     const data = await res.json();
     if (res.ok) {
-        if (user.value) user.value.credits = data.credits;
+        if (user.value) {
+            Object.assign(user.value, {
+                subscriptionTier: data.subscriptionTier,
+                subscriptionExpiresAt: data.subscriptionExpiresAt,
+                subscriptionIsTrial: data.subscriptionIsTrial,
+                bulletinsUsed: data.bulletinsUsed
+            });
+        }
         return data.message;
     }
     throw new Error(data.error || 'Erreur lors de la vérification du paiement');

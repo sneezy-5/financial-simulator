@@ -24,7 +24,6 @@ const loginError = ref('')
 const showCreateUserModal = ref(false)
 const newUserEmail = ref('')
 const newUserPassword = ref('')
-const newUserCredits = ref(50)
 const createUserLoading = ref(false)
 const createUserError = ref('')
 
@@ -40,18 +39,16 @@ const handleCreateUser = async () => {
             },
             body: JSON.stringify({
                 email: newUserEmail.value,
-                password: newUserPassword.value,
-                credits: parseInt(newUserCredits.value) || 50
+                password: newUserPassword.value
             })
         })
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || 'Erreur lors de la création du compte')
-        
+
         users.value.unshift(data.user)
         showCreateUserModal.value = false
         newUserEmail.value = ''
         newUserPassword.value = ''
-        newUserCredits.value = 50
     } catch (e) {
         createUserError.value = e.message
     } finally {
@@ -59,8 +56,8 @@ const handleCreateUser = async () => {
     }
 }
 
-const totalCreditsInCirculation = computed(() => {
-    return users.value.reduce((acc, u) => acc + (parseInt(u.credits) || 0), 0)
+const activeSubscriptionsCount = computed(() => {
+    return users.value.filter(u => u.subscriptionTier && u.subscriptionExpiresAt && new Date(u.subscriptionExpiresAt) > new Date()).length
 })
 
 const handleAdminLogin = async () => {
@@ -80,63 +77,67 @@ const loadAdminData = async () => {
     if (!adminToken.value) return
     await fetchStats()
     await fetchUsers()
-    await fetchCreditPacks()
+    await fetchSubscriptionPlans()
+    await fetchLicenses()
     await fetchBankLoans()
 }
 
-// State for Credit Packs CRUD (Tarifs)
-const creditPacks = ref([])
-const creditPacksLoading = ref(false)
-const showPackModal = ref(false)
-const editingPackId = ref(null)
-const packForm = ref({ name: '', credits: 100, price: 10000, popular: false, active: true })
-const packFormLoading = ref(false)
-const packFormError = ref('')
+// State for Subscription Plans CRUD (Tarifs)
+const subscriptionPlans = ref([])
+const subscriptionPlansLoading = ref(false)
+const showPlanModal = ref(false)
+const editingPlanId = ref(null)
+const planForm = ref({ code: '', tier: '', billingCycle: 'monthly', name: '', bulletinLimit: 10, price: 5000, popular: false, active: true })
+const planFormLoading = ref(false)
+const planFormError = ref('')
 
-const fetchCreditPacks = async () => {
+const fetchSubscriptionPlans = async () => {
     if (!adminToken.value) return
     try {
-        creditPacksLoading.value = true
-        const res = await fetch('/api/admin/credit-packs', { headers: getHeaders() })
-        if (!res.ok) throw new Error('Erreur chargement des packs')
+        subscriptionPlansLoading.value = true
+        const res = await fetch('/api/admin/subscription-plans', { headers: getHeaders() })
+        if (!res.ok) throw new Error('Erreur chargement des formules')
         const data = await res.json()
-        creditPacks.value = data.packs || []
+        subscriptionPlans.value = data.plans || []
     } catch (e) {
-        console.error("Erreur packs de crédits:", e.message)
+        console.error("Erreur formules d'abonnement:", e.message)
     } finally {
-        creditPacksLoading.value = false
+        subscriptionPlansLoading.value = false
     }
 }
 
-const openNewPackModal = () => {
-    editingPackId.value = null
-    packForm.value = { name: '', credits: 100, price: 10000, popular: false, active: true }
-    packFormError.value = ''
-    showPackModal.value = true
+const openNewPlanModal = () => {
+    editingPlanId.value = null
+    planForm.value = { code: '', tier: '', billingCycle: 'monthly', name: '', bulletinLimit: 10, price: 5000, popular: false, active: true }
+    planFormError.value = ''
+    showPlanModal.value = true
 }
 
-const openEditPackModal = (pack) => {
-    editingPackId.value = pack.id
-    packForm.value = { 
-        name: pack.name, 
-        credits: pack.credits, 
-        price: pack.price, 
-        popular: pack.popular, 
-        active: pack.active 
+const openEditPlanModal = (plan) => {
+    editingPlanId.value = plan.id
+    planForm.value = {
+        code: plan.code,
+        tier: plan.tier || '',
+        billingCycle: plan.billingCycle || 'monthly',
+        name: plan.name,
+        bulletinLimit: plan.bulletinLimit,
+        price: plan.price,
+        popular: plan.popular,
+        active: plan.active
     }
-    packFormError.value = ''
-    showPackModal.value = true
+    planFormError.value = ''
+    showPlanModal.value = true
 }
 
-const handleSavePack = async () => {
+const handleSavePlan = async () => {
     try {
-        packFormLoading.value = true
-        packFormError.value = ''
+        planFormLoading.value = true
+        planFormError.value = ''
 
-        const url = editingPackId.value 
-            ? `/api/admin/credit-packs/${editingPackId.value}`
-            : '/api/admin/credit-packs'
-        const method = editingPackId.value ? 'PUT' : 'POST'
+        const url = editingPlanId.value
+            ? `/api/admin/subscription-plans/${editingPlanId.value}`
+            : '/api/admin/subscription-plans'
+        const method = editingPlanId.value ? 'PUT' : 'POST'
 
         const res = await fetch(url, {
             method,
@@ -144,69 +145,209 @@ const handleSavePack = async () => {
                 'Content-Type': 'application/json',
                 ...getHeaders()
             },
-            body: JSON.stringify(packForm.value)
+            body: JSON.stringify(planForm.value)
         })
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || 'Erreur lors de l\'enregistrement')
 
-        if (editingPackId.value) {
-            const idx = creditPacks.value.findIndex(p => p.id === editingPackId.value)
-            if (idx !== -1) creditPacks.value[idx] = data.pack
+        if (editingPlanId.value) {
+            const idx = subscriptionPlans.value.findIndex(p => p.id === editingPlanId.value)
+            if (idx !== -1) subscriptionPlans.value[idx] = data.plan
         } else {
-            creditPacks.value.push(data.pack)
+            subscriptionPlans.value.push(data.plan)
         }
-        showPackModal.value = false
+        showPlanModal.value = false
     } catch (e) {
-        packFormError.value = e.message
+        planFormError.value = e.message
     } finally {
-        packFormLoading.value = false
+        planFormLoading.value = false
     }
 }
 
-const togglePackActive = async (pack) => {
+const togglePlanActive = async (plan) => {
     try {
-        const res = await fetch(`/api/admin/credit-packs/${pack.id}`, {
+        const res = await fetch(`/api/admin/subscription-plans/${plan.id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json', ...getHeaders() },
-            body: JSON.stringify({ active: !pack.active })
+            body: JSON.stringify({ active: !plan.active })
         })
         if (res.ok) {
-            pack.active = !pack.active
+            plan.active = !plan.active
         }
     } catch (e) {
         showToast("Erreur : " + e.message, 'error')
     }
 }
 
-const togglePackPopular = async (pack) => {
+const togglePlanPopular = async (plan) => {
     try {
-        const res = await fetch(`/api/admin/credit-packs/${pack.id}`, {
+        const res = await fetch(`/api/admin/subscription-plans/${plan.id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json', ...getHeaders() },
-            body: JSON.stringify({ popular: !pack.popular })
+            body: JSON.stringify({ popular: !plan.popular })
         })
         if (res.ok) {
-            pack.popular = !pack.popular
+            plan.popular = !plan.popular
         }
     } catch (e) {
         showToast("Erreur : " + e.message, 'error')
     }
 }
 
-const deletePack = async (pack) => {
-    const ok = await showConfirm(`Supprimer l'offre "${pack.name}" (${pack.credits} crédits pour ${pack.price} FCFA) ?`, { title: 'Supprimer l\'offre' })
+const deletePlan = async (plan) => {
+    const ok = await showConfirm(`Supprimer la formule "${plan.name}" (${plan.bulletinLimit} bulletins pour ${plan.price} FCFA/mois) ?`, { title: 'Supprimer la formule' })
     if (!ok) return
     try {
-        const res = await fetch(`/api/admin/credit-packs/${pack.id}`, {
+        const res = await fetch(`/api/admin/subscription-plans/${plan.id}`, {
             method: 'DELETE',
             headers: getHeaders()
         })
         if (res.ok) {
-            creditPacks.value = creditPacks.value.filter(p => p.id !== pack.id)
+            subscriptionPlans.value = subscriptionPlans.value.filter(p => p.id !== plan.id)
         }
     } catch (e) {
         showToast("Erreur : " + e.message, 'error')
     }
+}
+
+// State for Enterprise Licenses CRUD (Édition installable)
+const licenses = ref([])
+const licensesLoading = ref(false)
+const showLicenseModal = ref(false)
+const editingLicenseId = ref(null)
+const licenseForm = ref({ companyName: '', contactEmail: '', expiresAt: '', price: 500000, notes: '' })
+const licenseFormLoading = ref(false)
+const licenseFormError = ref('')
+const lastCreatedLicenseKey = ref('')
+
+const fetchLicenses = async () => {
+    if (!adminToken.value) return
+    try {
+        licensesLoading.value = true
+        const res = await fetch('/api/admin/licenses', { headers: getHeaders() })
+        if (!res.ok) throw new Error('Erreur chargement des licences')
+        const data = await res.json()
+        licenses.value = data.licenses || []
+    } catch (e) {
+        console.error("Erreur licences entreprise:", e.message)
+    } finally {
+        licensesLoading.value = false
+    }
+}
+
+const openNewLicenseModal = () => {
+    editingLicenseId.value = null
+    licenseForm.value = { companyName: '', contactEmail: '', expiresAt: '', price: 500000, notes: '' }
+    licenseFormError.value = ''
+    lastCreatedLicenseKey.value = ''
+    showLicenseModal.value = true
+}
+
+const openEditLicenseModal = (license) => {
+    editingLicenseId.value = license.id
+    licenseForm.value = {
+        companyName: license.companyName,
+        contactEmail: license.contactEmail || '',
+        expiresAt: license.expiresAt ? license.expiresAt.substring(0, 10) : '',
+        price: license.price,
+        notes: license.notes || ''
+    }
+    licenseFormError.value = ''
+    lastCreatedLicenseKey.value = ''
+    showLicenseModal.value = true
+}
+
+const handleSaveLicense = async () => {
+    try {
+        licenseFormLoading.value = true
+        licenseFormError.value = ''
+
+        const url = editingLicenseId.value
+            ? `/api/admin/licenses/${editingLicenseId.value}`
+            : '/api/admin/licenses'
+        const method = editingLicenseId.value ? 'PUT' : 'POST'
+
+        const res = await fetch(url, {
+            method,
+            headers: {
+                'Content-Type': 'application/json',
+                ...getHeaders()
+            },
+            body: JSON.stringify(licenseForm.value)
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Erreur lors de l\'enregistrement')
+
+        if (editingLicenseId.value) {
+            const idx = licenses.value.findIndex(l => l.id === editingLicenseId.value)
+            if (idx !== -1) licenses.value[idx] = data.license
+            showLicenseModal.value = false
+        } else {
+            licenses.value.unshift(data.license)
+            lastCreatedLicenseKey.value = data.license.licenseKey
+        }
+    } catch (e) {
+        licenseFormError.value = e.message
+    } finally {
+        licenseFormLoading.value = false
+    }
+}
+
+const toggleLicenseStatus = async (license) => {
+    try {
+        const newStatus = license.status === 'active' ? 'revoked' : 'active'
+        const res = await fetch(`/api/admin/licenses/${license.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', ...getHeaders() },
+            body: JSON.stringify({ status: newStatus })
+        })
+        if (res.ok) {
+            license.status = newStatus
+        }
+    } catch (e) {
+        showToast("Erreur : " + e.message, 'error')
+    }
+}
+
+const resetLicenseActivation = async (license) => {
+    const ok = await showConfirm(`Réinitialiser l'activation de "${license.companyName}" ? L'installation actuellement liée devra ressaisir la clé.`, { title: 'Réinitialiser l\'activation' })
+    if (!ok) return
+    try {
+        const res = await fetch(`/api/admin/licenses/${license.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', ...getHeaders() },
+            body: JSON.stringify({ resetActivation: true })
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Échec de la réinitialisation')
+        license.installationId = null
+        license.activatedAt = null
+        showToast(`Activation réinitialisée pour ${license.companyName}.`, 'success')
+    } catch (e) {
+        showToast("Erreur : " + e.message, 'error')
+    }
+}
+
+const deleteLicense = async (license) => {
+    const ok = await showConfirm(`Supprimer définitivement la licence de "${license.companyName}" ?`, { title: 'Supprimer la licence' })
+    if (!ok) return
+    try {
+        const res = await fetch(`/api/admin/licenses/${license.id}`, {
+            method: 'DELETE',
+            headers: getHeaders()
+        })
+        if (res.ok) {
+            licenses.value = licenses.value.filter(l => l.id !== license.id)
+        }
+    } catch (e) {
+        showToast("Erreur : " + e.message, 'error')
+    }
+}
+
+const maskLicenseKey = (key) => {
+    if (!key) return ''
+    const parts = key.split('-')
+    return parts.length === 5 ? `${parts[0]}-${parts[1]}-••••-••••-${parts[4]}` : key
 }
 
 // State for Bank Loans CRUD (Simulateur de prêts bancaires)
@@ -421,44 +562,23 @@ const fetchUsers = async () => {
     }
 }
 
-const updateCredits = async (userObj, delta) => {
-    const newCredits = Math.max(0, (userObj.credits || 0) + delta)
+// Octroi/prolongation manuelle d'un abonnement (ex : paiement Mobile Money hors Paystack)
+const grantUserSubscription = async (userObj, tier) => {
     try {
-        const res = await fetch(`/api/admin/users/${userObj.id}/credits`, {
+        const res = await fetch(`/api/admin/users/${userObj.id}/subscription`, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',
                 ...getHeaders()
             },
-            body: JSON.stringify({ credits: newCredits })
+            body: JSON.stringify({ tier, days: 30 })
         })
-        if (!res.ok) throw new Error('Échec modification crédits')
-        userObj.credits = newCredits
-    } catch (e) {
-        showToast("Erreur : " + e.message, 'error')
-    }
-}
-
-const setCustomCredits = async (userObj) => {
-    const input = prompt(`Définir le solde de crédits pour ${userObj.email} :`, userObj.credits)
-    if (input === null) return
-    const val = parseInt(input)
-    if (isNaN(val)) {
-        showToast("Veuillez saisir un nombre valide.", 'error')
-        return
-    }
-    
-    try {
-        const res = await fetch(`/api/admin/users/${userObj.id}/credits`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-                ...getHeaders()
-            },
-            body: JSON.stringify({ credits: val })
-        })
-        if (!res.ok) throw new Error('Échec modification')
-        userObj.credits = val
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Échec de l\'activation de l\'abonnement')
+        userObj.subscriptionTier = data.user.subscriptionTier
+        userObj.subscriptionExpiresAt = data.user.subscriptionExpiresAt
+        userObj.bulletinsUsed = data.user.bulletinsUsed
+        showToast(tier ? `Abonnement ${tier === 'pro' ? 'Pro' : 'Starter'} activé pour ${userObj.email}.` : `Abonnement désactivé pour ${userObj.email}.`, 'success')
     } catch (e) {
         showToast("Erreur : " + e.message, 'error')
     }
@@ -629,16 +749,24 @@ onMounted(async () => {
         Utilisateurs & Modération
         <span class="user-count-badge">{{ users.length }}</span>
       </button>
-      <button 
-        class="tab-btn" 
+      <button
+        class="tab-btn"
         :class="{ active: activeTab === 'packs' }"
-        @click="activeTab = 'packs'; fetchCreditPacks();"
+        @click="activeTab = 'packs'; fetchSubscriptionPlans();"
       >
-        Tarifs & Packs (CRUD)
-        <span class="user-count-badge">{{ creditPacks.length }}</span>
+        Formules d'Abonnement (CRUD)
+        <span class="user-count-badge">{{ subscriptionPlans.length }}</span>
       </button>
-      <button 
-        class="tab-btn" 
+      <button
+        class="tab-btn"
+        :class="{ active: activeTab === 'licenses' }"
+        @click="activeTab = 'licenses'; fetchLicenses();"
+      >
+        Licences Entreprise
+        <span class="user-count-badge">{{ licenses.length }}</span>
+      </button>
+      <button
+        class="tab-btn"
         :class="{ active: activeTab === 'bankLoans' }"
         @click="activeTab = 'bankLoans'; fetchBankLoans();"
       >
@@ -765,10 +893,10 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- TAB 2: UTILISATEURS & CRÉDITS (CRUD & MODÉRATION) -->
+      <!-- TAB 2: UTILISATEURS & ABONNEMENTS (CRUD & MODÉRATION) -->
       <div v-if="activeTab === 'users'" class="tab-pane animate-fade">
-        
-        <!-- KPI Crédits & Comptes -->
+
+        <!-- KPI Abonnements & Comptes -->
         <div class="kpi-grid mb-4">
           <div class="kpi-card">
             <div class="kpi-icon icon-users">
@@ -785,8 +913,8 @@ onMounted(async () => {
               <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
             </div>
             <div>
-              <div class="kpi-value">{{ totalCreditsInCirculation }}</div>
-              <div class="kpi-label">Crédits Totaux Accordés</div>
+              <div class="kpi-value">{{ activeSubscriptionsCount }}</div>
+              <div class="kpi-label">Abonnements Actifs</div>
             </div>
           </div>
 
@@ -839,7 +967,7 @@ onMounted(async () => {
                 <tr>
                   <th>Utilisateur</th>
                   <th>Rôle</th>
-                  <th>Solde Crédits</th>
+                  <th>Abonnement</th>
                   <th>Statut du Compte</th>
                   <th>Date d'inscription</th>
                   <th style="text-align: right;">Actions Modération</th>
@@ -869,12 +997,16 @@ onMounted(async () => {
                   </td>
                   <td>
                     <div class="credits-adjuster">
-                      <button @click="updateCredits(u, -5)" class="btn-credit-min" title="Enlever 5 crédits">-5</button>
-                      <button @click="setCustomCredits(u)" class="credits-amount" title="Cliquez pour modifier">
-                        {{ u.credits }} crédits
-                      </button>
-                      <button @click="updateCredits(u, 5)" class="btn-credit-plus" title="Ajouter 5 crédits">+5</button>
-                      <button @click="updateCredits(u, 50)" class="btn-credit-plus-big" title="Ajouter 50 crédits">+50</button>
+                      <button @click="grantUserSubscription(u, null)" class="btn-credit-min" title="Désactiver l'abonnement">Aucun</button>
+                      <button @click="grantUserSubscription(u, 'starter')" class="btn-credit-plus" title="Activer Starter pour 30 jours">Starter</button>
+                      <button @click="grantUserSubscription(u, 'pro')" class="btn-credit-plus-big" title="Activer Pro pour 30 jours">Pro</button>
+                    </div>
+                    <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.3rem;">
+                      <template v-if="u.subscriptionTier">
+                        <span class="credits-amount" style="padding: 0.15rem 0.5rem; font-size: 0.7rem;">{{ u.subscriptionTier === 'pro' ? 'Pro' : 'Starter' }}</span>
+                        {{ u.bulletinsUsed || 0 }} bulletins · expire {{ formatDate(u.subscriptionExpiresAt) }}
+                      </template>
+                      <template v-else>Aucun abonnement</template>
                     </div>
                   </td>
                   <td>
@@ -902,28 +1034,28 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- TAB 3: TARIFS & PACKS DE CRÉDITS (CRUD) -->
+      <!-- TAB 3: FORMULES D'ABONNEMENT (CRUD) -->
       <div v-if="activeTab === 'packs'" class="tab-pane animate-fade">
         <div class="section-card">
           <div class="user-toolbar">
             <div>
-              <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800; color: #0f172a;">Gestion des Offres & Tarifs de Crédits</h3>
-              <p class="subtext">Configurez les quantités de crédits et les prix en FCFA affichés aux clients.</p>
+              <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800; color: #0f172a;">Gestion des Formules d'Abonnement</h3>
+              <p class="subtext">Configurez le volume de bulletins et les prix en FCFA/mois affichés aux clients.</p>
             </div>
-            <button @click="openNewPackModal" class="btn-primary-action">
-              + Nouveau Pack de Crédits
+            <button @click="openNewPlanModal" class="btn-primary-action">
+              + Nouvelle Formule
             </button>
           </div>
 
-          <div v-if="creditPacksLoading" class="admin-loading">
+          <div v-if="subscriptionPlansLoading" class="admin-loading">
             <div class="spinner"></div>
-            <span>Chargement des offres de tarif...</span>
+            <span>Chargement des formules...</span>
           </div>
 
-          <div v-else-if="creditPacks.length === 0" class="empty-state">
-            <p>Aucun pack de crédits configuré.</p>
-            <button @click="openNewPackModal" class="btn-primary-action" style="margin-top: 0.75rem;">
-              + Créer le premier pack
+          <div v-else-if="subscriptionPlans.length === 0" class="empty-state">
+            <p>Aucune formule d'abonnement configurée.</p>
+            <button @click="openNewPlanModal" class="btn-primary-action" style="margin-top: 0.75rem;">
+              + Créer la première formule
             </button>
           </div>
 
@@ -931,40 +1063,41 @@ onMounted(async () => {
             <table>
               <thead>
                 <tr>
-                  <th>Nom du Pack</th>
-                  <th>Quantité de Crédits</th>
-                  <th>Prix (FCFA)</th>
-                  <th>Prix Unitaire</th>
+                  <th>Formule</th>
+                  <th>Volume (bulletins/mois)</th>
+                  <th>Prix (FCFA/mois)</th>
+                  <th>Prix / bulletin</th>
                   <th>Badge Populaire</th>
                   <th>Visibilité Client</th>
                   <th style="text-align: right;">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="p in creditPacks" :key="p.id" :class="{ 'row-inactive': !p.active }">
+                <tr v-for="p in subscriptionPlans" :key="p.id" :class="{ 'row-inactive': !p.active }">
                   <td>
                     <strong style="color: #0f172a;">{{ p.name }}</strong>
+                    <div class="text-sub" style="font-size: 0.7rem;">{{ p.code }} · {{ p.billingCycle === 'annual' ? 'Annuel' : 'Mensuel' }}</div>
                   </td>
                   <td>
-                    <span class="credit-pill">{{ p.credits }} crédits</span>
+                    <span class="credit-pill">{{ p.bulletinLimit }} bulletins</span>
                   </td>
                   <td>
                     <strong style="color: #1e1b4b; font-size: 1rem;">{{ p.price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") }} FCFA</strong>
                   </td>
                   <td class="text-sub font-mono">
-                    {{ Math.round(p.price / (p.credits || 1)) }} FCFA / crédit
+                    {{ Math.round(p.price / (p.bulletinLimit || 1)) }} FCFA / bulletin
                   </td>
                   <td>
-                    <button 
-                      @click="togglePackPopular(p)" 
+                    <button
+                      @click="togglePlanPopular(p)"
                       :class="p.popular ? 'badge-popular-on' : 'badge-popular-off'"
                     >
                       {{ p.popular ? '★ Populaire' : 'Standard' }}
                     </button>
                   </td>
                   <td>
-                    <button 
-                      @click="togglePackActive(p)" 
+                    <button
+                      @click="togglePlanActive(p)"
                       :class="p.active ? 'status-active' : 'status-blocked'"
                     >
                       {{ p.active ? 'Actif' : 'Masqué' }}
@@ -972,10 +1105,93 @@ onMounted(async () => {
                   </td>
                   <td style="text-align: right;">
                     <div class="actions-cell">
-                      <button @click="openEditPackModal(p)" class="btn-secondary" style="padding: 0.35rem 0.65rem; font-size: 0.8rem;">
+                      <button @click="openEditPlanModal(p)" class="btn-secondary" style="padding: 0.35rem 0.65rem; font-size: 0.8rem;">
                         Modifier
                       </button>
-                      <button @click="deletePack(p)" class="btn-delete" title="Supprimer ce pack">
+                      <button @click="deletePlan(p)" class="btn-delete" title="Supprimer cette formule">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB : LICENCES ENTREPRISE (ÉDITION INSTALLABLE) -->
+      <div v-if="activeTab === 'licenses'" class="tab-pane animate-fade">
+        <div class="section-card">
+          <div class="user-toolbar">
+            <div>
+              <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800; color: #0f172a;">Licences Entreprise (Édition Installable)</h3>
+              <p class="subtext">Vendez une licence unique par entreprise. Chaque clé ne peut être activée que sur une seule installation à la fois.</p>
+            </div>
+            <button @click="openNewLicenseModal" class="btn-primary-action">
+              + Nouvelle Licence
+            </button>
+          </div>
+
+          <div v-if="licensesLoading" class="admin-loading">
+            <div class="spinner"></div>
+            <span>Chargement des licences...</span>
+          </div>
+
+          <div v-else-if="licenses.length === 0" class="empty-state">
+            <p>Aucune licence entreprise créée.</p>
+            <button @click="openNewLicenseModal" class="btn-primary-action" style="margin-top: 0.75rem;">
+              + Créer la première licence
+            </button>
+          </div>
+
+          <div v-else class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Entreprise</th>
+                  <th>Clé de licence</th>
+                  <th>Origine</th>
+                  <th>Statut</th>
+                  <th>Expiration</th>
+                  <th>Installation liée</th>
+                  <th style="text-align: right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="l in licenses" :key="l.id" :class="{ 'row-inactive': l.status !== 'active' }">
+                  <td>
+                    <strong style="color: #0f172a;">{{ l.companyName }}</strong>
+                    <div class="text-sub" style="font-size: 0.7rem;">{{ l.contactEmail }}</div>
+                  </td>
+                  <td class="font-mono text-sub">{{ maskLicenseKey(l.licenseKey) }}</td>
+                  <td>
+                    <span class="credit-pill" :style="l.reference ? 'background: #ecfdf5; color: #059669; border-color: #a7f3d0;' : 'background: #f1f5f9; color: #475569; border-color: #e2e8f0;'">
+                      {{ l.reference ? 'Achat en ligne' : 'Manuel' }}
+                    </span>
+                  </td>
+                  <td>
+                    <button
+                      @click="toggleLicenseStatus(l)"
+                      :class="l.status === 'active' ? 'status-active' : 'status-blocked'"
+                    >
+                      {{ l.status === 'active' ? 'Active' : 'Révoquée' }}
+                    </button>
+                  </td>
+                  <td class="text-sub">{{ l.expiresAt ? formatDate(l.expiresAt) : 'Perpétuelle' }}</td>
+                  <td class="text-sub">
+                    <span v-if="l.installationId">Oui · {{ formatDate(l.lastVerifiedAt) }}</span>
+                    <span v-else>Non activée</span>
+                  </td>
+                  <td style="text-align: right;">
+                    <div class="actions-cell">
+                      <button v-if="l.installationId" @click="resetLicenseActivation(l)" class="btn-secondary" style="padding: 0.35rem 0.65rem; font-size: 0.8rem;">
+                        Réinitialiser
+                      </button>
+                      <button @click="openEditLicenseModal(l)" class="btn-secondary" style="padding: 0.35rem 0.65rem; font-size: 0.8rem;">
+                        Modifier
+                      </button>
+                      <button @click="deleteLicense(l)" class="btn-delete" title="Supprimer cette licence">
                         <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                       </button>
                     </div>
@@ -1135,7 +1351,7 @@ onMounted(async () => {
     <div v-if="showCreateUserModal" class="modal-backdrop" @click.self="showCreateUserModal = false">
       <div class="modal-dialog">
         <div class="modal-header">
-          <h3>Créer un Compte Client & Crédits</h3>
+          <h3>Créer un Compte Client</h3>
           <button @click="showCreateUserModal = false" class="modal-close-btn">×</button>
         </div>
         <form @submit.prevent="handleCreateUser" class="modal-body">
@@ -1153,64 +1369,133 @@ onMounted(async () => {
             <input v-model="newUserPassword" type="password" required placeholder="Mot de passe sécurisé" class="admin-input" />
           </div>
 
-          <div class="form-group">
-            <label>Solde de Crédits Initial</label>
-            <input v-model="newUserCredits" type="number" min="0" required class="admin-input" />
-          </div>
-
           <div class="modal-actions">
             <button type="button" @click="showCreateUserModal = false" class="btn-secondary">Annuler</button>
             <button type="submit" :disabled="createUserLoading" class="btn-primary-action">
               <span v-if="createUserLoading">Création en cours...</span>
-              <span v-else>Créer le Compte & Attribuer</span>
+              <span v-else>Créer le Compte</span>
             </button>
           </div>
         </form>
       </div>
     </div>
 
-    <!-- Modal de Création/Édition de Pack de Crédits -->
-    <div v-if="showPackModal" class="modal-backdrop" @click.self="showPackModal = false">
+    <!-- Modal de Création/Édition de Formule d'Abonnement -->
+    <div v-if="showPlanModal" class="modal-backdrop" @click.self="showPlanModal = false">
       <div class="modal-dialog">
         <div class="modal-header">
-          <h3>{{ editingPackId ? 'Modifier le Pack de Crédits' : 'Créer un Nouveau Pack de Crédits' }}</h3>
-          <button @click="showPackModal = false" class="modal-close-btn">×</button>
+          <h3>{{ editingPlanId ? 'Modifier la Formule' : 'Créer une Nouvelle Formule' }}</h3>
+          <button @click="showPlanModal = false" class="modal-close-btn">×</button>
         </div>
-        <form @submit.prevent="handleSavePack" class="modal-body">
-          <div v-if="packFormError" class="login-error-alert mb-3">
-            {{ packFormError }}
+        <form @submit.prevent="handleSavePlan" class="modal-body">
+          <div v-if="planFormError" class="login-error-alert mb-3">
+            {{ planFormError }}
           </div>
 
           <div class="form-group">
-            <label>Nom du Pack (Ex: Pack Pro, Pack Starter)</label>
-            <input v-model="packForm.name" type="text" required placeholder="Nom de l'offre" class="admin-input" />
+            <label>Nom de la Formule (Ex: Starter, Pro)</label>
+            <input v-model="planForm.name" type="text" required placeholder="Nom de la formule" class="admin-input" />
           </div>
 
           <div class="form-group">
-            <label>Nombre de Crédits Inclus</label>
-            <input v-model="packForm.credits" type="number" min="1" required placeholder="Ex: 100" class="admin-input" />
+            <label>Code interne (Ex: starter, pro, starter_annual)</label>
+            <input v-model="planForm.code" type="text" required placeholder="Ex: starter" class="admin-input" />
           </div>
 
           <div class="form-group">
-            <label>Prix de Vente (en FCFA)</label>
-            <input v-model="packForm.price" type="number" min="0" required placeholder="Ex: 10000" class="admin-input" />
+            <label>Palier (tier) — identifie la même offre entre mensuel et annuel</label>
+            <input v-model="planForm.tier" type="text" placeholder="Ex: starter (laisser vide = même que le code)" class="admin-input" />
+          </div>
+
+          <div class="form-group">
+            <label>Périodicité</label>
+            <select v-model="planForm.billingCycle" class="admin-input">
+              <option value="monthly">Mensuel</option>
+              <option value="annual">Annuel</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Volume de Bulletins Inclus / mois</label>
+            <input v-model="planForm.bulletinLimit" type="number" min="1" required placeholder="Ex: 10" class="admin-input" />
+          </div>
+
+          <div class="form-group">
+            <label>Prix de Vente (en FCFA / mois)</label>
+            <input v-model="planForm.price" type="number" min="0" required placeholder="Ex: 5000" class="admin-input" />
           </div>
 
           <div class="form-group" style="flex-direction: row; align-items: center; gap: 0.75rem;">
-            <input v-model="packForm.popular" type="checkbox" id="popular-check" style="width: 18px; height: 18px; cursor: pointer;" />
+            <input v-model="planForm.popular" type="checkbox" id="popular-check" style="width: 18px; height: 18px; cursor: pointer;" />
             <label for="popular-check" style="cursor: pointer; text-transform: none; font-size: 0.9rem;">Mettre en avant ("Le plus populaire")</label>
           </div>
 
           <div class="form-group" style="flex-direction: row; align-items: center; gap: 0.75rem;">
-            <input v-model="packForm.active" type="checkbox" id="active-check" style="width: 18px; height: 18px; cursor: pointer;" />
-            <label for="active-check" style="cursor: pointer; text-transform: none; font-size: 0.9rem;">Rendre l'offre visible aux clients</label>
+            <input v-model="planForm.active" type="checkbox" id="active-check" style="width: 18px; height: 18px; cursor: pointer;" />
+            <label for="active-check" style="cursor: pointer; text-transform: none; font-size: 0.9rem;">Rendre la formule visible aux clients</label>
           </div>
 
           <div class="modal-actions">
-            <button type="button" @click="showPackModal = false" class="btn-secondary">Annuler</button>
-            <button type="submit" :disabled="packFormLoading" class="btn-primary-action">
-              <span v-if="packFormLoading">Enregistrement...</span>
-              <span v-else>{{ editingPackId ? 'Enregistrer les modifications' : 'Créer l\'offre de crédits' }}</span>
+            <button type="button" @click="showPlanModal = false" class="btn-secondary">Annuler</button>
+            <button type="submit" :disabled="planFormLoading" class="btn-primary-action">
+              <span v-if="planFormLoading">Enregistrement...</span>
+              <span v-else>{{ editingPlanId ? 'Enregistrer les modifications' : 'Créer la formule' }}</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal de Création/Édition de Licence Entreprise -->
+    <div v-if="showLicenseModal" class="modal-backdrop" @click.self="showLicenseModal = false">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3>{{ editingLicenseId ? 'Modifier la Licence' : 'Créer une Nouvelle Licence' }}</h3>
+          <button @click="showLicenseModal = false" class="modal-close-btn">×</button>
+        </div>
+
+        <div v-if="lastCreatedLicenseKey" style="padding: 0 1.5rem;">
+          <div class="login-error-alert mb-3" style="background: #ecfdf5; border-color: #a7f3d0; color: #059669;">
+            Licence créée ! Clé (à transmettre à l'entreprise, elle ne sera plus affichée en clair) :
+            <strong style="display: block; margin-top: 0.4rem; font-family: monospace; font-size: 0.95rem;">{{ lastCreatedLicenseKey }}</strong>
+          </div>
+        </div>
+
+        <form @submit.prevent="handleSaveLicense" class="modal-body">
+          <div v-if="licenseFormError" class="login-error-alert mb-3">
+            {{ licenseFormError }}
+          </div>
+
+          <div class="form-group">
+            <label>Raison Sociale de l'Entreprise</label>
+            <input v-model="licenseForm.companyName" type="text" required placeholder="Ex: Cabinet RH SARL" class="admin-input" />
+          </div>
+
+          <div class="form-group">
+            <label>Email de contact</label>
+            <input v-model="licenseForm.contactEmail" type="email" placeholder="contact@entreprise.com" class="admin-input" />
+          </div>
+
+          <div class="form-group">
+            <label>Date d'expiration (laisser vide = licence perpétuelle)</label>
+            <input v-model="licenseForm.expiresAt" type="date" class="admin-input" />
+          </div>
+
+          <div class="form-group">
+            <label>Prix de Vente (en FCFA)</label>
+            <input v-model="licenseForm.price" type="number" min="0" required placeholder="Ex: 500000" class="admin-input" />
+          </div>
+
+          <div class="form-group">
+            <label>Notes (référence d'achat, etc.)</label>
+            <input v-model="licenseForm.notes" type="text" placeholder="Optionnel" class="admin-input" />
+          </div>
+
+          <div class="modal-actions">
+            <button type="button" @click="showLicenseModal = false" class="btn-secondary">Fermer</button>
+            <button type="submit" :disabled="licenseFormLoading" class="btn-primary-action">
+              <span v-if="licenseFormLoading">Enregistrement...</span>
+              <span v-else>{{ editingLicenseId ? 'Enregistrer les modifications' : 'Créer la licence' }}</span>
             </button>
           </div>
         </form>

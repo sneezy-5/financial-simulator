@@ -79,7 +79,63 @@ async function sendPasswordResetEmail(email, otpCode) {
     }
 }
 
+/**
+ * Envoie la facture PDF par email après un paiement d'abonnement réussi
+ */
+async function sendInvoiceEmail(email, { invoiceNumber, pdfPath, planName, amount }) {
+    const formattedAmount = Math.round(amount || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    const textContent = `Bonjour,\n\nMerci pour votre paiement. Votre abonnement ${planName} (${formattedAmount} FCFA) est activé.\n\nVous trouverez votre facture ${invoiceNumber} en pièce jointe. Elle est également téléchargeable depuis votre profil sur l'application.\n\nMerci,\nL'équipe ONDA`;
+
+    if (transporter) {
+        try {
+            await transporter.sendMail({
+                from: FROM_EMAIL,
+                to: email,
+                subject: `ONDA — Facture ${invoiceNumber}`,
+                text: textContent,
+                attachments: pdfPath ? [{ filename: `${invoiceNumber}.pdf`, path: pdfPath }] : []
+            });
+            console.log(`✉️ Facture ${invoiceNumber} envoyée à ${email}`);
+        } catch (err) {
+            console.error("❌ Erreur envoi email facture:", err.message);
+        }
+    } else {
+        console.log(`\n======================================================`);
+        console.log(`✉️ [SIMULATION FACTURE] destinataire: ${email}`);
+        console.log(`🧾 Facture: ${invoiceNumber} — ${formattedAmount} FCFA (${planName})`);
+        console.log(`======================================================\n`);
+    }
+}
+
+/**
+ * Envoie la clé de licence entreprise par email après un achat en libre-service confirmé
+ */
+async function sendLicenseKeyEmail(email, { licenseKey, companyName }) {
+    const textContent = `Bonjour,\n\nMerci pour votre achat de la licence ONDA Entreprise pour ${companyName}.\n\nVotre clé de licence :\n${licenseKey}\n\nConservez-la précieusement : elle vous sera demandée lors du premier lancement de l'application installée pour activer votre poste.\n\nMerci,\nL'équipe ONDA`;
+
+    if (transporter) {
+        try {
+            await transporter.sendMail({
+                from: FROM_EMAIL,
+                to: email,
+                subject: `ONDA — Votre clé de licence entreprise`,
+                text: textContent
+            });
+            console.log(`✉️ Clé de licence envoyée à ${email}`);
+        } catch (err) {
+            console.error("❌ Erreur envoi email clé de licence:", err.message);
+        }
+    } else {
+        console.log(`\n======================================================`);
+        console.log(`✉️ [SIMULATION CLÉ DE LICENCE] destinataire: ${email}`);
+        console.log(`🔑 Clé: ${licenseKey} (${companyName})`);
+        console.log(`======================================================\n`);
+    }
+}
+
 module.exports = {
     sendVerificationEmail,
-    sendPasswordResetEmail
+    sendPasswordResetEmail,
+    sendInvoiceEmail,
+    sendLicenseKeyEmail
 };

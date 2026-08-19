@@ -14,6 +14,11 @@ const props = defineProps({
 const emit = defineEmits(['navigate', 'country-changed', 'require-auth', 'require-billing'])
 
 const countryRules = computed(() => getCountryRules(props.country))
+const enterpriseUrl = import.meta.env.VITE_ENTERPRISE_URL || 'http://localhost:5174/'
+// Vente de licences entreprise mise en pause pour le moment (réactivable en repassant à true)
+const ENTERPRISE_SALES_ENABLED = false
+
+const isSimulatorMode = import.meta.env.VITE_APP_MODE === 'simulator'
 
 const fcfa = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ' + countryRules.value.currency
 
@@ -79,10 +84,10 @@ const modules = computed(() => [
         <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
           <CountrySelector :country="props.country" @change-country="(c) => emit('country-changed', c)" />
           
-          <div v-if="user" style="display: flex; align-items: center; gap: 0.5rem;">
-            <button @click="emit('require-billing')" style="background: #e0e7ff; color: #3730a3; border: 1px solid #c7d2fe; font-weight: 800; font-size: 0.75rem; padding: 0.35rem 0.75rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; transition: all 0.2s;" title="Recharger mes crédits">
+          <div v-if="user && !isSimulatorMode" style="display: flex; align-items: center; gap: 0.5rem;">
+            <button @click="emit('require-billing')" style="background: #e0e7ff; color: #3730a3; border: 1px solid #c7d2fe; font-weight: 800; font-size: 0.75rem; padding: 0.35rem 0.75rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; transition: all 0.2s;" title="Gérer mon abonnement">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: #f59e0b;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-              {{ user.credits || 0 }} crédits
+              {{ !user.subscriptionTier ? "S'abonner" : user.subscriptionIsTrial ? 'Essai' : user.subscriptionTier === 'pro' ? 'Pro' : user.subscriptionTier === 'starter' ? 'Starter' : user.subscriptionTier }}
             </button>
             <button @click="emit('open-profile')" style="background: #ffffff; color: #0f172a; border: 1px solid #cbd5e1; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.8rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.4rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08);" title="Mon Profil Client (Cliquer pour éditer)">
               <span style="width: 20px; height: 20px; border-radius: 50%; background: #4f46e5; color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 800;">
@@ -168,6 +173,12 @@ const modules = computed(() => [
           </div>
         </div>
       </div>
+    </div>
+
+    <div v-if="ENTERPRISE_SALES_ENABLED" style="text-align: center; padding: 1.5rem 1rem 2.5rem;">
+      <a :href="enterpriseUrl" style="font-size: 0.85rem; font-weight: 600; color: #4f46e5; text-decoration: none;">
+        Vous êtes une entreprise ? Découvrez la version installable →
+      </a>
     </div>
   </div>
 </template>

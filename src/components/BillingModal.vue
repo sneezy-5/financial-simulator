@@ -7,7 +7,7 @@
           <div class="billing-icon-badge">
             <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
           </div>
-          <h2>Recharger mes crédits RH & IA</h2>
+          <h2>Mon abonnement ONDA RH</h2>
         </div>
         <button @click="$emit('close')" class="billing-close-btn" title="Fermer">✕</button>
       </div>
@@ -16,12 +16,13 @@
       <div class="billing-modal-body">
         <div class="balance-banner">
           <div>
-            <h3 class="balance-title">Solde actuel de votre compte</h3>
-            <p class="balance-val">{{ user?.credits || 0 }} <span class="balance-unit">crédits disponibles</span></p>
+            <h3 class="balance-title">Abonnement actuel</h3>
+            <p class="balance-val">{{ currentTierLabel }}</p>
           </div>
           <div class="balance-info">
-            <p>1 crédit = 1 employé généré ou 1 analyse IA</p>
-            <p>Les crédits n'expirent jamais.</p>
+            <p v-if="user?.subscriptionTier">{{ user.bulletinsUsed || 0 }}/{{ currentLimit }} bulletins utilisés</p>
+            <p v-if="user?.subscriptionExpiresAt">Expire le {{ formatDate(user.subscriptionExpiresAt) }}</p>
+            <p v-if="!user?.subscriptionTier">Choisissez une formule pour générer des bulletins.</p>
           </div>
         </div>
 
@@ -34,35 +35,50 @@
           <span>{{ errorMsg }}</span>
         </div>
 
-        <h3 class="packs-section-title">Choisissez un pack de crédits</h3>
-        
-        <div v-if="packsLoading" style="text-align: center; padding: 2rem; color: #64748b;">
-          Chargement des offres de crédits...
+        <h3 class="packs-section-title">Choisissez une formule d'abonnement</h3>
+
+        <div class="cycle-toggle">
+          <button
+            type="button"
+            class="cycle-toggle-btn"
+            :class="{ 'cycle-toggle-btn-active': selectedCycle === 'monthly' }"
+            @click="selectedCycle = 'monthly'"
+          >Mensuel</button>
+          <button
+            type="button"
+            class="cycle-toggle-btn"
+            :class="{ 'cycle-toggle-btn-active': selectedCycle === 'annual' }"
+            @click="selectedCycle = 'annual'"
+          >Annuel <span class="cycle-toggle-badge">2 mois offerts</span></button>
+        </div>
+
+        <div v-if="plansLoading" style="text-align: center; padding: 2rem; color: #64748b;">
+          Chargement des formules...
         </div>
 
         <div v-else class="packs-grid">
-          <div 
-            v-for="p in packs"
+          <div
+            v-for="p in displayedPlans"
             :key="p.id"
             class="pack-card"
-            :class="{'pack-card-active': selectedPack === p.credits, 'pack-popular': p.popular}"
-            @click="selectedPack = p.credits"
+            :class="{'pack-card-active': selectedPlanId === p.id, 'pack-popular': p.popular}"
+            @click="selectedPlanId = p.id"
           >
             <div v-if="p.popular" class="popular-ribbon">LE PLUS POPULAIRE</div>
             <div class="pack-content">
-              <span class="pack-badge" :class="p.popular ? 'badge-pro' : 'badge-starter'">{{ p.name.toUpperCase() }}</span>
-              <h4 class="pack-credits">{{ p.credits }} <span class="unit">crédits</span></h4>
+              <span class="pack-badge" :class="p.popular ? 'badge-pro' : 'badge-starter'">{{ p.tier ? p.tier.toUpperCase() : p.name.toUpperCase() }}</span>
+              <h4 class="pack-credits">jusqu'à {{ p.bulletinLimit }} <span class="unit">bulletins/mois</span></h4>
             </div>
             <div class="pack-price">
-              {{ p.price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") }} FCFA
+              {{ p.price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") }} FCFA{{ p.billingCycle === 'annual' ? '/an' : '/mois' }}
             </div>
           </div>
         </div>
 
         <div class="checkout-area">
-          <button @click="handlePurchase" :disabled="loading || !selectedPack" class="checkout-btn">
+          <button @click="handlePurchase" :disabled="loading || !selectedPlanId" class="checkout-btn">
             <span v-if="loading" class="spinner"></span>
-            <span v-else>Acheter {{ selectedPack }} crédits par Mobile Money / Carte</span>
+            <span v-else>Activer {{ selectedPlan?.name || '' }} — {{ formattedSelectedPrice }} FCFA{{ selectedPlan?.billingCycle === 'annual' ? '/an' : '/mois' }}</span>
           </button>
           <p class="checkout-note">
             <svg style="width: 14px; height: 14px; display: inline-block; vertical-align: text-bottom; margin-right: 4px;" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
@@ -75,7 +91,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { user, verifyPaystackPayment } from '../services/auth'
 
 const props = defineProps({
@@ -83,38 +99,68 @@ const props = defineProps({
 })
 const emit = defineEmits(['close'])
 
-const packs = ref([])
-const selectedPack = ref(null)
+const plans = ref([])
+const selectedCycle = ref('monthly')
+const selectedPlanId = ref(null)
 const loading = ref(false)
-const packsLoading = ref(false)
+const plansLoading = ref(false)
 const errorMsg = ref('')
 const successMsg = ref('')
 
-const fetchPacks = async () => {
+// Une ligne tarifaire (code) n'identifie plus une formule de façon unique : mensuel et annuel
+// partagent le même palier ('starter'/'pro'/...) sous 2 codes différents, donc la sélection se
+// fait par id de ligne tarifaire.
+const displayedPlans = computed(() => plans.value.filter(p => p.billingCycle === selectedCycle.value))
+const selectedPlan = computed(() => plans.value.find(p => p.id === selectedPlanId.value) || null)
+const formattedSelectedPrice = computed(() => selectedPlan.value ? selectedPlan.value.price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") : '')
+
+const currentPlan = computed(() => plans.value.find(p => p.code === user.value?.subscriptionTier) || null)
+const currentTierLabel = computed(() => {
+  if (!user.value?.subscriptionTier) return "Aucun abonnement actif"
+  const label = currentPlan.value?.name || user.value.subscriptionTier
+  return user.value.subscriptionIsTrial ? `Essai gratuit — ${label}` : label
+})
+const currentLimit = computed(() => currentPlan.value ? currentPlan.value.bulletinLimit : 0)
+
+const formatDate = (d) => new Date(d).toLocaleDateString('fr-FR')
+
+// Sélectionne une formule dans le cycle donné, en essayant de garder le même palier que la
+// sélection précédente (ex: on reste sur "Pro" en passant de mensuel à annuel)
+const pickPlanForCycle = (cycle) => {
+  const pool = plans.value.filter(p => p.billingCycle === cycle)
+  if (pool.length === 0) return
+  const previousTier = selectedPlan.value?.tier
+  const sameTier = previousTier && pool.find(p => p.tier === previousTier)
+  const popular = pool.find(p => p.popular)
+  selectedPlanId.value = (sameTier || popular || pool[0]).id
+}
+
+watch(selectedCycle, (cycle) => pickPlanForCycle(cycle))
+
+const fetchPlans = async () => {
   try {
-    packsLoading.value = true
-    const res = await fetch('/api/billing/packs')
+    plansLoading.value = true
+    const res = await fetch('/api/billing/plans')
     if (res.ok) {
       const data = await res.json()
-      packs.value = data.packs || []
-      if (packs.value.length > 0) {
-        const popular = packs.value.find(p => p.popular)
-        selectedPack.value = popular ? popular.credits : packs.value[0].credits
+      plans.value = data.plans || []
+      if (plans.value.length > 0 && !selectedPlanId.value) {
+        pickPlanForCycle(selectedCycle.value)
       }
     }
   } catch (e) {
-    console.error("Erreur chargement des offres de crédits:", e)
+    console.error("Erreur chargement des formules d'abonnement:", e)
   } finally {
-    packsLoading.value = false
+    plansLoading.value = false
   }
 }
 
 onMounted(() => {
-  fetchPacks()
+  fetchPlans()
 })
 
 watch(() => props.show, (newVal) => {
-  if (newVal) fetchPacks()
+  if (newVal) fetchPlans()
 })
 
 // Charge le script Paystack dynamiquement si absent
@@ -137,17 +183,17 @@ const ensurePaystackLoaded = () => {
 };
 
 const handlePurchase = async () => {
-  if (!selectedPack.value || !user.value) return;
+  if (!selectedPlanId.value || !user.value) return;
 
-  const packObj = packs.value.find(p => p.credits === selectedPack.value);
-  if (!packObj) return;
+  const planObj = plans.value.find(p => p.id === selectedPlanId.value);
+  if (!planObj) return;
 
   loading.value = true;
   errorMsg.value = '';
   successMsg.value = '';
 
   try {
-    const amountToCharge = packObj.price;
+    const amountToCharge = planObj.price;
     const publicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
 
     if (!publicKey) {
@@ -169,17 +215,17 @@ const handlePurchase = async () => {
       ref: 'onda_' + Math.floor((Math.random() * 1000000000) + 1),
       metadata: {
         userId: user.value.id,
-        credits: selectedPack.value,
+        planCode: planObj.code,
         custom_fields: [
           { display_name: 'Utilisateur', variable_name: 'user_id', value: user.value.id },
-          { display_name: 'Crédits achetés', variable_name: 'credits', value: selectedPack.value }
+          { display_name: 'Formule', variable_name: 'plan_code', value: planObj.code }
         ]
       },
       callback: function(response) {
         // Paystack exige une fonction synchrone – on appelle l'async en interne
         ;(async () => {
           try {
-            const msg = await verifyPaystackPayment(response.reference, selectedPack.value, packObj.price);
+            const msg = await verifyPaystackPayment(response.reference, planObj.code);
             successMsg.value = msg;
             setTimeout(() => emit('close'), 2000);
           } catch (err) {
@@ -366,6 +412,45 @@ const handlePurchase = async () => {
   font-size: 1rem;
   font-weight: 700;
   color: #0f172a;
+}
+
+.cycle-toggle {
+  display: inline-flex;
+  background: #f1f5f9;
+  border-radius: 9999px;
+  padding: 0.25rem;
+  margin-bottom: 1.25rem;
+  gap: 0.25rem;
+}
+
+.cycle-toggle-btn {
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.825rem;
+  font-weight: 700;
+  padding: 0.5rem 1rem;
+  border-radius: 9999px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.cycle-toggle-btn-active {
+  background: #ffffff;
+  color: #4f46e5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.cycle-toggle-badge {
+  background: #dcfce7;
+  color: #16a34a;
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 0.1rem 0.4rem;
+  border-radius: 9999px;
 }
 
 .packs-grid {

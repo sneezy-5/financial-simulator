@@ -23,6 +23,8 @@ const step = ref(1)
 const urlParams = new URLSearchParams(window.location.search)
 const currentCountry = ref(urlParams.get('country') || 'CI')
 
+const isSimulatorMode = import.meta.env.VITE_APP_MODE === 'simulator'
+
 // Data
 const banques = ref([])
 const prets = ref([])
@@ -742,6 +744,105 @@ const installApp = async () => {
 watch(currentModule, (newMod) => {
   logVisit(newMod)
 })
+
+// ══════════════════════════════════════════════════════════════
+// NOTIFICATIONS HR
+// ══════════════════════════════════════════════════════════════
+const hrAlerts = ref([])
+const showNotifMenu = ref(false)
+
+const checkHRNotifications = async () => {
+  if (!user.value) return
+  const now = new Date()
+  now.setHours(0,0,0,0)
+  const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+  const in14Days = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
+  
+  try {
+    let employeesList = []
+    try {
+      employeesList = await localDb.getEmployees()
+    } catch (err) {}
+    
+    const getEmpName = (id) => {
+      const e = employeesList.find(emp => emp.id === id)
+      return e ? `${e.prenom} ${e.nom}` : 'un employé'
+    }
+
+    const contrats = JSON.parse(localStorage.getItem('onda_contrats') || '[]')
+    const conges = JSON.parse(localStorage.getItem('onda_conges') || '[]')
+    
+    const alertesC = contrats.filter(c => {
+      if (c.statut !== 'actif' || !c.dateFin) return false
+      const dFin = new Date(c.dateFin)
+      return dFin >= now && dFin <= in30Days
+    }).map(c => ({ type: 'contrat', title: 'Contrat à échéance', desc: 'Renouvellement requis pour ' + getEmpName(c.employeeId), id: 'c_'+c.id, icon: '📄' }))
+    
+    const alertesCo = conges.filter(c => {
+      const dDebut = new Date(c.dateDebut)
+      const dFin = new Date(c.dateFin)
+      return (dDebut <= in14Days && dFin >= now)
+    }).map(c => ({ type: 'conge', title: 'Départ en congé imminent', desc: 'Préparez le départ de ' + getEmpName(c.employeeId), id: 'co_'+c.id, icon: '🏖️' }))
+    
+    let allAlerts = [...alertesC, ...alertesCo]
+    
+    // Vérification Abonnement / Essai
+    if (user.value.subscriptionExpiresAt) {
+      const expiryDate = new Date(user.value.subscriptionExpiresAt)
+      const daysDiff = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24))
+      
+      if (daysDiff <= 5 && daysDiff > 0) {
+        allAlerts.unshift({
+          type: 'billing',
+          title: user.value.subscriptionIsTrial ? "Fin d'essai proche" : "Renouvellement d'abonnement",
+          desc: `Votre accès expire dans ${daysDiff} jour(s).`,
+          id: 'billing_alert_1',
+          icon: '⚠️'
+        })
+      } else if (daysDiff <= 0) {
+        allAlerts.unshift({
+          type: 'billing',
+          title: "Abonnement expiré",
+          desc: "Votre accès a expiré. Veuillez régulariser votre abonnement.",
+          id: 'billing_alert_2',
+          icon: '❌'
+        })
+      }
+    }
+    
+    
+
+    // Filtrer les alertes déjà lues/fermées
+    const dismissed = JSON.parse(localStorage.getItem('onda_dismissed_alerts') || '[]')
+    hrAlerts.value = allAlerts.filter(a => !dismissed.includes(a.id))
+    
+  } catch (e) {
+    console.error("Erreur lecture notifs", e)
+  }
+}
+
+const dismissAlert = (alertId) => {
+  const dismissed = JSON.parse(localStorage.getItem('onda_dismissed_alerts') || '[]')
+  if (!dismissed.includes(alertId)) {
+    dismissed.push(alertId)
+    localStorage.setItem('onda_dismissed_alerts', JSON.stringify(dismissed))
+  }
+  hrAlerts.value = hrAlerts.value.filter(a => a.id !== alertId)
+}
+
+onMounted(() => {
+  checkHRNotifications()
+  setInterval(checkHRNotifications, 10000)
+})
+
+const toggleNotifMenu = () => {
+  showNotifMenu.value = !showNotifMenu.value
+  if (showNotifMenu.value) {
+    checkHRNotifications()
+  }
+}
+
+// Click outside to close notif menu (handled loosely in template by a full screen overlay if needed, or simple toggle)
 </script>
 
 <template>
@@ -827,33 +928,78 @@ watch(currentModule, (newMod) => {
 
           <!-- Right Action (User Auth & Billing & Profile) -->
           <div class="hr-header-right">
-             <div v-if="user" style="display: flex; align-items: center; gap: 0.6rem;">
-               <button v-if="showInstallBanner" @click="installApp" style="background: #10b981; color: white; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.75rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 2px 4px rgba(16,185,129,0.3);" title="Installer ONDA RH Pro sur votre appareil">
-                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                 Installer RH Pro
-               </button>
-               <button @click="showBillingModal = true" style="background: #ffffff; color: #0f172a; border: 1px solid #e2e8f0; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.75rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: all 0.2s;" title="Recharger mes crédits">
-                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: #f59e0b;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                 {{ user.credits || 0 }} crédits
-               </button>
-               <button @click="showProfileModal = true" style="background: #ffffff; color: #0f172a; border: 1px solid #e2e8f0; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.8rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.4rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05);" title="Mon Profil Client (Cliquer pour éditer)">
-                 <span style="width: 20px; height: 20px; border-radius: 50%; background: #4f46e5; color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 800;">
-                   {{ (user.name || user.companyName || user.email || 'U').substring(0, 1).toUpperCase() }}
-                 </span>
-                 <span style="max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #0f172a; font-weight: 800;">
-                   {{ user.companyName || user.name || user.email }}
-                 </span>
-               </button>
-               <button @click="logout" style="background: #ffffff; color: #dc2626; border: 1px solid #e2e8f0; font-weight: 600; font-size: 0.75rem; padding: 0.35rem 0.7rem; border-radius: 9999px; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: all 0.2s;" title="Se déconnecter">
-                 Déconnexion
-               </button>
-             </div>
-             <div v-else>
-               <button @click="showAuthModal = true" style="background: #10b981; color: white; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.5rem 0.85rem; border-radius: 0.5rem; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
-                 <svg style="width: 14px; height: 14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"></path></svg>
-                 Connexion / Inscription
-               </button>
-             </div>
+             <template v-if="!isSimulatorMode">
+               <div v-if="user" style="display: flex; align-items: center; gap: 0.6rem; background: rgba(255, 255, 255, 0.7); padding: 0.35rem; border-radius: 9999px; border: 1px solid rgba(226, 232, 240, 0.8); backdrop-filter: blur(8px);">
+                 <button v-if="showInstallBanner" @click="installApp" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.85rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 4px 10px rgba(16,185,129,0.25);" title="Installer ONDA RH Pro sur votre appareil">
+                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                   Installer
+                 </button>
+                 <button @click="showBillingModal = true" style="background: #ffffff; color: #0f172a; border: 1px solid #e2e8f0; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.85rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 2px 5px rgba(0,0,0,0.02); transition: all 0.2s;" title="Gérer mon abonnement">
+                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: #f59e0b;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                   {{ !user.subscriptionTier ? "S'abonner" : user.subscriptionIsTrial ? 'Essai' : user.subscriptionTier === 'pro' ? 'Pro' : user.subscriptionTier === 'starter' ? 'Starter' : user.subscriptionTier }}
+                 </button>
+                 
+                 <div style="width: 1px; height: 16px; background: #cbd5e1; margin: 0 0.1rem;"></div>
+                 
+                 <!-- Notification Bell -->
+                 <div style="position: relative;">
+                   <button class="notif-btn" @click="toggleNotifMenu" style="background: transparent; color: #475569; border: none; padding: 0.35rem 0.5rem; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; position: relative; transition: all 0.2s;" title="Notifications">
+                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                     <span v-if="hrAlerts.length > 0" style="position: absolute; top: -2px; right: -2px; background: #ef4444; color: white; border-radius: 9999px; font-size: 0.6rem; font-weight: 800; padding: 0.1rem 0.35rem; border: 2px solid white; box-sizing: content-box; display: flex; align-items: center; justify-content: center; min-width: 10px;">{{ hrAlerts.length }}</span>
+                   </button>
+                   
+                   <!-- Notifications Dropdown -->
+                   <div v-if="showNotifMenu" style="position: absolute; top: 120%; right: -50px; width: 320px; background: white; border-radius: 12px; box-shadow: 0 10px 40px -10px rgba(0,0,0,0.2); border: 1px solid #e2e8f0; z-index: 1000; overflow: hidden; animation: slideDown 0.2s ease-out forwards; transform-origin: top center;">
+                     <div style="padding: 1rem; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; background: #f8fafc;">
+                       <h4 style="margin: 0; font-size: 0.9rem; font-weight: 800; color: #0f172a;">Notifications</h4>
+                       <span style="background: #eef2ff; color: #4f46e5; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 800; font-size: 0.65rem;">{{ hrAlerts.length }} NOUVELLE(S)</span>
+                     </div>
+                     <div style="max-height: 350px; overflow-y: auto; padding: 0;">
+                       <div v-if="hrAlerts.length === 0" style="padding: 2rem; text-align: center; color: #64748b; font-size: 0.85rem;">
+                         Aucune notification
+                       </div>
+                       <div v-for="(alert, idx) in hrAlerts" :key="alert.id" @click="dismissAlert(alert.id)" style="padding: 1rem; border-bottom: 1px solid #f1f5f9; display: flex; gap: 0.75rem; align-items: flex-start; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'" title="Marquer comme lu">
+                         <div style="font-size: 1.25rem; flex-shrink: 0; padding-top: 0.1rem;">{{ alert.icon }}</div>
+                         <div>
+                           <h5 style="margin: 0 0 0.25rem 0; font-size: 0.85rem; font-weight: 700; color: #1e293b;">{{ alert.title }}</h5>
+                           <p style="margin: 0; font-size: 0.75rem; color: #64748b; line-height: 1.4;">{{ alert.desc }}</p>
+                         </div>
+                       </div>
+                     </div>
+                     <div style="padding: 0.75rem; text-align: center; border-top: 1px solid #f1f5f9; background: #f8fafc;">
+                       <button @click="showNotifMenu = false; if(isHRApp){hrActiveModule = 'dashboard'}" style="background: transparent; border: none; color: #4f46e5; font-size: 0.75rem; font-weight: 700; cursor: pointer;">Tout voir dans le tableau de bord →</button>
+                     </div>
+                   </div>
+                 </div>
+                 
+                 <button @click="showProfileModal = true" style="background: transparent; color: #0f172a; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.2rem 0.4rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.4rem; transition: background 0.2s;" title="Mon Profil Client (Cliquer pour éditer)">
+                   <span style="width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #4f46e5 0%, #ec4899 100%); color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 800; box-shadow: 0 2px 5px rgba(79, 70, 229, 0.3);">
+                     {{ (user.name || user.companyName || user.email || 'U').substring(0, 1).toUpperCase() }}
+                   </span>
+                   <span style="max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #0f172a; font-weight: 800;">
+                     {{ user.companyName || user.name || user.email }}
+                   </span>
+                 </button>
+                 
+                 <div style="width: 1px; height: 16px; background: #cbd5e1; margin: 0 0.1rem;"></div>
+                 
+                 <button @click="logout" style="background: transparent; color: #ef4444; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.75rem; border-radius: 9999px; cursor: pointer; transition: all 0.2s;" title="Se déconnecter" onmouseover="this.style.background='#fee2e2'" onmouseout="this.style.background='transparent'">
+                   Quitter
+                 </button>
+               </div>
+               <div v-else>
+                 <button @click="showAuthModal = true" style="background: #10b981; color: white; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.5rem 0.85rem; border-radius: 0.5rem; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+                   <svg style="width: 14px; height: 14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"></path></svg>
+                   Connexion / Inscription
+                 </button>
+               </div>
+             </template>
+             <template v-else>
+               <a href="https://eonda.online" target="_blank" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; text-decoration: none; font-weight: 700; font-size: 0.75rem; padding: 0.5rem 1.25rem; border-radius: 9999px; display: flex; align-items: center; gap: 0.4rem; box-shadow: 0 4px 12px rgba(16,185,129,0.3); transition: transform 0.2s;">
+                 Découvrir la version PRO
+                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M12 5l7 7-7 7"></path></svg>
+               </a>
+             </template>
           </div>
         </div>
       </div>

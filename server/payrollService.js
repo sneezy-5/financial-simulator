@@ -38,8 +38,11 @@ const printer = new PdfPrinter(fonts);
 function calculateSalaryRules(employee) {
     const salaireBaseMensuel = parseFloat(employee['salaire_base'] || 0);
     const joursDansLeMois = 30;
-    const joursBasePaie = parseFloat(employee['jours_travailles'] || 26);
+    const JOURS_BASE_STANDARD = 26; // référence légale standard, dénominateur de proratisation des primes
     const joursAbsences = parseFloat(employee['absences_jours'] || 0);
+    const joursTravailleExplicite = (employee['jours_travailles'] !== undefined && employee['jours_travailles'] !== null && employee['jours_travailles'] !== '')
+        ? parseFloat(employee['jours_travailles'])
+        : null;
     const autoConges = !!employee['auto_conges'];
     let joursConges = parseFloat(employee['jours_conges_pris'] || 0);
 
@@ -57,8 +60,12 @@ function calculateSalaryRules(employee) {
         }
     }
 
-    // Jours effectivement travaillés (salaire de base)
-    const joursTrav = Math.max(0, joursBasePaie - joursAbsences - joursConges);
+    // Jours effectivement travaillés : si jours_travailles est fourni explicitement (ex: export d'un
+    // système de pointage externe qui donne directement le nombre de jours réellement travaillés), on
+    // l'utilise tel quel. Sinon, on part de la base légale standard et on retranche les absences saisies
+    // (évite de compter les absences deux fois si les deux champs sont renseignés en même temps).
+    const joursTrav = Math.max(0, (joursTravailleExplicite !== null ? joursTravailleExplicite : (JOURS_BASE_STANDARD - joursAbsences)) - joursConges);
+    const joursBasePaie = JOURS_BASE_STANDARD;
     const joursCP = joursConges;
 
     const salaireBase = Math.round((salaireBaseMensuel / joursDansLeMois) * joursTrav);
@@ -216,7 +223,7 @@ function calculateSalaryRules(employee) {
         gratification, preavisVal, indemLicenciement, indemTransac, fraisFuneraires,
         primesImposables, primesNonImposablesRub, montantHeuresSup, nbHeuresSup, coefHS, tauxHoraire,
         primeTransport, primeLogement,
-        brutImposable, gainsTotaux, baseCNPS, baseCNPS_PfAtAm, parts, totalPersonnesCMU,
+        brutImposable, gainsTotaux, baseCNPS, baseCNPS_PfAtAm, parts, totalPersonnesCMU, joursTrav,
         patronal: {
             impotEmployeur, fdfpTA, fdfpFPC, totalFiscal: totalFiscalEmployeur,
             cnpsPF, cnpsAM, cnpsAT, cnpsRetraite: cnpsRetraitePat, cmu: cmuPat,
@@ -356,7 +363,7 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
             {
                 columns: [
                     { stack: [{ text: company.nom, fontSize: 13, bold: true, color: BLUE_DOC }, { text: company.adresse, fontSize: 8 }, { text: `N° RCCM : ${company.contribuable} — N° CC : ${company.cc}`, fontSize: 7, color: '#666' }, { text: `N° CNPS : ${company.cnps}`, fontSize: 7, color: '#666' }], width: '*' },
-                    { text: 'BULLETIN DE PAIE\nOFFICIEL', alignment: 'right', fontSize: 10, color: BLUE_DOC, bold: true, width: 100 }
+                    { text: employee.isLeavePayslip ? 'BULLETIN D\'ALLOCATION\nCONGÉ' : 'BULLETIN DE PAIE\nOFFICIEL', alignment: 'right', fontSize: 10, color: BLUE_DOC, bold: true, width: 100 }
                 ]
             },
             { canvas: [{ type: 'line', x1: 0, y1: 5, x2: 515, y2: 5, lineWidth: 1, strokeColor: GRAY_BORDER }] },
@@ -522,7 +529,39 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
     };
 }
 
-exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, mapping = null, htmlTemplate = null, country = 'CI') => {
+// Instantané par salarié pour l'historique de paie persistant (fondation des futures
+// déclarations réglementaires CNPS/ITS/CMU) — capture ce qui a réellement été calculé/déclaré,
+// indépendamment de toute modification ultérieure de la fiche salarié.
+function buildPayslipSnapshot(emp, calculs) {
+    return {
+        nom: emp.nom || '',
+        prenom: emp.prenom || '',
+        matricule: emp.matricule || '',
+        numeroCnps: emp.numero_cnps || '',
+        poste: emp.poste || '',
+        salaireBase: calculs.salaireBase || 0,
+        brutTotal: calculs.gainsTotaux || 0,
+        netAPayer: calculs.netAPayer || 0,
+        cnpsSal: calculs.salarial?.cnps || 0,
+        cnpsPF: calculs.patronal?.cnpsPF || 0,
+        cnpsAM: calculs.patronal?.cnpsAM || 0,
+        cnpsAT: calculs.patronal?.cnpsAT || 0,
+        cnpsRetraitePat: calculs.patronal?.cnpsRetraite || 0,
+        its: calculs.salarial?.its || 0,
+        ricf: calculs.salarial?.ricf || 0,
+        cmuSal: calculs.salarial?.cmu || 0,
+        cmuPat: calculs.patronal?.cmu || 0,
+        totalPersonnesCMU: calculs.totalPersonnesCMU || 0,
+        situationMatrimoniale: emp.situation_matrimoniale || '',
+        nombreEnfants: parseInt(emp.nombre_enfants) || 0,
+        heuresSupNb: parseFloat(emp.heures_sup_nb) || 0,
+        montantHeuresSup: calculs.montantHeuresSup || 0,
+        joursTravailles: calculs.joursTrav !== undefined ? calculs.joursTrav : 0,
+        absencesJours: parseFloat(emp.absences_jours) || 0
+    };
+}
+
+exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, mapping = null, htmlTemplate = null, country = 'CI', sheetName = null) => {
     return new Promise(async (resolve, reject) => {
         try {
             console.log(`[RH] Lecture Excel: ${dataPath}`);
@@ -533,13 +572,14 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, m
                 return s ? XLSX.utils.sheet_to_json(s) : [];
             };
 
-            // Recherche flexible de la feuille employés
-            let employesSheetName = workbook.SheetNames.find(n =>
-                n.toUpperCase() === 'EMPLOYES' ||
-                n.toUpperCase() === 'EMPLOYES' || // Doublon intentionnel pour clarté
-                n.toUpperCase() === 'EMPLOYES' ||
-                n.toUpperCase() === 'EMPLOYÉS'
-            );
+            // Feuille employés explicitement choisie par l'utilisateur (fichiers multi-feuilles
+            // sans nom standard) — sinon recherche flexible comme avant.
+            let employesSheetName = (sheetName && workbook.SheetNames.includes(sheetName))
+                ? sheetName
+                : workbook.SheetNames.find(n =>
+                    n.toUpperCase() === 'EMPLOYES' ||
+                    n.toUpperCase() === 'EMPLOYÉS'
+                );
 
             if (!employesSheetName && workbook.SheetNames.length > 0) {
                 // Fallback: Si une seule feuille, on l'utilise
@@ -596,17 +636,19 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, m
 
             const output = fs.createWriteStream(outputPath);
             const archive = archiver('zip', { zlib: { level: 9 } });
-            
+
             let totalMasseSalariale = 0;
             let totalCNPS = 0;
             let totalImpots = 0;
+            const perEmployeeResults = [];
 
-            output.on('close', () => resolve({ 
-                count: fullEmployees.length, 
+            output.on('close', () => resolve({
+                count: fullEmployees.length,
                 type: isDocxMode ? 'docx' : 'pdf',
                 totalMasseSalariale,
                 totalCNPS,
-                totalImpots
+                totalImpots,
+                perEmployeeResults
             }));
             archive.on('error', (err) => reject(err));
             archive.pipe(output);
@@ -623,6 +665,7 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, m
                     totalMasseSalariale += calculs.gainsTotaux || 0;
                     totalCNPS += calculs.salarial.cnps || 0;
                     totalImpots += calculs.salarial.irpp || calculs.salarial.its || 0;
+                    perEmployeeResults.push(buildPayslipSnapshot(emp, calculs));
 
                     const rawName = String(emp['nom'] || `Emp${index}`);
                     const safeName = rawName.replace(/[^a-z0-9]/gi, '_');
@@ -631,93 +674,97 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, m
                     const moisNom = moisNoms[parseInt(emp.mois || 1) - 1] || 'Mois';
                     const entNom = (companyInfo.nom_entreprise || emp.nom_entreprise || 'ENTREPRISE').toUpperCase();
                     const salNom = (emp.nom || `Employe${index}`).toUpperCase();
-                    const finalFileName = `BULLETIN DE PAIE - ${entNom} - ${salNom} - ${moisNom} ${emp.annee || ''}`;
+                    
+                    const leave = (leavesToProcess || []).find(l => l.id === emp.id || (l.matricule && l.matricule === emp.matricule));
+                    const employesToGenerate = [emp];
+                    if (leave) employesToGenerate.push({ ...emp, isLeavePayslip: true });
 
-                    if (isDocxMode) {
-                        const viewData = { ...emp, ...calculs, date_jour: new Date().toLocaleDateString() };
-                        const zip = new PizZip(docTemplateContent.toString('binary'));
-                        const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
-                        doc.render(viewData);
-                        archive.append(doc.getZip().generate({ type: 'nodebuffer' }), { name: `${finalFileName}.docx` });
-                    } else if (isHtmlTemplateMode) {
-                        const entNom = (companyInfo.nom_entreprise || emp.nom_entreprise || 'ENTREPRISE').toUpperCase();
-                        const viewData = {
-                            ...emp,
-                            ...calculs,
-                            date_jour: new Date().toLocaleDateString(),
-                            nom_entreprise: entNom
-                        };
-                        promises.push((async () => {
-                            if (!puppeteer) throw new Error("puppeteer module not found. Run npm install puppeteer");
+                    for (const currentEmp of employesToGenerate) {
+                        const finalFileName = currentEmp.isLeavePayslip ? `BULLETIN ALLOCATION CONGE - ${entNom} - ${salNom} - ${moisNom} ${emp.annee || ''}` : `BULLETIN DE PAIE - ${entNom} - ${salNom} - ${moisNom} ${emp.annee || ''}`;
 
-                            // Replacements
-                            let html = htmlTemplate;
-                            // Format FCFA
-                            const formatFCFA = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+                        if (isDocxMode) {
+                            const viewData = { ...currentEmp, ...calculs, date_jour: new Date().toLocaleDateString() };
+                            const zip = new require('pizzip')(docTemplateContent.toString('binary'));
+                            const doc = new require('docxtemplater')(zip, { paragraphLoop: true, linebreaks: true });
+                            doc.render(viewData);
+                            archive.append(doc.getZip().generate({ type: 'nodebuffer' }), { name: `${finalFileName}.docx` });
+                        } else if (isHtmlTemplateMode) {
+                            const viewData = {
+                                ...currentEmp,
+                                ...calculs,
+                                date_jour: new Date().toLocaleDateString(),
+                                nom_entreprise: entNom
+                            };
+                            promises.push((async () => {
+                                if (!puppeteer) throw new Error("puppeteer module not found. Run npm install puppeteer");
 
-                            for (const key of Object.keys(viewData)) {
-                                const val = viewData[key];
-                                const strVal = typeof val === 'number' ? formatFCFA(val) : (val || '');
-                                // Remplacer dynamiquement les {clé} dans le HTML
-                                const regex = new RegExp(`{${key}}`, 'g');
-                                html = html.replace(regex, strVal);
+                                let html = htmlTemplate;
+                                const formatFCFA = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+
+                                for (const key of Object.keys(viewData)) {
+                                    const val = viewData[key];
+                                    const strVal = typeof val === 'number' ? formatFCFA(val) : (val || '');
+                                    const regex = new RegExp(`{${key}}`, 'g');
+                                    html = html.replace(regex, strVal);
+                                }
+                                html = html.replace(/{[^}]+}/g, '0');
+                                
+                                if (currentEmp.isLeavePayslip) {
+                                    html = html.replace(/BULLETIN DE PAIE/gi, "BULLETIN D'ALLOCATION CONGÉ");
+                                }
+
+                                const fullHtml = `
+                                <!DOCTYPE html>
+                                <html>
+                                <head>
+                                    <meta charset="utf-8">
+                                    <script src="https://cdn.tailwindcss.com"></script>
+                                    <style>
+                                        body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background: white; color: #1f2937; font-size: 11px; line-height: 1.3; text-align: left; }
+                                        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                                        table { font-size: 11px; border-collapse: collapse; }
+                                        td, th { padding: 2px 8px !important; }
+                                        h1 { font-size: 15px !important; margin: 4px 0 !important; }
+                                        h2 { font-size: 13px !important; margin: 3px 0 !important; }
+                                        h3 { font-size: 12px !important; margin: 2px 0 !important; }
+                                        p { margin: 2px 0 !important; }
+                                        .mt-4, .mt-6, .mt-8, .mb-4, .mb-6, .mb-8, .my-4, .my-6, .my-8 { margin-top: 8px !important; margin-bottom: 8px !important; }
+                                        .pt-4, .pt-6, .pt-8, .pb-4, .pb-6, .pb-8, .py-4, .py-6, .py-8 { padding-top: 4px !important; padding-bottom: 4px !important; }
+                                    </style>
+                                </head>
+                                <body class="p-6">
+                                    ${html}
+                                </body>
+                                </html>
+                                `;
+
+                                const page = await browser.newPage();
+                                await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
+                                const pdfBytes = await page.pdf({ format: 'A4', printBackground: true });
+                                await page.close();
+
+                                archive.append(Buffer.from(pdfBytes), { name: `${finalFileName}.pdf` });
+                            })());
+                        } else {
+                            let docDefinition;
+                            if (currentEmp.pays === 'BJ') {
+                                docDefinition = generateBeninPdfDefinition(currentEmp, calculs, companyInfo);
+                            } else if (currentEmp.pays === 'TG') {
+                                docDefinition = generateTogoPdfDefinition(currentEmp, calculs, companyInfo);
+                            } else {
+                                docDefinition = generatePdfDefinition(currentEmp, calculs, companyInfo);
                             }
-
-                            // Nettoyer les variables restantes non mappées
-                            html = html.replace(/{[^}]+}/g, '0');
-
-                            const fullHtml = `
-                            <!DOCTYPE html>
-                            <html>
-                            <head>
-                                <meta charset="utf-8">
-                                <script src="https://cdn.tailwindcss.com"></script>
-                                <style>
-                                    body { 
-                                        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; 
-                                        background: white; 
-                                        color: #1f2937;
-                                        font-size: 11px;
-                                        line-height: 1.3;
-                                        text-align: left;
-                                    }
-                                    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                                    /* Force compact table rows */
-                                    table { font-size: 11px; border-collapse: collapse; }
-                                    td, th { padding: 2px 8px !important; }
-                                    h1 { font-size: 15px !important; margin: 4px 0 !important; }
-                                    h2 { font-size: 13px !important; margin: 3px 0 !important; }
-                                    h3 { font-size: 12px !important; margin: 2px 0 !important; }
-                                    p { margin: 2px 0 !important; }
-                                    /* Reduce all large spacings */
-                                    .mt-4, .mt-6, .mt-8, .mb-4, .mb-6, .mb-8, .my-4, .my-6, .my-8 { margin-top: 8px !important; margin-bottom: 8px !important; }
-                                    .pt-4, .pt-6, .pt-8, .pb-4, .pb-6, .pb-8, .py-4, .py-6, .py-8 { padding-top: 4px !important; padding-bottom: 4px !important; }
-                                </style>
-                            </head>
-                            <body class="p-6">
-                                ${html}
-                            </body>
-                            </html>
-                            `;
-
-                            const page = await browser.newPage();
-                            await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
-                            const pdfBytes = await page.pdf({ format: 'A4', printBackground: true });
-                            await page.close();
-
-                            archive.append(Buffer.from(pdfBytes), { name: `${finalFileName}.pdf` });
-                        })());
-                    } else {
-                        const docDefinition = generatePdfDefinition(emp, calculs, companyInfo);
-                        const pdfDoc = printer.createPdfKitDocument(docDefinition);
-                        let chunks = [];
-                        pdfDoc.on('data', (chunk) => chunks.push(chunk));
-                        pdfDoc.on('end', () => {
-                            const result = Buffer.concat(chunks);
-                            archive.append(result, { name: `${finalFileName}.pdf` });
-                        });
-                        pdfDoc.end();
-                    }
+                            
+                            const pdfDoc = printer.createPdfKitDocument(docDefinition);
+                            let chunks = [];
+                            pdfDoc.on('data', (chunk) => chunks.push(chunk));
+                            pdfDoc.on('end', () => {
+                                const result = Buffer.concat(chunks);
+                                archive.append(result, { name: `${finalFileName}.pdf` });
+                            });
+                            pdfDoc.end();
+                        }
+                    } // end employesToGenerate loop
                 } catch (err) {
                     console.error("Error creating document for " + emp.nom, err);
                 }
@@ -742,8 +789,11 @@ function calculateBeninSalaryRules(employee) {
     // 1. Calcul des éléments de base (identique à calculateSalaryRules)
     const salaireBaseMensuel = parseFloat(employee['salaire_base'] || 0);
     const joursDansLeMois = 30;
-    const joursBasePaie = parseFloat(employee['jours_travailles'] || 26);
+    const JOURS_BASE_STANDARD = 26; // référence légale standard, dénominateur de proratisation des primes
     const joursAbsences = parseFloat(employee['absences_jours'] || 0);
+    const joursTravailleExplicite = (employee['jours_travailles'] !== undefined && employee['jours_travailles'] !== null && employee['jours_travailles'] !== '')
+        ? parseFloat(employee['jours_travailles'])
+        : null;
     const autoConges = !!employee['auto_conges'];
     let joursConges = parseFloat(employee['jours_conges_pris'] || 0);
 
@@ -761,7 +811,9 @@ function calculateBeninSalaryRules(employee) {
         }
     }
 
-    const joursTrav = Math.max(0, joursBasePaie - joursAbsences - joursConges);
+    // Cf. calculateSalaryRules : jours_travailles explicite prime sur base - absences (évite le double comptage)
+    const joursTrav = Math.max(0, (joursTravailleExplicite !== null ? joursTravailleExplicite : (JOURS_BASE_STANDARD - joursAbsences)) - joursConges);
+    const joursBasePaie = JOURS_BASE_STANDARD;
     const joursCP = joursConges;
 
     const salaireBase = Math.round((salaireBaseMensuel / joursDansLeMois) * joursTrav);
@@ -853,7 +905,7 @@ function calculateBeninSalaryRules(employee) {
         gratification, preavisVal: 0, indemLicenciement: 0, indemTransac: 0, fraisFuneraires: 0,
         primesImposables, primesNonImposablesRub, montantHeuresSup, nbHeuresSup, coefHS, tauxHoraire,
         primeTransport, primeLogement,
-        brutImposable, gainsTotaux, baseCNPS: baseCNSS, baseCNPS_PfAtAm: baseCNSS, parts: 0, totalPersonnesCMU: 0,
+        brutImposable, gainsTotaux, baseCNPS: baseCNSS, baseCNPS_PfAtAm: baseCNSS, parts: 0, totalPersonnesCMU: 0, joursTrav,
         patronal: {
             impotEmployeur, fdfpTA: 0, fdfpFPC: 0, totalFiscal: totalFiscalEmployeur,
             cnpsPF: cnssPF, cnpsAM: 0, cnpsAT: cnssAT, cnpsRetraite: cnssRetraitePat, cmu: 0,
@@ -1048,7 +1100,7 @@ function generateBeninPdfDefinition(employee, calc, companyInfo = {}) {
             },
 
             // TITRE
-            { text: 'BULLETIN DE PAIE', alignment: 'center', fontSize: 13, bold: true, color: NAVY_HEADER, margin: [0, 12, 0, 12] },
+            { text: employee.isLeavePayslip ? "BULLETIN D'ALLOCATION CONGÉ" : 'BULLETIN DE PAIE', alignment: 'center', fontSize: 13, bold: true, color: NAVY_HEADER, margin: [0, 12, 0, 12] },
 
             // CARTOUCHE EMPLOYEUR & SALARIÉ
             {
@@ -1174,8 +1226,11 @@ function generateBeninPdfDefinition(employee, calc, companyInfo = {}) {
 function calculateTogoSalaryRules(employee) {
     const salaireBaseMensuel = parseFloat(employee['salaire_base'] || 0);
     const joursDansLeMois = 30;
-    const joursBasePaie = parseFloat(employee['jours_travailles'] || 26);
+    const JOURS_BASE_STANDARD = 26; // référence légale standard, dénominateur de proratisation des primes
     const joursAbsences = parseFloat(employee['absences_jours'] || 0);
+    const joursTravailleExplicite = (employee['jours_travailles'] !== undefined && employee['jours_travailles'] !== null && employee['jours_travailles'] !== '')
+        ? parseFloat(employee['jours_travailles'])
+        : null;
     const autoConges = !!employee['auto_conges'];
     let joursConges = parseFloat(employee['jours_conges_pris'] || 0);
 
@@ -1193,7 +1248,9 @@ function calculateTogoSalaryRules(employee) {
         }
     }
 
-    const joursTrav = Math.max(0, joursBasePaie - joursAbsences - joursConges);
+    // Cf. calculateSalaryRules : jours_travailles explicite prime sur base - absences (évite le double comptage)
+    const joursTrav = Math.max(0, (joursTravailleExplicite !== null ? joursTravailleExplicite : (JOURS_BASE_STANDARD - joursAbsences)) - joursConges);
+    const joursBasePaie = JOURS_BASE_STANDARD;
     const joursCP = joursConges;
 
     const salaireBase = Math.round((salaireBaseMensuel / joursDansLeMois) * joursTrav);
@@ -1289,7 +1346,7 @@ function calculateTogoSalaryRules(employee) {
         gratification, preavisVal: 0, indemLicenciement: 0, indemTransac: 0, fraisFuneraires: 0,
         primesImposables, primesNonImposablesRub, montantHeuresSup, nbHeuresSup, coefHS, tauxHoraire,
         primeTransport, primeLogement,
-        brutImposable, gainsTotaux, baseCNPS: baseCNSS, baseCNPS_PfAtAm: baseCNSS, parts: 0, totalPersonnesCMU: 0,
+        brutImposable, gainsTotaux, baseCNPS: baseCNSS, baseCNPS_PfAtAm: baseCNSS, parts: 0, totalPersonnesCMU: 0, joursTrav,
         revenuApresCotisations, abattementMensuel, revenuNetImposableMensuel, totalRetenuesDiverses,
         patronal: {
             impotEmployeur, fdfpTA: 0, fdfpFPC: 0, totalFiscal: impotEmployeur,
@@ -1441,7 +1498,7 @@ function generateTogoPdfDefinition(employee, calc, companyInfo = {}) {
                 layout: { hLineColor: function () { return GRAY_BORDER; } }
             },
 
-            { text: 'BULLETIN DE PAIE', alignment: 'center', fontSize: 13, bold: true, color: NAVY_HEADER, margin: [0, 10, 0, 10] },
+            { text: employee.isLeavePayslip ? "BULLETIN D'ALLOCATION CONGÉ" : 'BULLETIN DE PAIE', alignment: 'center', fontSize: 13, bold: true, color: NAVY_HEADER, margin: [0, 10, 0, 10] },
 
             {
                 columns: [
@@ -1941,17 +1998,19 @@ exports.processPayrollJson = async (employeesList, outputPath, templatePath = nu
 
             const output = fs.createWriteStream(outputPath);
             const archive = archiver('zip', { zlib: { level: 9 } });
-            
+
             let totalMasseSalariale = 0;
             let totalCNPS = 0;
             let totalImpots = 0;
+            const perEmployeeResults = [];
 
-            output.on('close', () => resolve({ 
-                count: fullEmployees.length, 
+            output.on('close', () => resolve({
+                count: fullEmployees.length,
                 type: isDocxMode ? 'docx' : 'pdf',
                 totalMasseSalariale,
                 totalCNPS,
-                totalImpots
+                totalImpots,
+                perEmployeeResults
             }));
             archive.on('error', (err) => reject(err));
             archive.pipe(output);
@@ -1968,69 +2027,92 @@ exports.processPayrollJson = async (employeesList, outputPath, templatePath = nu
                     totalMasseSalariale += calculs.gainsTotaux || 0;
                     totalCNPS += calculs.salarial.cnps || 0;
                     totalImpots += calculs.salarial.irpp || calculs.salarial.its || 0;
+                    perEmployeeResults.push(buildPayslipSnapshot(emp, calculs));
+
+                    const rawName = String(emp['nom'] || `Emp${index}`);
+                    const safeName = rawName.replace(/[^a-z0-9]/gi, '_');
 
                     const moisNoms = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
                     const moisNom = moisNoms[parseInt(emp.mois || new Date().getMonth() + 1) - 1] || 'Mois';
                     const annee = emp.annee || new Date().getFullYear();
                     const entNom = (companyInfo.nom_entreprise || emp.nom_entreprise || 'ENTREPRISE').toUpperCase();
                     const salNom = (emp.nom || `Employe${index}`).toUpperCase();
-                    const finalFileName = `BULLETIN DE PAIE - ${entNom} - ${salNom} - ${moisNom} ${annee}`;
+                    
+                    const leave = (leavesToProcess || []).find(l => l.id === emp.id || (l.matricule && l.matricule === emp.matricule));
+                    const employesToGenerate = [emp];
+                    if (leave) employesToGenerate.push({ ...emp, isLeavePayslip: true });
 
-                    if (isHtmlTemplateMode) {
-                        const viewData = {
-                            ...emp,
-                            ...calculs,
-                            date_jour: new Date().toLocaleDateString(),
-                            nom_entreprise: entNom
-                        };
-                        promises.push((async () => {
-                            if (!puppeteer) throw new Error("puppeteer module not found. Run npm install puppeteer");
-                            let html = htmlTemplate;
-                            const formatFCFA = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+                    for (const currentEmp of employesToGenerate) {
+                        const finalFileName = currentEmp.isLeavePayslip ? `BULLETIN ALLOCATION CONGE - ${entNom} - ${salNom} - ${moisNom} ${annee}` : `BULLETIN DE PAIE - ${entNom} - ${salNom} - ${moisNom} ${annee}`;
 
-                            for (const key of Object.keys(viewData)) {
-                                const val = viewData[key];
-                                const strVal = typeof val === 'number' ? formatFCFA(val) : (val || '');
-                                const regex = new RegExp(`{${key}}`, 'g');
-                                html = html.replace(regex, strVal);
+                        if (isHtmlTemplateMode) {
+                            const viewData = {
+                                ...currentEmp,
+                                ...calculs,
+                                date_jour: new Date().toLocaleDateString(),
+                                nom_entreprise: entNom
+                            };
+                            promises.push((async () => {
+                                if (!puppeteer) throw new Error("puppeteer module not found. Run npm install puppeteer");
+                                let html = htmlTemplate;
+                                const formatFCFA = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+
+                                for (const key of Object.keys(viewData)) {
+                                    const val = viewData[key];
+                                    const strVal = typeof val === 'number' ? formatFCFA(val) : (val || '');
+                                    const regex = new RegExp(`{${key}}`, 'g');
+                                    html = html.replace(regex, strVal);
+                                }
+                                html = html.replace(/{[^}]+}/g, '0');
+
+                                if (currentEmp.isLeavePayslip) {
+                                    html = html.replace(/BULLETIN DE PAIE/gi, "BULLETIN D'ALLOCATION CONGÉ");
+                                }
+
+                                const fullHtml = `
+                                <!DOCTYPE html>
+                                <html>
+                                <head>
+                                    <meta charset="utf-8">
+                                    <script src="https://cdn.tailwindcss.com"></script>
+                                    <style>
+                                        body { font-family: sans-serif; background: white; font-size: 11px; line-height: 1.3; }
+                                        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                                        table { font-size: 11px; border-collapse: collapse; }
+                                        td, th { padding: 2px 8px !important; }
+                                    </style>
+                                </head>
+                                <body class="p-6">${html}</body>
+                                </html>
+                                `;
+
+                                const page = await browser.newPage();
+                                await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
+                                const pdfBytes = await page.pdf({ format: 'A4', printBackground: true });
+                                await page.close();
+
+                                archive.append(Buffer.from(pdfBytes), { name: `${finalFileName}.pdf` });
+                            })());
+                        } else {
+                            let docDefinition;
+                            if (currentEmp.pays === 'BJ') {
+                                docDefinition = generateBeninPdfDefinition(currentEmp, calculs, companyInfo);
+                            } else if (currentEmp.pays === 'TG') {
+                                docDefinition = generateTogoPdfDefinition(currentEmp, calculs, companyInfo);
+                            } else {
+                                docDefinition = generatePdfDefinition(currentEmp, calculs, companyInfo);
                             }
-                            html = html.replace(/{[^}]+}/g, '0');
-
-                            const fullHtml = `
-                            <!DOCTYPE html>
-                            <html>
-                            <head>
-                                <meta charset="utf-8">
-                                <script src="https://cdn.tailwindcss.com"></script>
-                                <style>
-                                    body { font-family: sans-serif; background: white; font-size: 11px; line-height: 1.3; }
-                                    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                                    table { font-size: 11px; border-collapse: collapse; }
-                                    td, th { padding: 2px 8px !important; }
-                                </style>
-                            </head>
-                            <body class="p-6">${html}</body>
-                            </html>
-                            `;
-
-                            const page = await browser.newPage();
-                            await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
-                            const pdfBytes = await page.pdf({ format: 'A4', printBackground: true });
-                            await page.close();
-
-                            archive.append(Buffer.from(pdfBytes), { name: `${finalFileName}.pdf` });
-                        })());
-                    } else {
-                        const docDefinition = generatePdfDefinition(emp, calculs, companyInfo);
-                        const pdfDoc = printer.createPdfKitDocument(docDefinition);
-                        let chunks = [];
-                        pdfDoc.on('data', (chunk) => chunks.push(chunk));
-                        pdfDoc.on('end', () => {
-                            const result = Buffer.concat(chunks);
-                            archive.append(result, { name: `${finalFileName}.pdf` });
-                        });
-                        pdfDoc.end();
-                    }
+                            
+                            const pdfDoc = printer.createPdfKitDocument(docDefinition);
+                            let chunks = [];
+                            pdfDoc.on('data', (chunk) => chunks.push(chunk));
+                            pdfDoc.on('end', () => {
+                                const result = Buffer.concat(chunks);
+                                archive.append(result, { name: `${finalFileName}.pdf` });
+                            });
+                            pdfDoc.end();
+                        }
+                    } // end employesToGenerate loop
                 } catch (err) {
                     console.error("Error creating document for " + emp.nom, err);
                 }

@@ -5,6 +5,14 @@ import SoldeCompteSimulator from './SoldeCompteSimulator.vue'
 import LocalDatabasePanel from './LocalDatabasePanel.vue'
 import EmployeeDirectory from './EmployeeDirectory.vue'
 import SettingsPanel from './SettingsPanel.vue'
+import DocumentsGenerator from './hr/DocumentsGenerator.vue'
+import CongesManager from './hr/CongesManager.vue'
+import ContratsManager from './hr/ContratsManager.vue'
+import EvaluationsManager from './hr/EvaluationsManager.vue'
+import FormationsManager from './hr/FormationsManager.vue'
+import PlanningManager from './hr/PlanningManager.vue'
+import DashboardManager from './hr/DashboardManager.vue'
+import EmployeeSelect from './hr/EmployeeSelect.vue'
 import { getCountryRules } from '../services/countryConfig.js'
 import { localDb } from '../services/localDatabase.js'
 import { showToast } from '../services/toast.js'
@@ -21,6 +29,7 @@ onMounted(() => {
     }
     document.head.appendChild(script)
   }
+  fetchPayrollPeriods()
 })
 
 const props = defineProps({
@@ -57,6 +66,9 @@ const emit = defineEmits([
 const countryRules = computed(() => getCountryRules(props.country))
 
 const isPro = computed(() => !!user.value)
+const enterpriseUrl = import.meta.env.VITE_ENTERPRISE_URL || 'http://localhost:5174/'
+// Vente de licences entreprise mise en pause pour le moment (réactivable en repassant à true)
+const ENTERPRISE_SALES_ENABLED = false
 
 // ═══ SIMULATION - Type Bulletin ═══
 // null = choix du type | 'habituel' | 'conges'
@@ -68,7 +80,7 @@ const activeModule = ref(null)
 const hrWrapperRef = ref(null)
 
 const setModuleSafe = (modVal, typeVal = null) => {
-  const proModules = ['import', 'local_db', 'directory', 'settings']
+  const proModules = ['simulation', 'simulation_habituel', 'simulation_conges', 'solde', 'import', 'local_db', 'directory', 'settings', 'saisie', 'stats', 'analytics_entreprise', 'conges', 'contrats', 'evaluations', 'formations', 'planning', 'documents']
   let targetMod = modVal
   let targetType = typeVal
 
@@ -81,8 +93,8 @@ const setModuleSafe = (modVal, typeVal = null) => {
   }
 
   if (proModules.includes(targetMod) && !isPro.value) {
-    targetMod = 'simulation'
-    targetType = 'habituel'
+    targetMod = null
+    targetType = null
   }
 
   activeModule.value = targetMod
@@ -100,7 +112,7 @@ const toggleStartMenu = () => {
 }
 
 const openModule = (modId) => {
-  const proModules = ['import', 'local_db', 'directory', 'settings']
+  const proModules = ['simulation', 'simulation_habituel', 'simulation_conges', 'solde', 'import', 'local_db', 'directory', 'settings', 'saisie', 'stats', 'analytics_entreprise', 'conges', 'contrats', 'evaluations', 'formations', 'planning', 'dashboard', 'documents']
   if (proModules.includes(modId) && !isPro.value) {
     showToast("Cette fonctionnalité est réservée aux abonnés ONDA RH Pro. Veuillez vous connecter.", "error")
     emit('require-auth')
@@ -116,6 +128,15 @@ const openModule = (modId) => {
     simulationType.value = 'conges'
   } else {
     activeModule.value = modId
+  }
+  if (modId === 'saisie') {
+    loadSaisieGrid()
+  }
+  if (modId === 'stats') {
+    loadStatsEmployeeList()
+  }
+  if (modId === 'analytics_entreprise') {
+    fetchCompanyAnalytics()
   }
   isStartMenuOpen.value = false
 }
@@ -308,6 +329,33 @@ const onDrop = (e) => {
 
 const fileHeaders = ref([])
 const columnMapping = ref({})
+const payrollMois = ref(new Date().getMonth() + 1)
+const payrollAnnee = ref(new Date().getFullYear())
+const moisNoms = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre']
+
+const payrollPeriods = ref([])
+const payrollPeriodsLoading = ref(false)
+
+const fetchPayrollPeriods = async () => {
+  const token = localStorage.getItem('auth_token')
+  if (!token) return
+  try {
+    payrollPeriodsLoading.value = true
+    const res = await fetch('/api/rh/periods', { headers: { 'Authorization': `Bearer ${token}` } })
+    const data = await res.json()
+    if (data.success) payrollPeriods.value = data.periods || []
+  } catch (e) {
+    console.warn('Erreur chargement des périodes de paie:', e)
+  } finally {
+    payrollPeriodsLoading.value = false
+  }
+}
+
+const sheetNames = ref([])
+const selectedSheet = ref(null)
+const showSheetPicker = ref(false)
+const aiMappingUsed = ref(false)
+const aiMappingLoadingCols = ref(false)
 
 const standardFields = [
   { key: 'nom', label: 'Nom Complet', required: true, keywords: ['nom', 'name', 'salarie', 'salarié'] },
@@ -316,7 +364,9 @@ const standardFields = [
   { key: 'salaire_base', label: 'Salaire de Base', required: true, keywords: ['salaire', 'base', 'brut', 'mensuel'] },
   { key: 'prime_transport', label: 'Prime de Transport', required: false, keywords: ['transport', 'deplacement'] },
   { key: 'prime_logement', label: 'Prime de Logement', required: false, keywords: ['logement', 'loyer'] },
-  { key: 'heures_sup_nb', label: 'Heures Supplémentaires (Nb)', required: false, keywords: ['heure', 'sup', 'hs'] }
+  { key: 'heures_sup_nb', label: 'Heures Supplémentaires (Nb)', required: false, keywords: ['heure', 'sup', 'hs'] },
+  { key: 'jours_travailles', label: 'Jours Travaillés', required: false, keywords: ['jour', 'travaille', 'presence'] },
+  { key: 'absences_jours', label: 'Jours d\'Absence', required: false, keywords: ['absence', 'absent'] }
 ]
 
 const autoMapHeaders = () => {
@@ -362,23 +412,70 @@ const copyVar = (varName) => {
   setTimeout(() => { copiedVar.value = null }, 2000)
 }
 
-const analyzeFileHeaders = async () => {
+const analyzeFileHeaders = async (sheetOverride = null) => {
   if (!file.value) return
   uploading.value = true
   error.value = null
   const formData = new FormData()
   formData.append('file', file.value)
+  if (sheetOverride) formData.append('sheetName', sheetOverride)
   try {
     const res = await fetch('/api/rh/extract-headers', { method: 'POST', body: formData })
     const data = await res.json()
     if (!data.success) throw new Error(data.error)
     fileHeaders.value = data.headers
+    sheetNames.value = data.sheetNames || []
+    selectedSheet.value = data.selectedSheet
+
+    // Fichier multi-feuilles sans nom standard et sans choix explicite : on demande à l'utilisateur
+    if (sheetNames.value.length > 1 && !sheetOverride) {
+      showSheetPicker.value = true
+      uploading.value = false
+      return
+    }
+
+    showSheetPicker.value = false
     autoMapHeaders()
+    runSmartMapping() // améliore le mapping en arrière-plan, ne bloque pas l'étape suivante
     importStep.value = 2 // Move to mapping step
   } catch(e) {
     error.value = e.message
   } finally {
     uploading.value = false
+  }
+}
+
+const chooseSheet = (name) => {
+  analyzeFileHeaders(name)
+}
+
+// Complète/améliore le mapping par mots-clés avec des suggestions IA (silencieux en cas d'échec)
+const runSmartMapping = async () => {
+  aiMappingUsed.value = false
+  aiMappingLoadingCols.value = true
+  try {
+    const token = localStorage.getItem('auth_token')
+    if (!token) return
+    const res = await fetch('/api/rh/smart-mapping', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        headers: fileHeaders.value,
+        fields: standardFields.map(f => ({ key: f.key, label: f.label }))
+      })
+    })
+    const data = await res.json()
+    if (data.success && data.mapping && Object.keys(data.mapping).length > 0) {
+      columnMapping.value = { ...columnMapping.value, ...data.mapping }
+      aiMappingUsed.value = true
+    }
+  } catch (e) {
+    console.warn('Mapping IA indisponible, mapping par mots-clés conservé.', e)
+  } finally {
+    aiMappingLoadingCols.value = false
   }
 }
 
@@ -408,6 +505,391 @@ const useLocalDirectory = async () => {
   goToImportStep(4)
 }
 
+// ═══ SAISIE MENSUELLE (heures supp / absences) ═══
+// Note : on ne demande que les jours d'absence, jamais un "nombre de jours travaillés" en plus —
+// le moteur de calcul dérive automatiquement les jours travaillés à partir de la base légale (26)
+// moins les absences. Demander les deux aurait un risque de double comptage si l'utilisateur les
+// renseigne de façon incohérente entre elles.
+const saisieEmployees = ref([])
+const saisieGrid = ref({})
+const saisieLoading = ref(false)
+const saisieSearchQuery = ref('')
+
+const saisieFilteredEmployees = computed(() => {
+  if (!saisieSearchQuery.value) return saisieEmployees.value
+  const q = saisieSearchQuery.value.toLowerCase()
+  return saisieEmployees.value.filter(e => 
+    (e.nom || '').toLowerCase().includes(q) || 
+    (e.prenom || '').toLowerCase().includes(q) || 
+    (e.matricule || '').toLowerCase().includes(q)
+  )
+})
+
+const loadSaisieGrid = async () => {
+  saisieLoading.value = true
+  try {
+    const emps = await localDb.getEmployees()
+    saisieEmployees.value = emps
+    const grid = {}
+    emps.forEach(emp => {
+      grid[emp.id] = { heures_sup_nb: 0, absences_jours: 0 }
+    })
+    saisieGrid.value = grid
+  } finally {
+    saisieLoading.value = false
+  }
+}
+
+// Affichage en lecture seule du nombre de jours travaillés réellement retenu pour le calcul —
+// soit la valeur explicite importée depuis une fiche de présence, soit la base légale (26)
+// moins les absences saisies. Permet au RH de vérifier visuellement avant de générer.
+const saisieJoursTravailles = (empId) => {
+  const g = saisieGrid.value[empId]
+  if (!g) return 26
+  if (g.jours_travailles !== undefined) return g.jours_travailles
+  return Math.max(0, 26 - (g.absences_jours || 0))
+}
+
+// Édition manuelle du champ : un champ vide repasse en mode "calculé automatiquement"
+// (redevient dérivé des absences) ; une valeur saisie devient une valeur explicite qui
+// prime sur les absences pour ce salarié (cohérent avec la logique du moteur de calcul).
+const setSaisieJoursTravailles = (empId, rawValue) => {
+  const g = saisieGrid.value[empId]
+  if (!g) return
+  if (rawValue === '') {
+    delete g.jours_travailles
+  } else {
+    g.jours_travailles = Number(rawValue)
+  }
+}
+
+// Import d'une fiche de présence légère (matricule + jours_travailles/heures_sup_nb/absences_jours)
+// pour compléter/écraser la grille sans avoir à ressaisir toute la fiche employé.
+const presenceImporting = ref(false)
+
+const importPresenceFile = async (event) => {
+  const file = event.target.files[0]
+  event.target.value = '' // permet de réimporter le même fichier si besoin
+  if (!file) return
+
+  presenceImporting.value = true
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await fetch('/api/rh/extract-data', { method: 'POST', body: formData })
+    const data = await res.json()
+    if (!data.success) throw new Error(data.error || "Erreur de lecture du fichier")
+
+    const byMatricule = {}
+    saisieEmployees.value.forEach(emp => {
+      if (emp.matricule) byMatricule[String(emp.matricule).trim()] = emp.id
+    })
+
+    let matched = 0
+    let unmatched = 0
+    data.data.forEach(row => {
+      const mat = String(row.matricule || '').trim()
+      const empId = byMatricule[mat]
+      if (!empId) {
+        if (mat) unmatched++
+        return
+      }
+      const current = saisieGrid.value[empId] || { heures_sup_nb: 0, absences_jours: 0 }
+      saisieGrid.value[empId] = {
+        heures_sup_nb: row.heures_sup_nb !== undefined && row.heures_sup_nb !== '' ? parseFloat(row.heures_sup_nb) : current.heures_sup_nb,
+        absences_jours: row.absences_jours !== undefined && row.absences_jours !== '' ? parseFloat(row.absences_jours) : current.absences_jours,
+        ...(row.jours_travailles !== undefined && row.jours_travailles !== '' ? { jours_travailles: parseFloat(row.jours_travailles) } : {})
+      }
+      matched++
+    })
+
+    if (matched > 0) showToast(`${matched} employé(s) mis à jour depuis la fiche de présence.`, 'success')
+    if (unmatched > 0) showToast(`${unmatched} matricule(s) du fichier non trouvé(s) dans l'annuaire, ignoré(s).`, 'error')
+    if (matched === 0 && unmatched === 0) showToast("Aucune ligne exploitable dans le fichier.", 'error')
+  } catch (e) {
+    showToast('Erreur import : ' + e.message, 'error')
+  } finally {
+    presenceImporting.value = false
+  }
+}
+
+const generateFromSaisie = async () => {
+  if (saisieEmployees.value.length === 0) {
+    showToast('Votre annuaire est vide.', 'error')
+    return
+  }
+
+  const templates = await localDb.getTemplates()
+  const defTpl = templates.find(t => t.isDefault && (!t.type || t.type === 'payslip'))
+  htmlTemplate.value = (defTpl && defTpl.htmlTemplate) ? defTpl.htmlTemplate : null
+
+  localEmployees.value = saisieEmployees.value.map(emp => ({
+    ...emp,
+    ...saisieGrid.value[emp.id]
+  }))
+  useLocalDb.value = true
+  file.value = { name: `Saisie Mensuelle (${saisieEmployees.value.length} employés)` }
+
+  await processPayroll()
+}
+
+const fcfa = (v) => Math.round(v || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' FCFA'
+
+// ═══ STATISTIQUES EMPLOYÉ (dashboard absences / heures supp / rémunération) ═══
+const statsEmployeesList = ref([])
+const statsSelectedMatricule = ref('')
+const statsSearchQuery = ref('')
+// Plage de période (mois/année début → fin), par défaut l'année civile en cours
+const statsDebutMois = ref(1)
+const statsDebutAnnee = ref(new Date().getFullYear())
+const statsFinMois = ref(12)
+const statsFinAnnee = ref(new Date().getFullYear())
+const statsData = ref(null)
+const statsLoading = ref(false)
+
+const statsFilteredEmployees = computed(() => {
+  if (!statsSearchQuery.value) return statsEmployeesList.value
+  const q = statsSearchQuery.value.toLowerCase()
+  return statsEmployeesList.value.filter(e =>
+    (e.nom || '').toLowerCase().includes(q) ||
+    (e.prenom || '').toLowerCase().includes(q) ||
+    (e.matricule || '').toLowerCase().includes(q)
+  )
+})
+
+const loadStatsEmployeeList = async () => {
+  const emps = await localDb.getEmployees()
+  statsEmployeesList.value = emps.filter(e => e.matricule)
+  if (statsEmployeesList.value.length > 0 && !statsSelectedMatricule.value) {
+    statsSelectedMatricule.value = statsEmployeesList.value[0].matricule
+  }
+  if (statsSelectedMatricule.value) {
+    fetchEmployeeStats()
+  }
+}
+
+const fetchEmployeeStats = async () => {
+  if (!statsSelectedMatricule.value) {
+    statsData.value = null
+    return
+  }
+  const token = localStorage.getItem('auth_token')
+  if (!token) return
+  statsLoading.value = true
+  try {
+    const params = `debutMois=${statsDebutMois.value}&debutAnnee=${statsDebutAnnee.value}&finMois=${statsFinMois.value}&finAnnee=${statsFinAnnee.value}`
+    const res = await fetch(`/api/rh/employees/${encodeURIComponent(statsSelectedMatricule.value)}/stats?${params}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    const data = await res.json()
+    if (data.success) statsData.value = data
+  } catch (e) {
+    console.warn('Erreur chargement des statistiques employé:', e)
+  } finally {
+    statsLoading.value = false
+  }
+}
+
+// Formulaires courts fr-FR pour l'axe des mois
+const moisCourts = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc']
+
+// Catégories d'axe dynamiques (peut couvrir plusieurs années) : une entrée par période réellement
+// présente dans la réponse, plutôt qu'une grille fixe de 12 mois Jan-Déc.
+const statsPeriodLabels = computed(() => statsData.value
+  ? statsData.value.monthly.map(m => `${moisCourts[m.mois - 1]} ${m.annee}`)
+  : [])
+
+const statsAbsencesSeries = computed(() => [{
+  name: "Jours d'absence",
+  data: statsData.value ? statsData.value.monthly.map(m => m.absencesJours) : []
+}])
+
+const statsHeuresSupSeries = computed(() => [{
+  name: 'Heures supplémentaires',
+  data: statsData.value ? statsData.value.monthly.map(m => m.heuresSupNb) : []
+}])
+
+const statsChartOptionsBase = computed(() => ({
+  chart: { toolbar: { show: false }, fontFamily: 'inherit', foreColor: '#52514e' },
+  plotOptions: { bar: { borderRadius: 4, columnWidth: '55%' } },
+  dataLabels: { enabled: false },
+  grid: { borderColor: '#e1e0d9', strokeDashArray: 3 },
+  xaxis: { categories: statsPeriodLabels.value, axisBorder: { color: '#c3c2b7' }, axisTicks: { color: '#c3c2b7' } },
+  yaxis: { labels: { formatter: (v) => Math.round(v) } },
+  tooltip: { theme: 'light' }
+}))
+
+const statsAbsencesOptions = computed(() => ({
+  ...statsChartOptionsBase.value,
+  colors: ['#eb6834']
+}))
+
+const statsHeuresSupOptions = computed(() => ({
+  ...statsChartOptionsBase.value,
+  colors: ['#2a78d6']
+}))
+
+watch(statsSelectedMatricule, () => fetchEmployeeStats())
+watch([statsDebutMois, statsDebutAnnee, statsFinMois, statsFinAnnee], () => fetchEmployeeStats())
+
+// Si la recherche exclut l'employé sélectionné, bascule automatiquement sur le premier résultat
+watch(statsSearchQuery, () => {
+  const stillMatches = statsFilteredEmployees.value.some(e => e.matricule === statsSelectedMatricule.value)
+  if (!stillMatches) {
+    statsSelectedMatricule.value = statsFilteredEmployees.value[0]?.matricule || ''
+  }
+})
+
+// ═══ ANALYTIQUE RH ENTREPRISE (masse salariale, charges patronales, absentéisme, heures sup) ═══
+// Plage de période (mois/année début → fin), par défaut l'année civile en cours
+const companyDebutMois = ref(1)
+const companyDebutAnnee = ref(new Date().getFullYear())
+const companyFinMois = ref(12)
+const companyFinAnnee = ref(new Date().getFullYear())
+const companyAnalyticsData = ref(null)
+const companyAnalyticsLoading = ref(false)
+const bradfordSearchQuery = ref('')
+
+// Seuils SLA ajustables à l'affichage (non persistés) — servent à colorer les KPI et à tracer
+// les lignes de seuil sur les graphiques.
+const slaAbsenteisme = ref(5) // % de jours d'absence sur jours attendus
+const slaHeuresSupRatio = ref(10) // % du coût des heures sup sur la masse salariale brute
+const slaBradford = ref(500) // score Bradford à partir duquel un cas est signalé à surveiller
+
+const fetchCompanyAnalytics = async () => {
+  const token = localStorage.getItem('auth_token')
+  if (!token) return
+  companyAnalyticsLoading.value = true
+  try {
+    const params = `debutMois=${companyDebutMois.value}&debutAnnee=${companyDebutAnnee.value}&finMois=${companyFinMois.value}&finAnnee=${companyFinAnnee.value}`
+    const res = await fetch(`/api/rh/analytics/company?${params}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    const data = await res.json()
+    if (data.success) companyAnalyticsData.value = data
+  } catch (e) {
+    console.warn("Erreur chargement de l'analytique RH entreprise:", e)
+  } finally {
+    companyAnalyticsLoading.value = false
+  }
+}
+
+watch([companyDebutMois, companyDebutAnnee, companyFinMois, companyFinAnnee], () => fetchCompanyAnalytics())
+
+// Catégories d'axe dynamiques (peut couvrir plusieurs années)
+const companyPeriodLabels = computed(() => companyAnalyticsData.value
+  ? companyAnalyticsData.value.monthly.map(m => `${moisCourts[m.mois - 1]} ${m.annee}`)
+  : [])
+
+const companyCoutTotalEmployeur = computed(() => companyAnalyticsData.value
+  ? companyAnalyticsData.value.totals.masseSalarialeAnnuelle + companyAnalyticsData.value.totals.chargesPatronalesAnnuelles
+  : 0)
+
+const companyHeuresSupRatioAnnuel = computed(() => {
+  if (!companyAnalyticsData.value || !companyAnalyticsData.value.totals.masseSalarialeAnnuelle) return 0
+  return Math.round((companyAnalyticsData.value.totals.coutHeuresSupAnnuel / companyAnalyticsData.value.totals.masseSalarialeAnnuelle) * 1000) / 10
+})
+
+const companyAbsenteismeAlert = computed(() => !!companyAnalyticsData.value && companyAnalyticsData.value.totals.tauxAbsenteismeMoyen > slaAbsenteisme.value)
+const companyHeuresSupAlert = computed(() => companyHeuresSupRatioAnnuel.value > slaHeuresSupRatio.value)
+
+const companyMasseSalarialeSeries = computed(() => [
+  { name: 'Brut', data: companyAnalyticsData.value ? companyAnalyticsData.value.monthly.map(m => m.masseSalarialeBrute) : [] },
+  { name: 'Net', data: companyAnalyticsData.value ? companyAnalyticsData.value.monthly.map(m => m.masseSalarialeNette) : [] }
+])
+
+const companyChartOptionsBase = computed(() => ({
+  chart: { toolbar: { show: false }, fontFamily: 'inherit', foreColor: '#52514e' },
+  plotOptions: { bar: { borderRadius: 4, columnWidth: '55%' } },
+  dataLabels: { enabled: false },
+  grid: { borderColor: '#e1e0d9', strokeDashArray: 3 },
+  xaxis: { categories: companyPeriodLabels.value, axisBorder: { color: '#c3c2b7' }, axisTicks: { color: '#c3c2b7' } },
+  yaxis: { labels: { formatter: (v) => Math.round(v) } },
+  tooltip: { theme: 'light' }
+}))
+
+const companyMasseSalarialeOptions = computed(() => ({
+  ...companyChartOptionsBase.value,
+  colors: ['#2a78d6', '#eb6834'],
+  yaxis: { labels: { formatter: (v) => Math.round(v / 1000) + 'k' } }
+}))
+
+const companyAbsenteismeSeries = computed(() => [{
+  name: "Taux d'absentéisme (%)",
+  data: companyAnalyticsData.value ? companyAnalyticsData.value.monthly.map(m => m.tauxAbsenteisme) : []
+}])
+
+const companyAbsenteismeOptions = computed(() => ({
+  ...companyChartOptionsBase.value,
+  colors: ['#eb6834'],
+  yaxis: { labels: { formatter: (v) => Math.round(v) + '%' } },
+  annotations: {
+    yaxis: [{
+      y: slaAbsenteisme.value,
+      borderColor: '#dc2626',
+      strokeDashArray: 4,
+      label: { text: `SLA ${slaAbsenteisme.value}%`, style: { color: '#fff', background: '#dc2626', fontSize: '0.65rem' }, position: 'left' }
+    }]
+  }
+}))
+
+const companyHeuresSupSeries = computed(() => [{
+  name: 'Heures sup (% masse brute)',
+  data: companyAnalyticsData.value
+    ? companyAnalyticsData.value.monthly.map(m => m.masseSalarialeBrute > 0 ? Math.round((m.montantHeuresSup / m.masseSalarialeBrute) * 1000) / 10 : 0)
+    : []
+}])
+
+const companyHeuresSupOptions = computed(() => ({
+  ...companyChartOptionsBase.value,
+  colors: ['#2a78d6'],
+  yaxis: { labels: { formatter: (v) => Math.round(v * 10) / 10 + '%' } },
+  annotations: {
+    yaxis: [{
+      y: slaHeuresSupRatio.value,
+      borderColor: '#dc2626',
+      strokeDashArray: 4,
+      label: { text: `SLA ${slaHeuresSupRatio.value}%`, style: { color: '#fff', background: '#dc2626', fontSize: '0.65rem' }, position: 'left' }
+    }]
+  }
+}))
+
+// Répartition par poste : top 8 + "Autres" si plus de postes que ça (évite un graphique illisible)
+const companyByPosteDisplay = computed(() => {
+  if (!companyAnalyticsData.value) return []
+  const list = companyAnalyticsData.value.byPoste
+  if (list.length <= 8) return list
+  const top = list.slice(0, 8)
+  const autres = list.slice(8)
+  const autresTotal = autres.reduce((sum, p) => sum + p.masseSalariale, 0)
+  const autresEffectif = autres.reduce((sum, p) => sum + p.effectif, 0)
+  return [...top, { poste: 'Autres', masseSalariale: autresTotal, effectif: autresEffectif, salaireMoyen: 0, salaireMin: 0, salaireMax: 0 }]
+})
+
+const companyByPosteSeries = computed(() => [{ name: 'Masse salariale', data: companyByPosteDisplay.value.map(p => p.masseSalariale) }])
+
+const companyByPosteOptions = computed(() => ({
+  chart: { toolbar: { show: false }, fontFamily: 'inherit', foreColor: '#52514e' },
+  plotOptions: { bar: { borderRadius: 4, horizontal: true } },
+  dataLabels: { enabled: false },
+  grid: { borderColor: '#e1e0d9', strokeDashArray: 3 },
+  xaxis: { categories: companyByPosteDisplay.value.map(p => p.poste), labels: { formatter: (v) => Math.round(v / 1000) + 'k' } },
+  colors: ['#2a78d6'],
+  tooltip: { theme: 'light' }
+}))
+
+const bradfordFilteredEmployees = computed(() => {
+  if (!companyAnalyticsData.value) return []
+  const list = companyAnalyticsData.value.employees
+  if (!bradfordSearchQuery.value) return list
+  const q = bradfordSearchQuery.value.toLowerCase()
+  return list.filter(e =>
+    (e.nom || '').toLowerCase().includes(q) ||
+    (e.prenom || '').toLowerCase().includes(q) ||
+    (e.matricule || '').toLowerCase().includes(q)
+  )
+})
+
 const processPayroll = async () => {
   if (!isPro.value) {
     showToast("Le traitement de paie en masse est réservé aux abonnés ONDA RH Pro.", 'error')
@@ -429,6 +911,7 @@ const processPayroll = async () => {
   } else {
     formData.append('file', file.value)
     formData.append('mapping', JSON.stringify(columnMapping.value))
+    if (selectedSheet.value) formData.append('sheetName', selectedSheet.value)
   }
   
   if (templateFile.value) {
@@ -437,8 +920,14 @@ const processPayroll = async () => {
   if (htmlTemplate.value) {
     formData.append('htmlTemplate', htmlTemplate.value)
   }
+  const activeLeaves = leaveCandidates.value.filter(c => c.goesOnLeave)
+  if (activeLeaves.length > 0) {
+    formData.append('leavesToProcess', JSON.stringify(activeLeaves))
+  }
   formData.append('country', props.country)
-  
+  formData.append('mois', payrollMois.value)
+  formData.append('annee', payrollAnnee.value)
+
   try {
     const response = await fetch('/api/rh/generate-pay-slips', { 
       method: 'POST', 
@@ -457,8 +946,13 @@ const processPayroll = async () => {
     result.value = await response.json()
     
     if (result.value.success) {
-      if (user.value && result.value.creditsRemaining !== undefined) {
-        user.value.credits = result.value.creditsRemaining
+      if (user.value && result.value.subscriptionTier !== undefined) {
+        Object.assign(user.value, {
+          subscriptionTier: result.value.subscriptionTier,
+          subscriptionExpiresAt: result.value.subscriptionExpiresAt,
+          bulletinsUsed: result.value.bulletinsUsed,
+          credits: result.value.credits
+        })
       }
       if (result.value.stats) {
         await localDb.savePayrollRun({
@@ -466,11 +960,38 @@ const processPayroll = async () => {
           country: props.country
         })
       }
+      
+      // Save processed leaves to localStorage
+      if (result.value.leavesProcessed && result.value.leavesProcessed.length > 0) {
+        const congesStr = localStorage.getItem('onda_conges') || '[]'
+        let allConges = JSON.parse(congesStr)
+        const newConges = result.value.leavesProcessed.map(l => {
+          const d1 = new Date(l.dateDebut)
+          const d2 = new Date(l.dateFin)
+          const diffDays = (!isNaN(d1) && !isNaN(d2)) ? Math.ceil(Math.abs(d2 - d1) / (1000 * 60 * 60 * 24)) + 1 : 30
+          return {
+            id: Date.now() + Math.random().toString(36).substr(2, 9),
+            employeeId: l.id,
+            matricule: l.matricule,
+            dateDebut: l.dateDebut,
+            dateFin: l.dateFin,
+            jours: diffDays,
+            type: 'annuel',
+            statut: 'approuvé',
+            dateDemande: new Date().toISOString()
+          }
+        })
+        allConges = [...allConges, ...newConges]
+        localStorage.setItem('onda_conges', JSON.stringify(allConges))
+        window.dispatchEvent(new Event('conges-updated'))
+      }
+
       try {
         await fetchMe()
       } catch (fetchErr) {
         console.warn("Erreur rafraîchissement utilisateur:", fetchErr)
       }
+      fetchPayrollPeriods()
     }
   } catch (e) {
     error.value = e.message
@@ -485,11 +1006,51 @@ const formatSize = (bytes) => {
   return (bytes / 1048576).toFixed(1) + ' MB'
 }
 
+const leaveCandidates = ref([])
+const prepareLeaveCandidates = async () => {
+  try {
+    const emps = await localDb.getEmployees()
+    const congesStr = localStorage.getItem('onda_conges') || '[]'
+    const allConges = JSON.parse(congesStr)
+    
+    // Si c'est un fichier Excel, on prend ceux qui matchent ou on propose tout le monde si Base Locale
+    let targetEmps = emps
+    if (!useLocalDb.value && file.value) {
+      // Dans le cas d'un Excel, on n'a pas les employés formels ici, 
+      // donc on s'appuie sur la base locale de toute façon pour proposer des congés connus.
+    }
+    
+    leaveCandidates.value = targetEmps.map(emp => {
+      const empConges = allConges.filter(c => c.employeeId === emp.id && c.type === 'annuel')
+      const joursPris = empConges.reduce((sum, c) => sum + (Number(c.jours) || 0), 0)
+      const solde = Math.max(0, 30 - joursPris)
+      
+      const defaultDebut = new Date(payrollAnnee.value, payrollMois.value - 1, 1)
+      const defaultFin = new Date(payrollAnnee.value, payrollMois.value, 0)
+      
+      return {
+        id: emp.id,
+        nom: `${emp.nom} ${emp.prenom}`,
+        matricule: emp.matricule,
+        solde: solde,
+        goesOnLeave: false,
+        dateDebut: defaultDebut.toISOString().split('T')[0],
+        dateFin: defaultFin.toISOString().split('T')[0]
+      }
+    }).filter(e => e.solde > 0)
+  } catch (e) {
+    console.warn("Erreur préparation congés:", e)
+  }
+}
+
 // Step actuel pour le module import
 const importStep = ref(1)
 
-const goToImportStep = (step) => {
+const goToImportStep = async (step) => {
   importStep.value = step
+  if (step === 4) {
+    await prepareLeaveCandidates()
+  }
   // Scroll en haut du composant pour voir le stepper
   setTimeout(() => {
     if (hrWrapperRef.value) {
@@ -517,16 +1078,31 @@ onMounted(() => {
   onUnmounted(() => clearInterval(timeInterval))
 })
 
-const modules = computed(() => [
+const isSimulatorMode = import.meta.env.VITE_APP_MODE === 'simulator'
+
+const modules = computed(() => {
+  const allModules = [
+  {
+    id: 'dashboard',
+    title: 'Tableau de Bord & Alertes',
+    subtitle: 'Vue d\'ensemble RH',
+    description: "Vue d'ensemble RH, KPIs, et alertes sur les congés et expirations de contrats.",
+    icon: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>',
+    isPro: true,
+    color: '#f59e0b',
+    gradient: 'linear-gradient(135deg, #78350f 0%, #f59e0b 100%)',
+    badge: 'Pro'
+  },
   {
     id: 'simulation_habituel',
     title: 'Simuler un Bulletin (' + countryRules.value.name + ')',
     subtitle: 'Bulletin mensuel simple',
     description: `Calculez et générez un bulletin de paie mensuel standard conforme au droit du travail (${countryRules.value.name}).`,
     icon: `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>`,
+    isPro: false,
     color: '#2563eb',
     gradient: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)',
-    badge: 'Temps réel',
+    badge: 'Gratuit',
     steps: ['Entreprise', 'Employé', 'Salaire', 'Paiement']
   },
   {
@@ -535,9 +1111,10 @@ const modules = computed(() => [
     subtitle: 'Indemnités de congés',
     description: `Calculez l'allocation et les indemnités de congés payés de vos employés (${countryRules.value.name}).`,
     icon: `<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="m9 16 2 2 4-4"/>`,
+    isPro: false,
     color: '#0d9488',
     gradient: 'linear-gradient(135deg, #115e59 0%, #0d9488 100%)',
-    badge: 'Allocation congés',
+    badge: 'Gratuit',
     steps: ['Entreprise', 'Employé', 'Congés', 'Calcul']
   },
   {
@@ -546,10 +1123,47 @@ const modules = computed(() => [
     subtitle: 'Traitement Excel',
     description: `Importez votre fichier Excel pour générer les bulletins (${countryRules.value.name}) de tous vos employés.`,
     icon: `<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h2"/><path d="M8 17h2"/><path d="M14 13h2"/><path d="M14 17h2"/>`,
+    isPro: true,
     color: '#059669',
     gradient: 'linear-gradient(135deg, #064e3b 0%, #059669 100%)',
-    badge: 'Multi-employés',
+    badge: 'Pro',
     steps: ['Données', 'Mapping', 'Modèle', 'Génération']
+  },
+  {
+    id: 'saisie',
+    title: 'Saisie Mensuelle',
+    subtitle: 'Heures Supp & Absences',
+    description: `Renseignez rapidement les heures supplémentaires et jours d'absence du mois pour les employés de votre annuaire.`,
+    icon: `<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>`,
+    isPro: true,
+    color: '#f59e0b',
+    gradient: 'linear-gradient(135deg, #78350f 0%, #f59e0b 100%)',
+    badge: 'Pro',
+    steps: ['Grille', 'Génération']
+  },
+  {
+    id: 'stats',
+    title: 'Statistiques Employé',
+    subtitle: 'Absences & Heures Supp',
+    description: `Analysez l'historique d'un employé sur l'année : absences, heures supplémentaires et évolution de la rémunération.`,
+    icon: `<path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/>`,
+    isPro: true,
+    color: '#2563eb',
+    gradient: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)',
+    badge: 'Pro',
+    steps: ['Sélection', 'Analyse']
+  },
+  {
+    id: 'analytics_entreprise',
+    title: 'Analytique RH',
+    subtitle: 'Masse salariale & SLA',
+    description: `Vue d'ensemble entreprise : masse salariale, charges patronales, absentéisme et heures supplémentaires, avec seuils d'alerte configurables.`,
+    icon: `<path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>`,
+    isPro: true,
+    color: '#4f46e5',
+    gradient: 'linear-gradient(135deg, #312e81 0%, #4f46e5 100%)',
+    badge: 'Pro',
+    steps: ['Année', 'Analyse']
   },
   {
     id: 'solde',
@@ -557,9 +1171,10 @@ const modules = computed(() => [
     subtitle: 'Fin de contrat',
     description: `Calculez l'indemnité de fin de contrat selon le Code du Travail (${countryRules.value.name}).`,
     icon: `<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>`,
+    isPro: false,
     color: '#d97706',
     gradient: 'linear-gradient(135deg, #78350f 0%, #d97706 100%)',
-    badge: 'Fin de contrat',
+    badge: 'Gratuit',
     steps: ['Entreprise', 'Employé', 'Calcul']
   },
   {
@@ -568,9 +1183,10 @@ const modules = computed(() => [
     subtitle: 'Confidentialité Totale',
     description: `Stockez vos employés et historiques 100% en local sur votre appareil (IndexedDB / Offline-First).`,
     icon: `<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>`,
+    isPro: true,
     color: '#7c3aed',
     gradient: 'linear-gradient(135deg, #3b0764 0%, #7c3aed 100%)',
-    badge: '100% Confidentiel',
+    badge: 'Pro',
     steps: ['Base Locale', 'PWA Offline', 'Sauvegarde']
   },
   {
@@ -579,9 +1195,10 @@ const modules = computed(() => [
     subtitle: 'Gestion des Salariés',
     description: `Gérez vos employés, importez depuis Excel et modifiez les salaires individuellement.`,
     icon: `<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>`,
+    isPro: true,
     color: '#0ea5e9',
     gradient: 'linear-gradient(135deg, #0369a1 0%, #0ea5e9 100%)',
-    badge: 'CRUD Employés',
+    badge: 'Pro',
     steps: ['Liste', 'Import Excel', 'Édition']
   },
   {
@@ -590,12 +1207,56 @@ const modules = computed(() => [
     subtitle: 'Configuration RH',
     description: `Configurez vos modèles PDF personnalisés, le mapping et la planification automatique de paie.`,
     icon: `<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>`,
+    isPro: true,
     color: '#64748b',
     gradient: 'linear-gradient(135deg, #334155 0%, #64748b 100%)',
-    badge: 'Configuration',
+    badge: 'Pro',
     steps: ['Modèles PDF', 'Planification']
+  },
+  {
+    id: 'documents',
+    title: 'Générateur de Documents',
+    subtitle: 'Contrats & Attestations',
+    description: `Générez en quelques secondes tous vos documents RH : attestations, contrats CDI/CDD, lettres d'avertissement, licenciements — pré-remplis depuis l'annuaire.`,
+    icon: `<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>`,
+    isPro: true,
+    color: '#7c3aed',
+    gradient: 'linear-gradient(135deg, #312e81 0%, #7c3aed 100%)',
+    badge: 'Pro',
+    steps: ['Document', 'Employé', 'Génération']
+  },
+  {
+    id: 'conges',
+    title: 'Absences & Congés',
+    subtitle: 'Calendrier mensuel',
+    description: `Calendrier mensuel des absences, soldes de congés annuels par employé et suivi des types d'absence.`,
+    icon: `<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="m9 16 2 2 4-4"/>`,
+    isPro: true,
+    color: '#2563eb',
+    gradient: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)',
+    badge: 'Pro',
+    steps: ['Calendrier', 'Soldes']
+  },
+  {
+    id: 'contrats',
+    title: 'Contrats & Alertes',
+    subtitle: 'Échéances CDD',
+    description: `Suivez les contrats de vos employés et recevez des alertes automatiques à J-30, J-15 et J-7 avant l'expiration des CDD.`,
+    icon: `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/>`,
+    isPro: true,
+    color: '#059669',
+    gradient: 'linear-gradient(135deg, #064e3b 0%, #059669 100%)',
+    badge: 'Pro',
+    steps: ['Contrats', 'Alertes']
   }
-])
+  ]
+
+  if (isSimulatorMode) {
+    const allowed = ['simulation_habituel', 'simulation_conges', 'solde']
+    return allModules.filter(m => allowed.includes(m.id))
+  }
+  return allModules
+})
 
 const activeModuleDetails = computed(() => {
   if (!activeModule.value) return null
@@ -624,7 +1285,7 @@ const activeModuleDetails = computed(() => {
             v-for="mod in modules" 
             :key="mod.id" 
             class="desktop-shortcut-card"
-            :class="{ 'locked-shortcut': ['import', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro }"
+            :class="{ 'locked-shortcut': !isPro }"
             @click="openModule(mod.id)"
             :style="{ '--shortcut-color': mod.color }"
           >
@@ -635,8 +1296,8 @@ const activeModuleDetails = computed(() => {
               <h3>{{ mod.title.split(' (')[0] }}</h3>
               <p>{{ mod.subtitle }}</p>
             </div>
-            <div class="shortcut-badge pro-badge" v-if="['import', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro">🔒 PRO</div>
-            <div class="shortcut-badge" v-else-if="mod.badge">{{ mod.badge }}</div>
+            <div class="shortcut-badge pro-badge" v-if="!isPro">🔒 PRO</div>
+            <div class="shortcut-badge" v-else>{{ mod.badge }}</div>
           </button>
         </div>
 
@@ -679,6 +1340,33 @@ const activeModuleDetails = computed(() => {
               </div>
             </div>
           </div>
+
+          <div v-if="!isSimulatorMode && payrollPeriods.length > 0" class="workspace-card" style="margin-top: 1.15rem;">
+            <div class="workspace-header" style="margin-bottom: 0.5rem;">
+              <div class="workspace-info">
+                <h4>Périodes de paie</h4>
+                <p>Historique des bulletins générés</p>
+              </div>
+            </div>
+            <div style="max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem;">
+              <div
+                v-for="p in payrollPeriods"
+                :key="p.id"
+                style="display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0.65rem; background: rgba(255,255,255,0.06); border-radius: 8px; font-size: 0.775rem;"
+              >
+                <div>
+                  <div style="font-weight: 700;">{{ moisNoms[p.mois - 1] }} {{ p.annee }}</div>
+                  <div style="opacity: 0.7; font-size: 0.7rem;">{{ p.employeeCount }} bulletin(s)</div>
+                </div>
+                <span style="background: #dcfce7; color: #15803d; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 700; font-size: 0.7rem;">Validée</span>
+              </div>
+            </div>
+          </div>
+
+          <a v-if="ENTERPRISE_SALES_ENABLED" :href="enterpriseUrl" style="display: block; margin-top: 1.15rem; padding: 0.75rem 0.9rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; text-decoration: none; transition: all 0.2s;">
+            <div style="font-size: 0.72rem; font-weight: 800; color: #4f46e5; text-transform: uppercase; letter-spacing: 0.03em;">Version Entreprise</div>
+            <div style="font-size: 0.775rem; color: #475569; margin-top: 0.2rem;">Logiciel complet installable, licence unique →</div>
+          </a>
         </div>
 
       </div>
@@ -688,7 +1376,7 @@ const activeModuleDetails = computed(() => {
     <div class="start-menu-overlay" v-if="isStartMenuOpen" @click="isStartMenuOpen = false"></div>
     <div class="start-menu" :class="{ 'open': isStartMenuOpen }">
       <div class="start-menu-sidebar">
-        <button class="sm-sidebar-btn" :class="{ 'locked-sidebar-btn': !isPro }" title="Paramètres" @click="openModule('settings')">
+        <button class="sm-sidebar-btn" title="Paramètres" @click="openModule('settings')">
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         </button>
       </div>
@@ -699,15 +1387,15 @@ const activeModuleDetails = computed(() => {
             v-for="mod in modules"
             :key="mod.id"
             class="sm-tile"
-            :class="{ 'locked-tile': ['import', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro }"
-            :style="{ background: ['import', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro ? '#475569' : mod.color }"
+            :class="{ 'locked-tile': !isPro }"
+            :style="{ background: !isPro ? '#475569' : mod.color }"
             @click="openModule(mod.id)"
           >
             <div class="sm-tile-icon">
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="mod.icon"></svg>
             </div>
             <div class="sm-tile-title">
-              <template v-if="['import', 'local_db', 'directory', 'settings'].includes(mod.id) && !isPro">🔒 </template>
+              <template v-if="!isPro">🔒 </template>
               {{ mod.title.split(' (')[0] }}
             </div>
           </button>
@@ -791,7 +1479,20 @@ const activeModuleDetails = computed(() => {
               <p>Importez le fichier Excel contenant les données de tous vos employés (.xlsx ou .xls)</p>
             </div>
           </div>
-          
+
+          <div style="display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap;">
+            <div class="form-group" style="flex: 1; min-width: 160px;">
+              <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Mois de paie</label>
+              <select v-model.number="payrollMois" style="width: 100%; padding: 0.6rem 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0; box-sizing: border-box;">
+                <option v-for="(m, idx) in moisNoms" :key="idx" :value="idx + 1">{{ m }}</option>
+              </select>
+            </div>
+            <div class="form-group" style="flex: 1; min-width: 120px;">
+              <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Année</label>
+              <input v-model.number="payrollAnnee" type="number" style="width: 100%; padding: 0.6rem 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
+            </div>
+          </div>
+
           <div class="local-directory-fast-option" style="margin-bottom: 24px; padding: 16px; background: #e0f2fe; border: 1px solid #bae6fd; border-radius: 12px; display: flex; justify-content: space-between; align-items: center;">
             <div>
               <strong style="color: #0369a1; display: block; margin-bottom: 4px;">Option Rapide : Annuaire Local</strong>
@@ -837,9 +1538,26 @@ const activeModuleDetails = computed(() => {
               Télécharger le modèle Excel (vierge)
             </a>
           </div>
+
+          <div v-if="showSheetPicker" class="sheet-picker-box">
+            <strong>Ce fichier contient plusieurs feuilles.</strong>
+            <p>Quelle feuille contient la liste de vos employés ?</p>
+            <div class="sheet-picker-list">
+              <button
+                v-for="s in sheetNames"
+                :key="s"
+                class="sheet-picker-btn"
+                :disabled="uploading"
+                @click="chooseSheet(s)"
+              >
+                {{ s }}
+              </button>
+            </div>
+          </div>
+
           <div class="step-nav">
             <div></div>
-            <button class="btn-next" :disabled="!file || uploading" @click="analyzeFileHeaders">
+            <button class="btn-next" :disabled="!file || uploading || showSheetPicker" @click="analyzeFileHeaders()">
               <span v-if="uploading">Analyse en cours...</span>
               <span v-else>Suivant — Mapping Intelligent →</span>
             </button>
@@ -857,7 +1575,7 @@ const activeModuleDetails = computed(() => {
             <div>
               <strong>Ce fichier ne semble pas être un fichier de paie</strong>
               <p>Aucune colonne reconnue (Nom, Salaire, etc.). Vérifiez que vous avez sélectionné le bon fichier Excel contenant les données de vos employés.</p>
-              <button class="btn-change-file" @click="file = null; fileHeaders = []; columnMapping = {}; goToImportStep(1)">
+              <button class="btn-change-file" @click="file = null; fileHeaders = []; columnMapping = {}; sheetNames = []; selectedSheet = null; showSheetPicker = false; aiMappingUsed = false; goToImportStep(1)">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
                 Choisir un autre fichier
               </button>
@@ -870,7 +1588,11 @@ const activeModuleDetails = computed(() => {
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
             </div>
             <div>
-              <strong>{{ autoMappedCount }} colonne(s) détectée(s) automatiquement</strong>
+              <strong>
+                {{ autoMappedCount }} colonne(s) détectée(s) automatiquement
+                <span v-if="aiMappingUsed" class="ai-mapping-badge">✨ Suggestions améliorées par IA</span>
+                <span v-else-if="aiMappingLoadingCols" class="ai-mapping-badge ai-mapping-badge-loading">IA en cours d'analyse...</span>
+              </strong>
               <p>Vérifiez la correspondance ci-dessous. Les champs marqués d'un <span style="color:#ef4444">*</span> sont obligatoires.</p>
             </div>
           </div>
@@ -928,7 +1650,6 @@ const activeModuleDetails = computed(() => {
           </div>
         </div>
 
-        <!-- Étape 3: Modèle PDF/Word — VERSION PRO (DRAG & DROP) -->
         <!-- Étape 3: Modèle de bulletin & Auto-Mapping -->
         <div v-if="importStep === 3" class="import-step-content animate-in">
           <div class="import-intro">
@@ -985,12 +1706,70 @@ const activeModuleDetails = computed(() => {
           </div>
         </div>
 
-        <!-- Étape 4: Lancement -->
+        <!-- Étape 4: Vérification des Congés -->
         <div v-if="importStep === 4" class="import-step-content animate-in">
+          <div class="import-intro">
+            <div class="intro-icon-wrap" style="background: #fdf4ff;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d946ef" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+            </div>
+            <div>
+              <strong>Planification automatique des congés</strong>
+              <p>Cochez les employés qui doivent partir en congé ce mois-ci. Le système générera un <strong>Bulletin d'allocation congé</strong> en plus de leur bulletin de paie normal.</p>
+            </div>
+          </div>
+          
+          <div class="mapping-table-container">
+            <table class="mapping-table">
+              <thead>
+                <tr>
+                  <th>Employé</th>
+                  <th>Solde Actuel</th>
+                  <th>Part en Congé ?</th>
+                  <th>Dates du Congé</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="emp in leaveCandidates" :key="emp.id" :style="{ background: emp.goesOnLeave ? '#fdf4ff' : 'transparent' }">
+                  <td>
+                    <strong>{{ emp.nom }}</strong>
+                    <div style="font-size: 0.75rem; color: #64748b;">{{ emp.matricule || '-' }}</div>
+                  </td>
+                  <td>
+                    <span :style="{ color: emp.solde > 26 ? '#ea580c' : '#059669', fontWeight: '700' }">{{ emp.solde }} jours</span>
+                  </td>
+                  <td>
+                    <input type="checkbox" v-model="emp.goesOnLeave" style="width: 20px; height: 20px; accent-color: #d946ef; cursor: pointer;">
+                  </td>
+                  <td>
+                    <div v-if="emp.goesOnLeave" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                      <input type="date" v-model="emp.dateDebut" style="padding: 0.4rem; border-radius: 6px; border: 1px solid #d946ef; font-size: 0.8rem;">
+                      <span style="color: #64748b; font-size: 0.8rem;">au</span>
+                      <input type="date" v-model="emp.dateFin" style="padding: 0.4rem; border-radius: 6px; border: 1px solid #d946ef; font-size: 0.8rem;">
+                    </div>
+                    <div v-else style="color: #cbd5e1; font-size: 0.8rem; font-style: italic;">
+                      Aucun congé planifié
+                    </div>
+                  </td>
+                </tr>
+                <tr v-if="leaveCandidates.length === 0">
+                  <td colspan="4" style="text-align: center; color: #64748b; padding: 1.5rem;">Aucun employé éligible ou historique introuvable.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          
+          <div class="step-nav" style="margin-top: 2rem;">
+            <button class="btn-prev" @click="goToImportStep(3)">← Précédent</button>
+            <button class="btn-next" @click="goToImportStep(5)">Suivant — Lancement →</button>
+          </div>
+        </div>
+
+        <!-- Étape 5: Lancement -->
+        <div v-if="importStep === 5" class="import-step-content animate-in">
           <div class="launch-summary">
             <div class="summary-row">
               <span class="summary-label">Fichier de données</span>
-              <span class="summary-value ok">{{ file?.name }}</span>
+              <span class="summary-value ok">{{ file?.name || 'Base Locale' }}</span>
             </div>
             <div class="summary-row">
               <span class="summary-label">Modèle</span>
@@ -1022,7 +1801,7 @@ const activeModuleDetails = computed(() => {
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
               Télécharger le ZIP
             </a>
-            <button class="btn-restart" @click="file = null; templateFile = null; result = null; goToImportStep(1)">
+            <button class="btn-restart" @click="file = null; templateFile = null; result = null; fileHeaders = []; columnMapping = {}; sheetNames = []; selectedSheet = null; showSheetPicker = false; aiMappingUsed = false; goToImportStep(1)">
               Recommencer
             </button>
           </div>
@@ -1036,7 +1815,7 @@ const activeModuleDetails = computed(() => {
           </div>
 
           <div class="step-nav">
-            <button class="btn-prev" @click="goToImportStep(3)">← Précédent</button>
+            <button class="btn-prev" @click="goToImportStep(4)">← Précédent</button>
           </div>
         </div>
 
@@ -1045,6 +1824,400 @@ const activeModuleDetails = computed(() => {
       <!-- ════ MODULE SOLDE ════ -->
       <div v-if="activeModule === 'solde'" class="module-content no-pad animate-in">
         <SoldeCompteSimulator :country="country" />
+      </div>
+
+      <!-- ════ MODULE SAISIE MENSUELLE ════ -->
+      <div v-if="activeModule === 'saisie'" class="module-content animate-in">
+        <div class="import-intro" style="margin-bottom: 1.25rem;">
+          <div class="intro-icon-wrap" style="background: #fffbeb;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </div>
+          <div>
+            <strong>Saisie Mensuelle</strong>
+            <p>Renseignez les heures supplémentaires et jours d'absence du mois pour vos employés déjà enregistrés dans l'annuaire.</p>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
+          <div class="form-group" style="flex: 1; min-width: 160px;">
+            <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Mois de paie</label>
+            <select v-model.number="payrollMois" style="width: 100%; padding: 0.6rem 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0; box-sizing: border-box;">
+              <option v-for="(m, idx) in moisNoms" :key="idx" :value="idx + 1">{{ m }}</option>
+            </select>
+          </div>
+          <div class="form-group" style="flex: 1; min-width: 120px;">
+            <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Année</label>
+            <input v-model.number="payrollAnnee" type="number" style="width: 100%; padding: 0.6rem 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
+          </div>
+        </div>
+
+        <div v-if="saisieLoading" class="admin-loading" style="padding: 2rem; text-align: center; color: #64748b;">
+          Chargement de l'annuaire...
+        </div>
+
+        <div v-else-if="saisieEmployees.length === 0" class="empty-state" style="padding: 2.5rem 1.5rem; text-align: center; background: #f8fafc; border-radius: 12px; border: 1px dashed #e2e8f0;">
+          <p style="color: #64748b; margin: 0 0 12px 0;">Votre annuaire est vide.</p>
+          <button @click="openModule('directory')" class="btn-next" style="display: inline-flex;">Aller à l'Annuaire Employés</button>
+        </div>
+
+        <div v-else>
+          <div class="local-directory-fast-option" style="margin-bottom: 20px; padding: 14px 16px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+            <div>
+              <strong style="color: #92400e; display: block; margin-bottom: 4px;">Vous avez un système de pointage ?</strong>
+              <p style="color: #78350f; font-size: 0.85rem; margin: 0;">
+                Importez directement une fiche de présence (matricule + jours travaillés/heures supp/absences) au lieu de saisir ligne par ligne.
+                <a href="/api/rh/download/modele-presence.xlsx" download style="color: #92400e; font-weight: 700;">Télécharger le modèle</a>
+              </p>
+            </div>
+            <label style="background: #d97706; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; white-space: nowrap;">
+              {{ presenceImporting ? 'Import en cours...' : 'Importer une fiche de présence' }}
+              <input type="file" accept=".xlsx,.xls" @change="importPresenceFile" style="display: none;" :disabled="presenceImporting" />
+            </label>
+          </div>
+          <div style="margin-bottom: 12px; display: flex; justify-content: flex-end;">
+            <div style="width: 100%; max-width: 300px; display: flex; flex-direction: column; align-items: flex-end;">
+              <EmployeeSelect :employees="saisieEmployees" @select="(e) => saisieSearchQuery = e ? e.matricule : ''" placeholder="Rechercher un employé..." />
+              <button v-if="saisieSearchQuery" @click="saisieSearchQuery = ''" style="margin-top: 0.25rem; font-size: 0.75rem; color: #64748b; background: none; border: none; cursor: pointer; text-decoration: underline;">
+                Afficher tous les employés
+              </button>
+            </div>
+          </div>
+          <div class="mapping-table-container">
+            <table class="mapping-table">
+              <thead>
+                <tr>
+                  <th>Employé</th>
+                  <th>Heures Supp.</th>
+                  <th>Jours d'Absence</th>
+                  <th>Jours Travaillés <span style="font-weight: 400; color: #94a3b8;">(auto, modifiable)</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="emp in saisieFilteredEmployees" :key="emp.id">
+                  <td>
+                    <strong>{{ emp.nom }} {{ emp.prenom }}</strong>
+                    <div style="font-size: 0.75rem; color: #64748b;">{{ emp.matricule || '-' }}</div>
+                  </td>
+                  <td><input v-model.number="saisieGrid[emp.id].heures_sup_nb" type="number" min="0" style="width: 90px; padding: 0.4rem 0.5rem; border-radius: 6px; border: 1px solid #e2e8f0;" /></td>
+                  <td><input v-model.number="saisieGrid[emp.id].absences_jours" type="number" min="0" max="26" style="width: 90px; padding: 0.4rem 0.5rem; border-radius: 6px; border: 1px solid #e2e8f0;" /></td>
+                  <td>
+                    <input
+                      :value="saisieJoursTravailles(emp.id)"
+                      @input="setSaisieJoursTravailles(emp.id, $event.target.value)"
+                      type="number" min="0" max="31"
+                      style="width: 90px; padding: 0.4rem 0.5rem; border-radius: 6px; border: 1px solid #e2e8f0; background: #f8fafc; font-weight: 700;"
+                      title="Calculé automatiquement (26 - absences), modifiable si besoin. Videz le champ pour revenir au calcul automatique."
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="step-nav">
+            <div></div>
+            <button class="btn-next" :disabled="uploading" @click="generateFromSaisie">
+              <span v-if="uploading">Génération en cours...</span>
+              <span v-else>Générer les bulletins →</span>
+            </button>
+          </div>
+
+          <div v-if="error" class="result-error" style="margin-top: 1rem;">
+            <p>{{ error }}</p>
+          </div>
+          <div v-if="result && result.success" class="billing-alert alert-success" style="margin-top: 1rem; padding: 0.85rem 1rem; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; color: #059669;">
+            {{ result.message }}
+            <a :href="result.zipUrl" download style="display: block; margin-top: 0.5rem; font-weight: 700;">Télécharger le ZIP</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- ════ MODULE STATISTIQUES EMPLOYÉ ════ -->
+      <div v-if="activeModule === 'stats'" class="module-content animate-in">
+        <div class="import-intro" style="margin-bottom: 1.25rem;">
+          <div class="intro-icon-wrap" style="background: #eff6ff;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"><path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/></svg>
+          </div>
+          <div>
+            <strong>Statistiques Employé</strong>
+            <p>Absences, heures supplémentaires et rémunération sur l'année, à partir de l'historique de paie généré.</p>
+          </div>
+        </div>
+
+        <div v-if="statsEmployeesList.length === 0" class="empty-state" style="padding: 2.5rem 1.5rem; text-align: center; background: #f8fafc; border-radius: 12px; border: 1px dashed #e2e8f0;">
+          <p style="color: #64748b; margin: 0 0 12px 0;">Aucun employé avec matricule dans l'annuaire.</p>
+          <button @click="openModule('directory')" class="btn-next" style="display: inline-flex;">Aller à l'Annuaire Employés</button>
+        </div>
+
+        <div v-else>
+          <div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
+            <div class="form-group" style="flex: 4; min-width: 300px;">
+              <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Rechercher un employé</label>
+              <EmployeeSelect :employees="statsEmployeesList" @select="(e) => statsSelectedMatricule = e ? e.matricule : ''" placeholder="Nom, prénom ou matricule..." />
+              <div v-if="statsSelectedMatricule" style="margin-top: 0.25rem; font-size: 0.75rem; color: #10b981;">
+                Matricule sélectionné : {{ statsSelectedMatricule }}
+              </div>
+            </div>
+            <div class="form-group" style="flex: 3; min-width: 280px;">
+              <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Période</label>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="font-size: 0.8rem; color: #64748b;">Du</span>
+                <select v-model.number="statsDebutMois" style="padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;">
+                  <option v-for="(m, i) in moisNoms" :key="i" :value="i + 1">{{ m }}</option>
+                </select>
+                <input v-model.number="statsDebutAnnee" type="number" style="width: 80px; padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;" />
+                <span style="font-size: 0.8rem; color: #64748b;">au</span>
+                <select v-model.number="statsFinMois" style="padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;">
+                  <option v-for="(m, i) in moisNoms" :key="i" :value="i + 1">{{ m }}</option>
+                </select>
+                <input v-model.number="statsFinAnnee" type="number" style="width: 80px; padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;" />
+              </div>
+            </div>
+          </div>
+
+          <div v-if="statsLoading" class="admin-loading" style="padding: 2rem; text-align: center; color: #64748b;">
+            Chargement des statistiques...
+          </div>
+
+          <template v-else-if="statsData">
+            <div v-if="statsData.totals.moisAvecDonnees === 0" class="empty-state" style="padding: 2rem 1.5rem; text-align: center; background: #f8fafc; border-radius: 12px; border: 1px dashed #e2e8f0;">
+              <p style="color: #64748b; margin: 0;">Aucun bulletin généré pour cet employé sur la période sélectionnée.</p>
+            </div>
+
+            <template v-else>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px;">
+                <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                  <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Jours d'absence (année)</div>
+                  <div style="font-size: 1.6rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ statsData.totals.totalAbsences }}</div>
+                </div>
+                <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                  <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Heures supp. (année)</div>
+                  <div style="font-size: 1.6rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ statsData.totals.totalHeuresSup }}</div>
+                </div>
+                <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                  <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Brut moyen mensuel</div>
+                  <div style="font-size: 1.6rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ fcfa(statsData.totals.brutMoyen) }}</div>
+                </div>
+                <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                  <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Mois avec bulletin</div>
+                  <div style="font-size: 1.6rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ statsData.totals.moisAvecDonnees }} / 12</div>
+                </div>
+              </div>
+
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px;">
+                <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                  <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Jours d'absence par mois</h4>
+                  <apexchart type="bar" height="240" :options="statsAbsencesOptions" :series="statsAbsencesSeries"></apexchart>
+                </div>
+                <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                  <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Heures supplémentaires par mois</h4>
+                  <apexchart type="bar" height="240" :options="statsHeuresSupOptions" :series="statsHeuresSupSeries"></apexchart>
+                </div>
+              </div>
+
+              <div class="mapping-table-container" style="margin-top: 20px;">
+                <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Détail mensuel</h4>
+                <table class="mapping-table">
+                  <thead>
+                    <tr>
+                      <th>Mois</th>
+                      <th>Jours Travaillés</th>
+                      <th>Jours d'Absence</th>
+                      <th>Heures Supp.</th>
+                      <th>Brut</th>
+                      <th>Net</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="m in statsData.monthly" :key="m.mois">
+                      <td>{{ moisNoms[m.mois - 1] }} {{ m.annee }}</td>
+                      <td>{{ m.joursTravailles }}</td>
+                      <td>{{ m.absencesJours }}</td>
+                      <td>{{ m.heuresSupNb }}</td>
+                      <td>{{ fcfa(m.brutTotal) }}</td>
+                      <td>{{ fcfa(m.netAPayer) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+          </template>
+          <div v-else class="empty-state" style="padding: 2rem 1.5rem; text-align: center; background: #f8fafc; border-radius: 12px; border: 1px dashed #e2e8f0;">
+            <p style="color: #64748b; margin: 0;">Aucun employé ne correspond à « {{ statsSearchQuery }} ».</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ════ MODULE ANALYTIQUE RH ENTREPRISE ════ -->
+      <div v-if="activeModule === 'analytics_entreprise'" class="module-content animate-in">
+        <div class="import-intro" style="margin-bottom: 1.25rem;">
+          <div class="intro-icon-wrap" style="background: #eef2ff;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
+          </div>
+          <div>
+            <strong>Analytique RH</strong>
+            <p>Masse salariale, charges patronales, absentéisme et heures supplémentaires — vue d'ensemble entreprise avec seuils d'alerte.</p>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; align-items: flex-end;">
+          <div class="form-group" style="flex: 3; min-width: 280px;">
+            <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Période</label>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span style="font-size: 0.8rem; color: #64748b;">Du</span>
+              <select v-model.number="companyDebutMois" style="padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;">
+                <option v-for="(m, i) in moisNoms" :key="i" :value="i + 1">{{ m }}</option>
+              </select>
+              <input v-model.number="companyDebutAnnee" type="number" style="width: 80px; padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;" />
+              <span style="font-size: 0.8rem; color: #64748b;">au</span>
+              <select v-model.number="companyFinMois" style="padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;">
+                <option v-for="(m, i) in moisNoms" :key="i" :value="i + 1">{{ m }}</option>
+              </select>
+              <input v-model.number="companyFinAnnee" type="number" style="width: 80px; padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;" />
+            </div>
+          </div>
+          <div class="form-group" style="min-width: 140px;">
+            <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">SLA Absentéisme (%)</label>
+            <input v-model.number="slaAbsenteisme" type="number" min="0" style="width: 100%; padding: 0.6rem 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
+          </div>
+          <div class="form-group" style="min-width: 160px;">
+            <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">SLA Heures Sup (% masse)</label>
+            <input v-model.number="slaHeuresSupRatio" type="number" min="0" style="width: 100%; padding: 0.6rem 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
+          </div>
+          <div class="form-group" style="min-width: 140px;">
+            <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Seuil Bradford</label>
+            <input v-model.number="slaBradford" type="number" min="0" style="width: 100%; padding: 0.6rem 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
+          </div>
+        </div>
+
+        <div v-if="companyAnalyticsLoading" class="admin-loading" style="padding: 2rem; text-align: center; color: #64748b;">
+          Chargement de l'analytique...
+        </div>
+
+        <template v-else-if="companyAnalyticsData">
+          <div v-if="companyAnalyticsData.totals.moisAvecDonnees === 0" class="empty-state" style="padding: 2rem 1.5rem; text-align: center; background: #f8fafc; border-radius: 12px; border: 1px dashed #e2e8f0;">
+            <p style="color: #64748b; margin: 0;">Aucun bulletin généré sur la période sélectionnée.</p>
+          </div>
+
+          <template v-else>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px;">
+              <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Masse salariale (brut, année)</div>
+                <div style="font-size: 1.4rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ fcfa(companyAnalyticsData.totals.masseSalarialeAnnuelle) }}</div>
+              </div>
+              <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Coût total employeur</div>
+                <div style="font-size: 1.4rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ fcfa(companyCoutTotalEmployeur) }}</div>
+              </div>
+              <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Charges patronales</div>
+                <div style="font-size: 1.4rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ companyAnalyticsData.totals.ratioChargesPatronales }}%</div>
+              </div>
+              <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase; display: flex; align-items: center; justify-content: space-between;">
+                  <span>Absentéisme moyen</span>
+                  <span v-if="companyAbsenteismeAlert" style="background: #fee2e2; color: #dc2626; padding: 0.1rem 0.4rem; border-radius: 9999px; font-weight: 800; font-size: 0.65rem;">Alerte</span>
+                </div>
+                <div style="font-size: 1.4rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ companyAnalyticsData.totals.tauxAbsenteismeMoyen }}%</div>
+              </div>
+              <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase; display: flex; align-items: center; justify-content: space-between;">
+                  <span>Coût heures sup</span>
+                  <span v-if="companyHeuresSupAlert" style="background: #fee2e2; color: #dc2626; padding: 0.1rem 0.4rem; border-radius: 9999px; font-weight: 800; font-size: 0.65rem;">Alerte</span>
+                </div>
+                <div style="font-size: 1.4rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ fcfa(companyAnalyticsData.totals.coutHeuresSupAnnuel) }}</div>
+                <div style="font-size: 0.7rem; color: #94a3b8; margin-top: 2px;">{{ companyHeuresSupRatioAnnuel }}% de la masse brute</div>
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px;">
+              <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Masse salariale par mois (brut / net)</h4>
+                <apexchart type="bar" height="240" :options="companyMasseSalarialeOptions" :series="companyMasseSalarialeSeries"></apexchart>
+              </div>
+              <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Taux d'absentéisme par mois</h4>
+                <apexchart type="bar" height="240" :options="companyAbsenteismeOptions" :series="companyAbsenteismeSeries"></apexchart>
+              </div>
+              <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Coût des heures sup par mois (% masse brute)</h4>
+                <apexchart type="bar" height="240" :options="companyHeuresSupOptions" :series="companyHeuresSupSeries"></apexchart>
+              </div>
+              <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
+                <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Masse salariale par poste</h4>
+                <apexchart type="bar" :height="Math.max(240, companyByPosteDisplay.length * 34)" :options="companyByPosteOptions" :series="companyByPosteSeries"></apexchart>
+              </div>
+            </div>
+
+            <div class="mapping-table-container" style="margin-top: 20px;">
+              <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Détail par poste</h4>
+              <table class="mapping-table">
+                <thead>
+                  <tr>
+                    <th>Poste</th>
+                    <th>Effectif</th>
+                    <th>Masse salariale</th>
+                    <th>Salaire moyen</th>
+                    <th>Min</th>
+                    <th>Max</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="p in companyAnalyticsData.byPoste" :key="p.poste">
+                    <td>{{ p.poste }}</td>
+                    <td>{{ p.effectif }}</td>
+                    <td>{{ fcfa(p.masseSalariale) }}</td>
+                    <td>{{ fcfa(p.salaireMoyen) }}</td>
+                    <td>{{ fcfa(p.salaireMin) }}</td>
+                    <td>{{ fcfa(p.salaireMax) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="mapping-table-container" style="margin-top: 20px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+                <h4 style="margin: 0; font-size: 0.9rem; color: #0f172a;">
+                  Score Bradford (absentéisme chronique)
+                  <span title="Score = (nombre de mois avec au moins un jour d'absence)² × total de jours d'absence sur l'année. Approximation mensuelle : les données ne suivent pas les absences jour par jour, donc ce score est indicatif, pas une mesure clinique du Bradford Factor." style="cursor: help; color: #94a3b8; font-weight: 400; font-size: 0.75rem;">ⓘ</span>
+                </h4>
+                <input
+                  v-model="bradfordSearchQuery"
+                  type="text"
+                  placeholder="Rechercher un employé..."
+                  style="padding: 0.45rem 0.7rem; border-radius: 8px; border: 1px solid #e2e8f0; font-size: 0.825rem; min-width: 220px;"
+                />
+              </div>
+              <table class="mapping-table">
+                <thead>
+                  <tr>
+                    <th>Employé</th>
+                    <th>Poste</th>
+                    <th>Jours d'absence</th>
+                    <th>Mois avec absence</th>
+                    <th>Score Bradford</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="e in bradfordFilteredEmployees" :key="e.matricule">
+                    <td><strong>{{ e.nom }} {{ e.prenom }}</strong><div style="font-size: 0.7rem; color: #64748b;">{{ e.matricule }}</div></td>
+                    <td>{{ e.poste }}</td>
+                    <td>{{ e.totalAbsenceDays }}</td>
+                    <td>{{ e.spellsCount }}</td>
+                    <td>{{ e.bradfordScore }}</td>
+                    <td>
+                      <span v-if="e.bradfordScore > slaBradford" style="background: #fee2e2; color: #dc2626; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 700; font-size: 0.7rem;">Alerte</span>
+                    </td>
+                  </tr>
+                  <tr v-if="bradfordFilteredEmployees.length === 0">
+                    <td colspan="6" style="text-align: center; color: #64748b; padding: 1.25rem;">Aucun employé ne correspond à la recherche.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </template>
       </div>
 
       <!-- ════ MODULE BASE LOCALE ════ -->
@@ -1060,6 +2233,41 @@ const activeModuleDetails = computed(() => {
       <!-- ════ MODULE PARAMÈTRES ════ -->
       <div v-if="activeModule === 'settings'" class="module-content animate-in">
         <SettingsPanel :country="props.country" @change-country="(c) => emit('change-country', c)" />
+      </div>
+
+      <!-- ════ MODULE GÉNÉRATEUR DE DOCUMENTS ════ -->
+      <div v-if="activeModule === 'documents'" class="module-content no-pad animate-in">
+        <DocumentsGenerator :country="props.country" />
+      </div>
+
+      <!-- ════ MODULE ABSENCES & CONGÉS ════ -->
+      <div v-if="activeModule === 'conges'" class="module-content no-pad animate-in">
+        <CongesManager :country="props.country" />
+      </div>
+
+      <!-- ════ MODULE CONTRATS & ALERTES ════ -->
+      <div v-if="activeModule === 'contrats'" class="module-content no-pad animate-in">
+        <ContratsManager :country="props.country" />
+      </div>
+
+      <!-- ════ MODULE ÉVALUATIONS ════ -->
+      <div v-if="activeModule === 'evaluations'" class="module-content no-pad animate-in">
+        <EvaluationsManager :country="props.country" />
+      </div>
+
+      <!-- ════ MODULE FORMATIONS & COMPÉTENCES ════ -->
+      <div v-if="activeModule === 'formations'" class="module-content no-pad animate-in">
+        <FormationsManager :country="props.country" />
+      </div>
+
+      <!-- ════ MODULE PLANNING HEBDOMADAIRE ════ -->
+      <div v-if="activeModule === 'planning'" class="module-content no-pad animate-in">
+        <PlanningManager :country="props.country" />
+      </div>
+
+      <!-- ════ MODULE TABLEAU DE BORD ════ -->
+      <div v-if="activeModule === 'dashboard'" class="module-content no-pad animate-in">
+        <DashboardManager />
       </div>
 
     </template>
@@ -1094,7 +2302,8 @@ const activeModuleDetails = computed(() => {
   inset: 0;
   bottom: 48px; /* taskbar height */
   z-index: 1;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 2rem;
 }
 
@@ -1143,21 +2352,21 @@ const activeModuleDetails = computed(() => {
   gap: 2.5rem;
   width: 100%;
   max-width: 1200px;
-  height: 100%;
+  min-height: min-content;
   z-index: 2;
-  align-items: center;
+  align-items: start;
 }
 
 @media (max-width: 900px) {
   .desktop-layout {
     grid-template-columns: 1fr;
-    overflow-y: auto;
     align-items: start;
     padding-top: 1rem;
     gap: 1.5rem;
   }
   .desktop-sidebar-widget {
     order: -1; /* Clock on top for mobile */
+    align-self: stretch;
   }
   .workspace-card {
     display: none !important;
@@ -1178,10 +2387,14 @@ const activeModuleDetails = computed(() => {
 .desktop-shortcuts {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-auto-rows: min-content;
+  align-content: start;
   gap: 1.25rem;
-  max-height: 100%;
-  overflow-y: auto;
   padding: 0.5rem;
+}
+
+.desktop-sidebar-widget {
+  align-self: center;
 }
 
 /* Shortcut card styling */
@@ -2505,6 +3718,51 @@ const activeModuleDetails = computed(() => {
 .model-download-row { margin-top: 1rem; text-align: center; }
 .model-link { display: inline-flex; align-items: center; gap: 0.4rem; color: #059669; font-size: 0.85rem; text-decoration: none; font-weight: 600; border-bottom: 1.5px dashed #059669; padding-bottom: 1px; transition: all 0.2s; }
 .model-link:hover { border-bottom-style: solid; color: #047857; }
+
+/* SHEET PICKER (fichiers Excel multi-feuilles) */
+.sheet-picker-box {
+  margin-top: 1.25rem;
+  padding: 1rem 1.25rem;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 12px;
+}
+.sheet-picker-box strong { display: block; color: #92400e; font-size: 0.9rem; }
+.sheet-picker-box p { margin: 0.25rem 0 0.75rem 0; color: #78350f; font-size: 0.85rem; }
+.sheet-picker-list { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.sheet-picker-btn {
+  background: #ffffff;
+  border: 1px solid #fbbf24;
+  color: #92400e;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.sheet-picker-btn:hover:not(:disabled) { background: #fef3c7; }
+.sheet-picker-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* AI MAPPING BADGE */
+.ai-mapping-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.5rem;
+  background: #eef2ff;
+  color: #4f46e5;
+  border: 1px solid #c7d2fe;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.15rem 0.6rem;
+  border-radius: 9999px;
+  vertical-align: middle;
+}
+.ai-mapping-badge-loading {
+  background: #f1f5f9;
+  color: #64748b;
+  border-color: #e2e8f0;
+}
 
 /* VARIABLES GUIDE PRO */
 .vars-guide {

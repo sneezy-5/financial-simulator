@@ -92,17 +92,40 @@
           />
         </div>
 
-        <!-- Badges & Credits -->
+        <!-- Badges & Abonnement -->
         <div class="credits-info-banner">
           <div class="credits-badge">
             <span class="bolt">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
             </span>
-            <span><strong>{{ user?.credits || 0 }}</strong> crédits disponibles</span>
+            <span v-if="user?.subscriptionTier">
+              <strong>{{ user.subscriptionIsTrial ? 'Essai gratuit' : user.subscriptionTier === 'pro' ? 'Pro' : user.subscriptionTier === 'starter' ? 'Starter' : user.subscriptionTier }}</strong> — {{ user.bulletinsUsed || 0 }} bulletins utilisés · expire le {{ formatDate(user.subscriptionExpiresAt) }}
+            </span>
+            <span v-else>Aucun abonnement actif. <strong>{{ user?.credits || 0 }} crédits gratuits restants.</strong></span>
           </div>
           <button type="button" @click="emit('open-billing')" class="recharge-btn">
-            + Recharger des crédits
+            Gérer mon abonnement
           </button>
+        </div>
+
+        <!-- Mes Factures -->
+        <div class="form-group">
+          <label>Mes Factures</label>
+          <div v-if="invoicesLoading" style="font-size: 0.85rem; color: #64748b;">Chargement...</div>
+          <div v-else-if="invoices.length === 0" style="font-size: 0.85rem; color: #64748b;">Aucune facture pour le moment.</div>
+          <div v-else class="invoices-list">
+            <div v-for="inv in invoices" :key="inv.id" class="invoice-row">
+              <div>
+                <strong style="font-size: 0.85rem; color: #0f172a;">{{ inv.invoiceNumber }}</strong>
+                <div style="font-size: 0.75rem; color: #64748b;">
+                  {{ formatDate(inv.createdAt) }} · {{ inv.subscriptionTier === 'pro' ? 'Pro' : 'Starter' }} · {{ formatAmount(inv.amount) }} FCFA
+                </div>
+              </div>
+              <button type="button" @click="downloadInvoice(inv)" class="invoice-download-btn" :disabled="downloadingId === inv.id">
+                {{ downloadingId === inv.id ? '...' : 'Télécharger' }}
+              </button>
+            </div>
+          </div>
         </div>
 
         <!-- Modal Actions -->
@@ -122,7 +145,7 @@
 
 <script setup>
 import { ref, watch, onMounted } from 'vue'
-import { user, updateProfile, logout } from '../services/auth'
+import { user, token, updateProfile, logout } from '../services/auth'
 
 const props = defineProps({
   show: Boolean
@@ -133,6 +156,54 @@ const emit = defineEmits(['close', 'open-billing'])
 const loading = ref(false)
 const errorMsg = ref('')
 const successMsg = ref('')
+
+const formatDate = (d) => d ? new Date(d).toLocaleDateString('fr-FR') : ''
+const formatAmount = (v) => Math.round(v || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+
+const invoices = ref([])
+const invoicesLoading = ref(false)
+const downloadingId = ref(null)
+
+const fetchInvoices = async () => {
+  if (!token.value) return
+  try {
+    invoicesLoading.value = true
+    const res = await fetch('/api/billing/invoices', {
+      headers: { 'Authorization': `Bearer ${token.value}` }
+    })
+    if (res.ok) {
+      const data = await res.json()
+      invoices.value = data.invoices || []
+    }
+  } catch (e) {
+    console.error('Erreur chargement des factures:', e)
+  } finally {
+    invoicesLoading.value = false
+  }
+}
+
+const downloadInvoice = async (inv) => {
+  try {
+    downloadingId.value = inv.id
+    const res = await fetch(`/api/billing/invoices/${inv.id}/download`, {
+      headers: { 'Authorization': `Bearer ${token.value}` }
+    })
+    if (!res.ok) throw new Error('Téléchargement impossible')
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${inv.invoiceNumber}.pdf`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    console.error(e)
+  } finally {
+    downloadingId.value = null
+  }
+}
 
 const form = ref({
   name: '',
@@ -159,6 +230,7 @@ watch(() => props.show, (newVal) => {
     syncForm()
     errorMsg.value = ''
     successMsg.value = ''
+    fetchInvoices()
   }
 })
 
@@ -448,6 +520,46 @@ const handleLogout = () => {
 
 .recharge-btn:hover {
   background: #fef3c7;
+}
+
+.invoices-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.invoice-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.6rem 0.9rem;
+}
+
+.invoice-download-btn {
+  background: #eef2ff;
+  color: #4f46e5;
+  border: 1px solid #c7d2fe;
+  padding: 0.35rem 0.75rem;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.invoice-download-btn:hover:not(:disabled) {
+  background: #e0e7ff;
+}
+
+.invoice-download-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .profile-modal-actions {

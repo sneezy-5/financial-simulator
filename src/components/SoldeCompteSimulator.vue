@@ -1,6 +1,8 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { localDb } from '../services/localDatabase.js'
+import EmployeeSelect from './hr/EmployeeSelect.vue'
+import { user } from '../services/auth.js'
 
 const props = defineProps({
   country: {
@@ -8,6 +10,8 @@ const props = defineProps({
     default: 'CI'
   }
 })
+
+const isSimulatorMode = import.meta.env.VITE_APP_MODE === 'simulator'
 
 // ══════════════════════════════════════════════
 // DONNÉES MINIMALES REQUISES
@@ -40,6 +44,20 @@ const emp = ref({
   preavis_mois_contrat: 0,     // Dépassement contractuel
   avances_impayees: 0,
   arrieres_salaire: 0,
+})
+
+const availableEmployees = ref([])
+
+onMounted(async () => {
+  if (user.value) {
+    emp.value.nom_entreprise = user.value.companyName || user.value.entreprise || ''
+  }
+
+  try {
+    availableEmployees.value = await localDb.getEmployees()
+  } catch (e) {
+    availableEmployees.value = []
+  }
 })
 
 // ══════════════════════════════════════════════
@@ -133,6 +151,9 @@ const calc = computed(() => {
   let totalJoursCP = 0;
   let montantConges = 0;
   let cpMethod = 'CI'; // pour l'affichage
+  let salJour = 0; // salaire journalier (CI uniquement) — utilisé aussi dans le libellé détaillé plus bas
+  let dateDebutReferenceConge = null; // CI uniquement — utilisé aussi dans la valeur de retour plus bas
+  let moisPeriode = 0; // CI uniquement — utilisé aussi dans la valeur de retour plus bas
 
   if (['BJ', 'TG'].includes(props.country)) {
     cpMethod = props.country;
@@ -142,14 +163,14 @@ const calc = computed(() => {
   } else {
     // Droit local CI : 2.2 jours ouvrables par mois effectif
     // On calcule *exactement* depuis la date d'embauche ou du DERNIER RETOUR DE CONGÉ
-    const dateDebutReferenceConge = emp.value.date_dernier_retour_conge 
-      ? new Date(emp.value.date_dernier_retour_conge) 
+    dateDebutReferenceConge = emp.value.date_dernier_retour_conge
+      ? new Date(emp.value.date_dernier_retour_conge)
       : new Date(de);
 
     // Sécurité si retour de congé > sortie
     if (dateDebutReferenceConge > ds) dateDebutReferenceConge.setTime(ds.getTime());
 
-    let moisPeriode = (ds.getFullYear() - dateDebutReferenceConge.getFullYear()) * 12 + (ds.getMonth() - dateDebutReferenceConge.getMonth());
+    moisPeriode = (ds.getFullYear() - dateDebutReferenceConge.getFullYear()) * 12 + (ds.getMonth() - dateDebutReferenceConge.getMonth());
     let joursFractionConge = ds.getDate() - dateDebutReferenceConge.getDate();
     
     if (joursFractionConge < 0) {
@@ -163,8 +184,8 @@ const calc = computed(() => {
     // Total des jours
     totalJoursCP = Math.round(moisPeriode * 2.2 * 10) / 10;
     
-    // Base 26.4 jours par an = 1 mois de salaire 
-    const salJour = brut / 26.4; 
+    // Base 26.4 jours par an = 1 mois de salaire
+    salJour = brut / 26.4;
     montantConges = Math.round(totalJoursCP * salJour);
   }
 
@@ -429,6 +450,24 @@ const reset = () => { generated.value = false; downloadUrl.value = null; errorMs
 
       <!-- ══ FORMULAIRE SIMPLIFIÉ ══ -->
       <div class="stc-form">
+
+        <div class="form-bloc" v-if="!isSimulatorMode">
+          <div class="bloc-title"><span class="bloc-num"></span> Pré-remplir depuis l'annuaire</div>
+          <div class="field-row">
+            <div class="field-group" style="width: 100%;">
+              <EmployeeSelect :employees="availableEmployees" @select="(e) => {
+                if(!e) return;
+                emp.nom = e.nom || '';
+                emp.prenom = e.prenom || '';
+                emp.poste = e.poste || '';
+                emp.nom_entreprise = e.employeur || '';
+                emp.date_embauche = e.date_embauche || e.date_entree || '';
+                emp.salaire_de_base = e.salaire_base || e.salaire || 0;
+                emp.sursalaire_primes = e.sursalaire || 0;
+              }" placeholder="Rechercher par nom, prénom ou matricule..." />
+            </div>
+          </div>
+        </div>
 
         <!-- BLOC 1 : QUI ? -->
         <div class="form-bloc">

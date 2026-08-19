@@ -398,6 +398,24 @@ const importExcel = async (e) => {
           <label>Date d'embauche <span class="req">*</span></label>
           <input v-model="selectedEmployee.date_embauche" type="date" />
         </div>
+        <div class="form-group">
+          <label>Numéro CNPS</label>
+          <input v-model="selectedEmployee.numero_cnps" type="text" placeholder="ex. 123456-A" />
+        </div>
+        <div class="form-group">
+          <label>Situation matrimoniale</label>
+          <select v-model="selectedEmployee.situation_matrimoniale">
+            <option value="">-- Non renseignée --</option>
+            <option value="celibataire">Célibataire</option>
+            <option value="marie">Marié(e)</option>
+            <option value="divorce">Divorcé(e)</option>
+            <option value="veuf">Veuf(ve)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Nombre d'enfants (à charge)</label>
+          <input v-model="selectedEmployee.nombre_enfants" type="number" min="0" placeholder="ex. 2" />
+        </div>
       </div>
 
       <div class="editor-footer">
@@ -862,7 +880,8 @@ const importExcel = async (e) => {
   color: #ef4444;
 }
 
-.form-group input {
+.form-group input,
+.form-group select {
   padding: 0.75rem 1rem;
   border-radius: 10px;
   border: 1px solid #e2e8f0;
@@ -872,9 +891,11 @@ const importExcel = async (e) => {
   outline: none;
   transition: all 0.2s;
   box-sizing: border-box;
+  font-family: inherit;
 }
 
-.form-group input:focus {
+.form-group input:focus,
+.form-group select:focus {
   border-color: #3b82f6;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
   background: #ffffff;

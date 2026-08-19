@@ -104,6 +104,37 @@ const User = sequelize.define('User', {
     isBlocked: {
         type: DataTypes.BOOLEAN,
         defaultValue: false
+    },
+    subscriptionTier: {
+        type: DataTypes.STRING,
+        allowNull: true,
+        defaultValue: null // 'starter' ou 'pro'
+    },
+    subscriptionExpiresAt: {
+        type: DataTypes.DATE,
+        allowNull: true,
+        defaultValue: null
+    },
+    bulletinsUsed: {
+        type: DataTypes.INTEGER,
+        defaultValue: 0 // Compteur de bulletins générés sur la période d'abonnement en cours
+    },
+    periodStartedAt: {
+        type: DataTypes.DATE,
+        allowNull: true,
+        defaultValue: null
+    },
+    companyNumeroCnps: {
+        type: DataTypes.STRING,
+        allowNull: true // Numéro CNPS employeur, utilisé pour les futures déclarations réglementaires
+    },
+    companyNumeroContribuable: {
+        type: DataTypes.STRING,
+        allowNull: true // Numéro contribuable / NIF employeur
+    },
+    subscriptionIsTrial: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false // true tant que l'abonnement en cours est l'essai gratuit de 14 jours
     }
 });
 
@@ -127,6 +158,65 @@ const PayrollRequest = sequelize.define('PayrollRequest', {
     }
 });
 
+// Modèle PÉRIODE DE PAIE (mois/année, brouillon → validé — fondation des futures déclarations
+// réglementaires CNPS/ITS/CMU, générées à partir des périodes validées)
+const PayrollPeriod = sequelize.define('PayrollPeriod', {
+    mois: {
+        type: DataTypes.INTEGER,
+        allowNull: false // 1-12
+    },
+    annee: {
+        type: DataTypes.INTEGER,
+        allowNull: false
+    },
+    country: {
+        type: DataTypes.STRING,
+        defaultValue: 'CI'
+    },
+    status: {
+        type: DataTypes.STRING,
+        defaultValue: 'draft' // 'draft' ou 'validated'
+    },
+    validatedAt: {
+        type: DataTypes.DATE,
+        allowNull: true
+    }
+});
+
+// Modèle BULLETIN ENREGISTRÉ (Instantané par salarié au moment de la génération — ne suit pas
+// les modifications ultérieures de la fiche salarié, comme il se doit pour un document légal)
+const PayslipRecord = sequelize.define('PayslipRecord', {
+    nom: { type: DataTypes.STRING, allowNull: true },
+    prenom: { type: DataTypes.STRING, allowNull: true },
+    matricule: { type: DataTypes.STRING, allowNull: true },
+    numeroCnps: { type: DataTypes.STRING, allowNull: true },
+    poste: { type: DataTypes.STRING, allowNull: true },
+    salaireBase: { type: DataTypes.FLOAT, defaultValue: 0 },
+    brutTotal: { type: DataTypes.FLOAT, defaultValue: 0 },
+    netAPayer: { type: DataTypes.FLOAT, defaultValue: 0 },
+    cnpsSal: { type: DataTypes.FLOAT, defaultValue: 0 },
+    cnpsPF: { type: DataTypes.FLOAT, defaultValue: 0 },
+    cnpsAM: { type: DataTypes.FLOAT, defaultValue: 0 },
+    cnpsAT: { type: DataTypes.FLOAT, defaultValue: 0 },
+    cnpsRetraitePat: { type: DataTypes.FLOAT, defaultValue: 0 },
+    its: { type: DataTypes.FLOAT, defaultValue: 0 },
+    ricf: { type: DataTypes.FLOAT, defaultValue: 0 },
+    cmuSal: { type: DataTypes.FLOAT, defaultValue: 0 },
+    cmuPat: { type: DataTypes.FLOAT, defaultValue: 0 },
+    totalPersonnesCMU: { type: DataTypes.INTEGER, defaultValue: 0 },
+    situationMatrimoniale: { type: DataTypes.STRING, allowNull: true },
+    nombreEnfants: { type: DataTypes.INTEGER, defaultValue: 0 },
+    heuresSupNb: { type: DataTypes.FLOAT, defaultValue: 0 },
+    montantHeuresSup: { type: DataTypes.FLOAT, defaultValue: 0 },
+    joursTravailles: { type: DataTypes.FLOAT, defaultValue: 0 },
+    absencesJours: { type: DataTypes.FLOAT, defaultValue: 0 }
+});
+
+User.hasMany(PayrollPeriod, { foreignKey: 'userId', onDelete: 'CASCADE' });
+PayrollPeriod.belongsTo(User, { foreignKey: 'userId' });
+PayrollPeriod.hasMany(PayslipRecord, { foreignKey: 'periodId', onDelete: 'CASCADE' });
+PayslipRecord.belongsTo(PayrollPeriod, { foreignKey: 'periodId' });
+
 // Modèle TRANSACTION (Paiements Paystack)
 const Transaction = sequelize.define('Transaction', {
     reference: {
@@ -142,14 +232,101 @@ const Transaction = sequelize.define('Transaction', {
         type: DataTypes.INTEGER,
         allowNull: false
     },
+    subscriptionTier: {
+        type: DataTypes.STRING,
+        allowNull: true // 'starter' ou 'pro' — palier réellement accordé par ce paiement
+    },
     status: {
         type: DataTypes.STRING,
         defaultValue: 'pending' // 'pending', 'success', 'failed'
     }
 });
 
-User.hasMany(Transaction, { foreignKey: 'userId' });
+User.hasMany(Transaction, { foreignKey: 'userId', onDelete: 'CASCADE' });
 Transaction.belongsTo(User, { foreignKey: 'userId' });
+
+// Modèle FACTURE (Émise à chaque paiement d'abonnement réussi)
+const Invoice = sequelize.define('Invoice', {
+    invoiceNumber: {
+        type: DataTypes.STRING,
+        allowNull: true, // renseigné juste après création (dérivé de l'id auto-increment)
+        unique: true
+    },
+    subscriptionTier: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    amount: {
+        type: DataTypes.INTEGER, // FCFA
+        allowNull: false
+    },
+    reference: {
+        type: DataTypes.STRING,
+        allowNull: true // référence de paiement Paystack
+    },
+    pdfPath: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    status: {
+        type: DataTypes.STRING,
+        defaultValue: 'paid'
+    }
+});
+
+User.hasMany(Invoice, { foreignKey: 'userId', onDelete: 'CASCADE' });
+Invoice.belongsTo(User, { foreignKey: 'userId' });
+
+// Modèle LICENCE (Édition installable "logiciel complet" vendue aux entreprises)
+const License = sequelize.define('License', {
+    licenseKey: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        unique: true
+    },
+    companyName: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    contactEmail: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    status: {
+        type: DataTypes.STRING,
+        defaultValue: 'active' // 'active' ou 'revoked'
+    },
+    expiresAt: {
+        type: DataTypes.DATE,
+        allowNull: true // null = licence perpétuelle
+    },
+    installationId: {
+        type: DataTypes.STRING,
+        allowNull: true // identifiant de l'installation actuellement liée à cette clé
+    },
+    activatedAt: {
+        type: DataTypes.DATE,
+        allowNull: true
+    },
+    lastVerifiedAt: {
+        type: DataTypes.DATE,
+        allowNull: true
+    },
+    price: {
+        type: DataTypes.INTEGER,
+        defaultValue: 500000 // FCFA
+    },
+    reference: {
+        type: DataTypes.STRING,
+        allowNull: true // référence Paystack (achats en libre-service uniquement) ; déduplication
+                         // gérée applicativement dans licenseService.js, pas de contrainte UNIQUE ici
+                         // (SQLite ne permet pas d'ajouter une colonne UNIQUE via ALTER TABLE)
+    },
+    notes: {
+        type: DataTypes.TEXT,
+        allowNull: true
+    }
+});
 
 // Modèle UTILISATEUR ADMINISTRATEUR (Séparé des clients SaaS)
 const AdminUser = sequelize.define('AdminUser', {
@@ -188,6 +365,43 @@ const CreditPack = sequelize.define('CreditPack', {
     },
     price: {
         type: DataTypes.INTEGER, // Prix en FCFA
+        allowNull: false
+    },
+    popular: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false
+    },
+    active: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: true
+    }
+});
+
+// Modèle FORMULE D'ABONNEMENT (Paliers Starter / Pro, configurables par l'Admin)
+const SubscriptionPlan = sequelize.define('SubscriptionPlan', {
+    code: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        unique: true // identifiant unique de la ligne tarifaire, ex: 'starter', 'pro', 'starter_annual', 'pro_annual'
+    },
+    tier: {
+        type: DataTypes.STRING,
+        allowNull: true // 'starter' ou 'pro' — palier partagé entre le mensuel et l'annuel d'une même formule
+    },
+    billingCycle: {
+        type: DataTypes.STRING,
+        defaultValue: 'monthly' // 'monthly' ou 'annual'
+    },
+    name: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    bulletinLimit: {
+        type: DataTypes.INTEGER,
+        allowNull: false
+    },
+    price: {
+        type: DataTypes.INTEGER, // Prix en FCFA (par mois si mensuel, par an si annuel)
         allowNull: false
     },
     popular: {
@@ -249,7 +463,16 @@ User.hasMany(PayrollRequest);
 PayrollRequest.belongsTo(User);
 
 // Synchronisation de la base de données & Seeding Admin / CreditPacks / BankLoans
-sequelize.sync({ alter: true })
+//
+// Note SQLite : `changeColumn` (déclenché par `alter: true` dès qu'un attribut existant
+// est jugé différent, ex. quirk PRAGMA table_info sur la colonne `id`) reconstruit la table
+// entière (CREATE backup → COPY → DROP → RENAME) mais n'y désactive pas les FK — ce qui fait
+// échouer le DROP dès qu'une autre table référence celle-ci. On désactive donc les FK autour
+// du sync, comme le fait déjà Sequelize lui-même pour `dropAllTables`.
+const isSqlite = sequelize.getDialect() === 'sqlite';
+(isSqlite ? sequelize.query('PRAGMA foreign_keys = OFF') : Promise.resolve())
+    .then(() => sequelize.sync({ alter: false }))
+    .finally(() => (isSqlite ? sequelize.query('PRAGMA foreign_keys = ON') : Promise.resolve()))
     .then(async () => {
         console.log('✅ Base de données synchronisée avec succès (alter: true).');
         
@@ -299,6 +522,64 @@ sequelize.sync({ alter: true })
             }
         } catch (packErr) {
             console.error('⚠️ Erreur lors du seeding CreditPack:', packErr);
+        }
+
+        // Auto-seeding des formules d'abonnement (Starter / Pro) si aucune n'existe
+        try {
+            const planCount = await SubscriptionPlan.count();
+            if (planCount === 0) {
+                await SubscriptionPlan.bulkCreate([
+                    { code: 'starter', tier: 'starter', billingCycle: 'monthly', name: 'Starter', bulletinLimit: 10, price: 5000, popular: false, active: true },
+                    { code: 'pro', tier: 'pro', billingCycle: 'monthly', name: 'Pro', bulletinLimit: 30, price: 10000, popular: true, active: true }
+                ]);
+                console.log('📋 Formules d\'abonnement initiales (Starter / Pro) créées avec succès.');
+            }
+        } catch (planErr) {
+            console.error('⚠️ Erreur lors du seeding SubscriptionPlan:', planErr);
+        }
+
+        // Rattrapage : renseigne `tier` sur les lignes mensuelles existantes créées avant son ajout
+        // (tier == code pour les 2 formules mensuelles d'origine)
+        try {
+            const plansMissingTier = await SubscriptionPlan.findAll({ where: { tier: null } });
+            for (const p of plansMissingTier) {
+                p.tier = p.code;
+                await p.save();
+            }
+        } catch (tierErr) {
+            console.error('⚠️ Erreur lors du rattrapage tier SubscriptionPlan:', tierErr);
+        }
+
+        // Auto-seeding des formules annuelles (10 mois payés sur 12), dérivées dynamiquement
+        // des formules mensuelles actives (prix/quota annuel = 10x le mensuel courant), pour
+        // rester cohérent même si les tarifs mensuels sont modifiés depuis l'admin
+        try {
+            const monthlyPlans = await SubscriptionPlan.findAll({ where: { billingCycle: 'monthly', active: true } });
+            for (const monthly of monthlyPlans) {
+                const annualCode = `${monthly.code}_annual`;
+                const annualDefaults = {
+                    code: annualCode,
+                    tier: monthly.tier || monthly.code,
+                    billingCycle: 'annual',
+                    name: `${monthly.name} Annuel`,
+                    bulletinLimit: monthly.bulletinLimit,
+                    price: monthly.price * 10,
+                    popular: monthly.popular,
+                    active: true
+                };
+                const [annualPlan, created] = await SubscriptionPlan.findOrCreate({
+                    where: { code: annualCode },
+                    defaults: annualDefaults
+                });
+                if (!created && (annualPlan.price !== annualDefaults.price || annualPlan.bulletinLimit !== annualDefaults.bulletinLimit || annualPlan.name !== annualDefaults.name)) {
+                    annualPlan.price = annualDefaults.price;
+                    annualPlan.bulletinLimit = annualDefaults.bulletinLimit;
+                    annualPlan.name = annualDefaults.name;
+                    await annualPlan.save();
+                }
+            }
+        } catch (annualErr) {
+            console.error('⚠️ Erreur lors du seeding des formules annuelles:', annualErr);
         }
 
         // Auto-seeding de l'ENSEMBLE des offres de prêts bancaires régionales si moins de 15 offres sont en BD
@@ -386,7 +667,7 @@ sequelize.sync({ alter: true })
         console.error('❌ Erreur de synchronisation de la base de données:', err);
     });
 
-module.exports = { sequelize, Visit, PayrollRequest, User, AdminUser, CreditPack, BankLoan, Transaction };
+module.exports = { sequelize, Visit, PayrollRequest, User, AdminUser, CreditPack, SubscriptionPlan, BankLoan, Transaction, Invoice, License, PayrollPeriod, PayslipRecord };
 
 
 

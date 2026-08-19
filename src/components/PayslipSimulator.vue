@@ -1,10 +1,28 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { getCountryRules } from '../services/countryConfig.js'
 import { calculatePayslip } from '../services/calculators/index.js'
 import { user, fetchMe } from '../services/auth.js'
 
 const emit = defineEmits(['require-auth', 'require-billing'])
+
+// Formules d'abonnement (pour le pré-contrôle client du quota de bulletins)
+const subscriptionPlans = ref([])
+onMounted(async () => {
+  try {
+    const res = await fetch('/api/billing/plans')
+    if (res.ok) {
+      const data = await res.json()
+      subscriptionPlans.value = data.plans || []
+    }
+  } catch (e) {
+    console.warn('Erreur chargement des formules d\'abonnement:', e)
+  }
+})
+const currentBulletinLimit = computed(() => {
+  const plan = subscriptionPlans.value.find(p => p.code === user.value?.subscriptionTier)
+  return plan ? plan.bulletinLimit : 0
+})
 
 // Prop optionnel pour pré-sélectionner le type depuis le composant parent
 const props = defineProps({
@@ -107,6 +125,10 @@ const generating = ref(false)
 const generated = ref(false)
 const downloadUrl = ref(null)
 const errorMsg = ref(null)
+
+const isSimulatorMode = import.meta.env.VITE_APP_MODE === 'simulator'
+
+// Config : Activer ou désactiver certaines rubriques optionnelles
 const activeTab = ref('employe') // 'entreprise' | 'employe' | 'remuneration'
 
 const goToTab = (tabId) => {
@@ -209,12 +231,19 @@ function loadFromUrlData() {
 }
 
 const defaultTemplateHtml = ref(null)
+const availableEmployees = ref([])
 
 // Charger au montage
-import { onMounted } from 'vue'
 import { localDb } from '../services/localDatabase.js'
+import EmployeeSelect from './hr/EmployeeSelect.vue'
 
 onMounted(async () => {
+  if (user.value) {
+    emp.value.nom_entreprise = user.value.companyName || user.value.entreprise || ''
+    emp.value.numero_contribuable = user.value.companyNumeroContribuable || ''
+    emp.value.numero_cnps = user.value.companyNumeroCnps || ''
+  }
+  
   loadFromUrlData()
   try {
     const templates = await localDb.getTemplates()
@@ -225,7 +254,40 @@ onMounted(async () => {
   } catch (e) {
     console.warn("Erreur chargement template", e)
   }
+  
+  try {
+    if (window.isHRApp || user.value?.subscriptionTier) {
+      availableEmployees.value = await localDb.getEmployees()
+    }
+  } catch (e) {
+    console.warn("Erreur chargement employés", e)
+  }
 })
+
+const selectEmployeeCustom = (e) => {
+  if (!e) return
+  
+  emp.value.nom = e.nom || ''
+  emp.value.prenom = e.prenom || ''
+  emp.value.matricule = e.matricule || ''
+  emp.value.poste = e.poste || ''
+  emp.value.date_naissance = e.date_naissance || ''
+  emp.value.num_secu = e.num_secu || ''
+  emp.value.ville = e.ville || 'ABIDJAN'
+  emp.value.categorie = e.categorie || ''
+  emp.value.qualification = e.qualification || ''
+  emp.value.type_contrat = e.type_contrat || 'CDI'
+  emp.value.situation_matrimoniale = e.situation_matrimoniale || 'celibataire'
+  emp.value.nombre_enfants = e.nombre_enfants || 0
+  emp.value.statut_salarie = e.statut_salarie || 'local'
+  emp.value.date_embauche = e.date_embauche || ''
+  emp.value.salaire_base = e.salaire_base || 0
+  emp.value.sursalaire = e.sursalaire || 0
+  emp.value.prime_transport = e.prime_transport !== undefined ? e.prime_transport : 30000
+  emp.value.prime_logement = e.prime_logement || 0
+  emp.value.rib = e.rib || ''
+}
+
 
 const livePreviewHtml = computed(() => {
   if (!defaultTemplateHtml.value) return ''
@@ -555,13 +617,25 @@ const generatePDF = async () => {
 
   const token = localStorage.getItem('auth_token')
   if (!token) {
-    errorMsg.value = "Vous devez être connecté pour générer un bulletin de paie. (Coût : 5 crédits)"
+    errorMsg.value = "Vous devez être connecté pour générer un bulletin de paie."
     emit('require-auth')
     return
   }
 
-  if (user.value && user.value.credits < 5) {
-    errorMsg.value = `Crédits insuffisants. Il vous faut 5 crédits pour générer ce bulletin. Votre solde : ${user.value.credits} crédits.`
+  if (user.value && !user.value.subscriptionTier) {
+    errorMsg.value = "Vous n'avez pas d'abonnement actif. Choisissez une formule pour générer des bulletins."
+    emit('require-billing')
+    return
+  }
+
+  if (user.value && user.value.subscriptionExpiresAt && new Date(user.value.subscriptionExpiresAt) <= new Date()) {
+    errorMsg.value = "Votre abonnement a expiré. Renouvelez pour continuer."
+    emit('require-billing')
+    return
+  }
+
+  if (user.value && (currentBulletinLimit.value - (user.value.bulletinsUsed || 0)) < 1) {
+    errorMsg.value = `Quota mensuel atteint (${user.value.bulletinsUsed || 0}/${currentBulletinLimit.value} bulletins). Passez à un forfait supérieur.`
     emit('require-billing')
     return
   }
@@ -605,7 +679,7 @@ const generatePDF = async () => {
     downloadUrl.value = URL.createObjectURL(blob)
     generated.value = true
 
-    // Rafraîchir les crédits de l'utilisateur
+    // Rafraîchir le quota d'abonnement de l'utilisateur
     try {
       await fetchMe()
     } catch (fetchErr) {
@@ -770,6 +844,16 @@ const tabs = [
 
         <!-- ONGLET EMPLOYÉ -->
         <div v-show="activeTab === 'employe'" class="tab-content">
+          <div class="form-bloc" v-if="!isSimulatorMode && availableEmployees.length > 0">
+            <div class="bloc-title"><span class="bloc-num"></span> Pré-remplir depuis l'annuaire</div>
+            <div class="field-row">
+              <div class="field-group" style="width: 100%; position: relative;">
+                <label>Pré-remplir un employé (Version Pro)</label>
+                <EmployeeSelect :employees="availableEmployees" @select="selectEmployeeCustom" />
+              </div>
+            </div>
+          </div>
+
           <div class="form-bloc">
             <div class="bloc-title"><span class="bloc-num">1</span> Identité & Poste</div>
             <div class="field-row">
@@ -1040,7 +1124,7 @@ const tabs = [
               <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-dasharray="31 31"></circle>
             </svg>
             <svg v-else xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            {{ generating ? 'Génération...' : 'Générer PDF (5 crédits)' }}
+            {{ generating ? 'Génération...' : 'Générer PDF' }}
           </button>
 
           <div v-if="errorMsg" class="error-alert mt-4">
