@@ -79,7 +79,28 @@ function generateInvoiceHtml({ invoiceNumber, date, user, plan, amount, referenc
 
 async function renderPdf(html) {
     if (!puppeteer) throw new Error('puppeteer non installé');
-    const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    
+    // Tente de trouver un exécutable système sur Linux (VPS) pour éviter les erreurs de cache
+    const commonPaths = [
+        '/usr/bin/google-chrome',
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium'
+    ];
+    let executablePath;
+    for (const p of commonPaths) {
+        if (fs.existsSync(p)) {
+            executablePath = p;
+            break;
+        }
+    }
+
+    const browser = await puppeteer.launch({ 
+        headless: 'new', 
+        executablePath, // Sera undefined sur Windows/Mac local, ce qui utilisera le Chrome par défaut
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] 
+    });
+    
     try {
         const page = await browser.newPage();
         await page.setContent(html, { waitUntil: 'networkidle0' });
