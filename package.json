@@ -2,13 +2,15 @@
   "name": "financial-simulator",
   "private": true,
   "version": "0.0.0",
-  "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite -c vite.config.mjs",
     "server": "node server/server.js",
-    "build": "vite build",
-    "preview": "vite preview"
+    "build": "vite build -c vite.config.mjs",
+    "preview": "vite preview -c vite.config.mjs",
+    "build:exe": "node build-exe.cjs",
+    "build:desktop": "npm run build && electron-builder --win"
   },
+  "main": "electron-main.cjs",
   "dependencies": {
     "@tiptap/extension-color": "^2.11.7",
     "@tiptap/extension-font-family": "^2.11.7",
@@ -26,19 +28,69 @@
     "@tiptap/starter-kit": "^2.11.7",
     "@tiptap/vue-3": "^2.11.7",
     "apexcharts": "^5.10.6",
+    "archiver": "^5.3.2",
     "axios": "^1.13.6",
     "bcrypt": "^6.0.0",
     "cheerio": "^1.2.0",
+    "cors": "^2.8.5",
+    "docxtemplater": "^3.67.6",
+    "dotenv": "^17.4.2",
+    "express": "^4.18.2",
     "jsonwebtoken": "^9.0.3",
+    "lowdb": "^1.0.0",
+    "multer": "^1.4.5-lts.1",
     "nodemailer": "^6.9.14",
     "pdf-lib": "^1.17.1",
+    "pdfmake": "^0.2.20",
+    "pizzip": "^3.2.0",
+    "puppeteer": "^25.6.0",
+    "sequelize": "^6.37.5",
+    "socket.io": "^4.7.5",
     "socket.io-client": "^4.7.5",
+    "@vscode/sqlite3": "^5.1.2",
     "vue": "^3.5.24",
-    "vue3-apexcharts": "^1.11.1"
+    "vue3-apexcharts": "^1.11.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.1",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1",
+    "pkg": "^5.8.1",
     "vite": "^7.2.4",
     "vite-plugin-pwa": "^0.20.1"
+  },
+  "build": {
+    "appId": "com.onda.rh",
+    "productName": "ONDA RH",
+    "npmRebuild": false,
+    "icon": "public/logo.png",
+    "asarUnpack": [
+      "server/**/*",
+      "dist/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "directories": {
+      "output": "dist_electron"
+    },
+    "files": [
+      "dist/**/*",
+      "server/**/*",
+      "electron-main.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "server/financial_db.sqlite",
+        "to": "financial_db.sqlite"
+      }
+    ]
+  },
+  "pkg": {
+    "assets": [
+      "dist/**/*"
+    ]
   }
 }

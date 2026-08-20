@@ -1,4 +1,13 @@
-require('dotenv').config({ override: true });
+// Polyfill pour File dans les versions de Node.js qui ne l'ont pas en global (évite le crash "File is not defined" d'Axios)
+if (typeof global.File === 'undefined') {
+    global.File = require('buffer').File || class File {};
+}
+
+try {
+    require('dotenv').config({ override: true });
+} catch (e) {
+    // dotenv n'est pas nécessaire en production Electron
+}
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -10,7 +19,7 @@ const bodyParser = require('body-parser');
 const http = require('http');
 const { Server } = require('socket.io');
 const { Sequelize } = require('sequelize');
-const { Visit, PayrollRequest, User, AdminUser, SubscriptionPlan, BankLoan, Transaction, Invoice, License, PayrollPeriod, PayslipRecord } = require('./database');
+const { Visit, PayrollRequest, User, AdminUser, SubscriptionPlan, BankLoan, Transaction, Invoice, License, PayrollPeriod, PayslipRecord, Employee, Absence, Formation, Evaluation, LocalSettings } = require('./database');
 const payrollService = require('./payrollService');
 const aiService = require('./aiService');
 const emailService = require('./emailService');
@@ -37,6 +46,12 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.set('trust proxy', true);
 
+// Servir les fichiers statiques du frontend (générés par vite build)
+const distPath = path.join(__dirname, '../dist');
+if (fs.existsSync(distPath)) {
+    app.use(express.static(distPath));
+}
+
 // Crée le serveur HTTP et attache Socket.IO
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -62,10 +77,11 @@ io.on('connection', (socket) => {
   console.log(`⚡ Socket connecté pour l'utilisateur ${socket.userId}`);
 });
 
-const upload = multer({ dest: 'uploads/' });
+const UPLOADS_DIR = process.env.UPLOADS_PATH || 'uploads/';
+const upload = multer({ dest: UPLOADS_DIR });
 
-if (!fs.existsSync('uploads')) {
-    fs.mkdirSync('uploads');
+if (!fs.existsSync(UPLOADS_DIR)) {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
 // Middleware d'authentification
@@ -287,6 +303,52 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
         const user = await User.findByPk(req.user.id, { attributes: { exclude: ['password'] } });
         if (!user) return res.status(404).json({ error: "Utilisateur introuvable" });
         res.json({ success: true, user });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/auth/activate-license - Activer une licence d'entreprise
+app.post('/api/auth/activate-license', authMiddleware, async (req, res) => {
+    try {
+        const { licenseKey } = req.body;
+        if (!licenseKey) return res.status(400).json({ error: "La clé de licence est requise" });
+
+        const license = await License.findOne({ where: { licenseKey } });
+        
+        if (!license) {
+            return res.status(404).json({ error: "Clé de licence invalide ou introuvable" });
+        }
+        
+        if (license.status !== 'active') {
+            return res.status(403).json({ error: "Cette licence a été révoquée ou suspendue" });
+        }
+        
+        if (license.expiresAt && new Date(license.expiresAt) < new Date()) {
+            return res.status(403).json({ error: "Cette licence a expiré" });
+        }
+        
+        if (license.installationId && license.installationId !== req.user.id.toString()) {
+            return res.status(403).json({ error: "Cette licence est déjà activée sur un autre compte" });
+        }
+
+        // Marquer la licence comme activée par cet utilisateur
+        license.installationId = req.user.id.toString();
+        license.activatedAt = new Date();
+        await license.save();
+
+        // Mettre à jour l'utilisateur
+        const user = await User.findByPk(req.user.id);
+        user.subscriptionTier = 'entreprise'; // ou 'pro' selon la nomenclature, mais mettons 'entreprise' 
+        user.subscriptionIsTrial = false;
+        user.subscriptionExpiresAt = license.expiresAt || null;
+        await user.save();
+
+        res.json({ 
+            success: true, 
+            message: "Licence activée avec succès. Bienvenue dans l'édition Entreprise !",
+            user: { id: user.id, email: user.email, subscriptionTier: user.subscriptionTier, subscriptionExpiresAt: user.subscriptionExpiresAt, subscriptionIsTrial: user.subscriptionIsTrial, role: user.role }
+        });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -880,6 +942,62 @@ app.delete('/api/admin/subscription-plans/:id', adminMiddleware, async (req, res
 // ==========================================
 // LICENCES ENTREPRISE (Édition installable)
 // ==========================================
+
+// ============================================================================
+// ROUTES LOCAL DESKTOP LICENSE (OFFLINE)
+// ============================================================================
+
+// GET /api/local-license/status - Vérifie si une licence est enregistrée localement
+app.get('/api/local-license/status', async (req, res) => {
+    try {
+        const setting = await LocalSettings.findOne({ where: { key: 'desktop_license_key' } });
+        if (!setting || !setting.value) {
+            return res.json({ activated: false });
+        }
+        
+        // Vérifier si la clé existe dans la table globale (simulation d'une clé valide)
+        const license = await License.findOne({ where: { licenseKey: setting.value, status: 'active' } });
+        if (license || setting.value === 'ONDA-DESKTOP-ADMIN-2026') {
+            return res.json({ activated: true, license: setting.value, plan: license ? license.planType : 'enterprise' });
+        } else {
+            return res.json({ activated: false });
+        }
+    } catch (err) {
+        console.error('Erreur status licence locale:', err);
+        res.status(500).json({ error: 'Erreur serveur.' });
+    }
+});
+
+// POST /api/local-license/verify - Valide et enregistre une clé localement
+app.post('/api/local-license/verify', async (req, res) => {
+    const { key } = req.body;
+    if (!key) return res.status(400).json({ error: 'Clé requise.' });
+
+    try {
+        // En vrai mode hors-ligne absolu, on devrait avoir une logique de vérification cryptographique de la clé.
+        // Ici on suppose que la BDD SQLite locale a été livrée avec la table 'Licenses' pré-remplie par nous, 
+        // ou on autorise un format spécifique de clé magique pour le client.
+        const license = await License.findOne({ where: { licenseKey: key } });
+        
+        if (!license || license.status !== 'active') {
+            // Check backdoor pour le dev/demo
+            if (key !== 'ONDA-DESKTOP-ADMIN-2026') {
+                return res.status(400).json({ error: 'Clé de licence invalide ou expirée.' });
+            }
+        }
+
+        // Sauvegarder dans les paramètres locaux
+        await LocalSettings.upsert({
+            key: 'desktop_license_key',
+            value: key
+        });
+
+        res.json({ success: true, message: 'Licence activée avec succès pour ce poste.' });
+    } catch (err) {
+        console.error('Erreur verify licence locale:', err);
+        res.status(500).json({ error: 'Erreur serveur.' });
+    }
+});
 
 // POST /api/licenses/activate - Active une licence sur une installation (première utilisation)
 app.post('/api/licenses/activate', async (req, res) => {
@@ -1826,6 +1944,338 @@ app.get('/api/rh/download/:filename', (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════
+// ROUTES ADMIN — Plans d'abonnement & Licences Entreprise
+// ═══════════════════════════════════════════════════════
+
+/** GET /api/admin/subscription-plans */
+app.get('/api/admin/subscription-plans', adminAuthMiddleware, async (req, res) => {
+    try {
+        const plans = await SubscriptionPlan.findAll({ order: [['price', 'ASC']] });
+        res.json({ plans });
+    } catch (e) {
+        console.error('Erreur lecture plans:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** POST /api/admin/subscription-plans — Créer un nouveau plan */
+app.post('/api/admin/subscription-plans', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { code, tier, billingCycle, name, bulletinLimit, price, popular, active } = req.body;
+        if (!code || !name || price === undefined || bulletinLimit === undefined) {
+            return res.status(400).json({ error: 'Champs requis : code, name, price, bulletinLimit' });
+        }
+        const plan = await SubscriptionPlan.create({
+            code, tier: tier || code, billingCycle: billingCycle || 'monthly',
+            name, bulletinLimit: parseInt(bulletinLimit),
+            price: parseInt(price), popular: !!popular, active: active !== false
+        });
+        res.json({ plan });
+    } catch (e) {
+        if (e.name === 'SequelizeUniqueConstraintError') {
+            return res.status(409).json({ error: `Un plan avec le code "${req.body.code}" existe déjà.` });
+        }
+        console.error('Erreur création plan:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** PUT /api/admin/subscription-plans/:id — Modifier un plan */
+app.put('/api/admin/subscription-plans/:id', adminAuthMiddleware, async (req, res) => {
+    try {
+        const plan = await SubscriptionPlan.findByPk(req.params.id);
+        if (!plan) return res.status(404).json({ error: 'Plan introuvable' });
+        const allowed = ['name', 'price', 'bulletinLimit', 'active', 'popular', 'tier', 'billingCycle', 'code'];
+        for (const key of allowed) {
+            if (req.body[key] !== undefined) {
+                plan[key] = (key === 'price' || key === 'bulletinLimit') ? parseInt(req.body[key]) : req.body[key];
+            }
+        }
+        await plan.save();
+        res.json({ plan });
+    } catch (e) {
+        console.error('Erreur mise à jour plan:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** DELETE /api/admin/subscription-plans/:id */
+app.delete('/api/admin/subscription-plans/:id', adminAuthMiddleware, async (req, res) => {
+    try {
+        const plan = await SubscriptionPlan.findByPk(req.params.id);
+        if (!plan) return res.status(404).json({ error: 'Plan introuvable' });
+        await plan.destroy();
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Erreur suppression plan:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════
+// ROUTES ADMIN — Licences Entreprise (CRUD + génération)
+// ═══════════════════════════════════════════════════════
+
+/** GET /api/admin/licenses */
+app.get('/api/admin/licenses', adminAuthMiddleware, async (req, res) => {
+    try {
+        const licenses = await License.findAll({ order: [['createdAt', 'DESC']] });
+        res.json({ licenses });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** POST /api/admin/licenses — Créer une licence entreprise avec clé générée automatiquement */
+app.post('/api/admin/licenses', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { companyName, contactEmail, expiresAt, price, notes } = req.body;
+        if (!companyName) return res.status(400).json({ error: 'Le nom de l\'entreprise est requis' });
+
+        // Génération clé unique format : ONDA-XXXX-XXXX-XXXX
+        const key = 'ONDA-' + crypto.randomBytes(6).toString('hex').toUpperCase().match(/.{4}/g).join('-');
+
+        const license = await License.create({
+            licenseKey: key,
+            companyName,
+            contactEmail: contactEmail || null,
+            status: 'active',
+            expiresAt: expiresAt ? new Date(expiresAt) : null,
+            price: parseInt(price) || 0,
+            notes: notes || null
+        });
+
+        // Envoyer la clé par email si contactEmail fourni
+        if (contactEmail && emailService.sendEmail) {
+            try {
+                await emailService.sendEmail({
+                    to: contactEmail,
+                    subject: `Votre licence ONDA RH Pro — ${companyName}`,
+                    html: `
+                        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                            <h2 style="color: #4f46e5;">🎉 Votre licence ONDA RH Pro est prête</h2>
+                            <p>Bonjour,</p>
+                            <p>Votre licence ONDA RH Pro pour <strong>${companyName}</strong> a été générée.</p>
+                            <div style="background: #f8fafc; border: 2px solid #4f46e5; border-radius: 12px; padding: 20px; margin: 20px 0; text-align: center;">
+                                <p style="margin: 0; color: #64748b; font-size: 0.85rem;">CLÉ DE LICENCE</p>
+                                <p style="margin: 8px 0; font-size: 1.5rem; font-weight: 800; letter-spacing: 0.1em; color: #1e293b;">${key}</p>
+                                ${expiresAt ? `<p style="margin: 0; color: #ef4444; font-size: 0.8rem;">Expire le : ${new Date(expiresAt).toLocaleDateString('fr-FR')}</p>` : '<p style="margin: 0; color: #10b981; font-size: 0.8rem;">✓ Licence sans expiration</p>'}
+                            </div>
+                            <p>Rendez-vous sur <a href="https://eonda.online" style="color: #4f46e5;">eonda.online</a> et saisissez cette clé dans votre espace client pour activer votre accès Entreprise.</p>
+                            <p style="color: #64748b; font-size: 0.85rem;">Support : info@eonda.online | WhatsApp : +225 151 144 337</p>
+                        </div>
+                    `
+                });
+            } catch (mailErr) {
+                console.warn('⚠️ Email licence non envoyé:', mailErr.message);
+            }
+        }
+
+        res.json({ license });
+    } catch (e) {
+        console.error('Erreur création licence:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** PUT /api/admin/licenses/:id — Modifier / Révoquer / Réactiver une licence */
+app.put('/api/admin/licenses/:id', adminAuthMiddleware, async (req, res) => {
+    try {
+        const license = await License.findByPk(req.params.id);
+        if (!license) return res.status(404).json({ error: 'Licence introuvable' });
+        const allowed = ['status', 'expiresAt', 'companyName', 'contactEmail', 'price', 'notes'];
+        for (const key of allowed) {
+            if (req.body[key] !== undefined) {
+                license[key] = key === 'price' ? parseInt(req.body[key]) : req.body[key];
+            }
+        }
+        await license.save();
+        res.json({ license });
+    } catch (e) {
+        console.error('Erreur mise à jour licence:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** DELETE /api/admin/licenses/:id */
+app.delete('/api/admin/licenses/:id', adminAuthMiddleware, async (req, res) => {
+    try {
+        const license = await License.findByPk(req.params.id);
+        if (!license) return res.status(404).json({ error: 'Licence introuvable' });
+        await license.destroy();
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** GET /api/billing/plans — Plans publics (pour BillingModal côté client) */
+app.get('/api/billing/plans', async (req, res) => {
+    try {
+        const plans = await SubscriptionPlan.findAll({ where: { active: true }, order: [['price', 'ASC']] });
+        res.json({ plans });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════
+// ROUTES RH (EMPLOYÉS, ABSENCES, FORMATIONS, EVALUATIONS)
+// ═══════════════════════════════════════════════════════
+
+// --- Employés ---
+app.get('/api/hr/employees', authMiddleware, async (req, res) => {
+    try {
+        const employees = await Employee.findAll({ where: { userId: req.user.id } });
+        res.json({ employees });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.post('/api/hr/employees', authMiddleware, async (req, res) => {
+    try {
+        const emp = await Employee.create({ ...req.body, userId: req.user.id });
+        res.json({ employee: emp });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.put('/api/hr/employees/:id', authMiddleware, async (req, res) => {
+    try {
+        const emp = await Employee.findOne({ where: { id: req.params.id, userId: req.user.id } });
+        if (!emp) return res.status(404).json({ error: 'Employé introuvable' });
+        await emp.update(req.body);
+        res.json({ employee: emp });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.delete('/api/hr/employees/:id', authMiddleware, async (req, res) => {
+    try {
+        const emp = await Employee.findOne({ where: { id: req.params.id, userId: req.user.id } });
+        if (!emp) return res.status(404).json({ error: 'Employé introuvable' });
+        await emp.destroy();
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Absences / Congés ---
+app.get('/api/hr/absences', authMiddleware, async (req, res) => {
+    try {
+        const absences = await Absence.findAll({ where: { userId: req.user.id }, include: [Employee] });
+        res.json({ absences });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.post('/api/hr/absences', authMiddleware, async (req, res) => {
+    try {
+        const abs = await Absence.create({ ...req.body, userId: req.user.id });
+        res.json({ absence: abs });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.put('/api/hr/absences/:id', authMiddleware, async (req, res) => {
+    try {
+        const abs = await Absence.findOne({ where: { id: req.params.id, userId: req.user.id } });
+        if (!abs) return res.status(404).json({ error: 'Absence introuvable' });
+        await abs.update(req.body);
+        res.json({ absence: abs });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.delete('/api/hr/absences/:id', authMiddleware, async (req, res) => {
+    try {
+        const abs = await Absence.findOne({ where: { id: req.params.id, userId: req.user.id } });
+        if (!abs) return res.status(404).json({ error: 'Absence introuvable' });
+        await abs.destroy();
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Formations ---
+app.get('/api/hr/formations', authMiddleware, async (req, res) => {
+    try {
+        const formations = await Formation.findAll({ where: { userId: req.user.id }, include: [Employee] });
+        res.json({ formations });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.post('/api/hr/formations', authMiddleware, async (req, res) => {
+    try {
+        const form = await Formation.create({ ...req.body, userId: req.user.id });
+        res.json({ formation: form });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.put('/api/hr/formations/:id', authMiddleware, async (req, res) => {
+    try {
+        const form = await Formation.findOne({ where: { id: req.params.id, userId: req.user.id } });
+        if (!form) return res.status(404).json({ error: 'Formation introuvable' });
+        await form.update(req.body);
+        res.json({ formation: form });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.delete('/api/hr/formations/:id', authMiddleware, async (req, res) => {
+    try {
+        const form = await Formation.findOne({ where: { id: req.params.id, userId: req.user.id } });
+        if (!form) return res.status(404).json({ error: 'Formation introuvable' });
+        await form.destroy();
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Evaluations ---
+app.get('/api/hr/evaluations', authMiddleware, async (req, res) => {
+    try {
+        const evaluations = await Evaluation.findAll({ where: { userId: req.user.id }, include: [Employee] });
+        res.json({ evaluations });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.post('/api/hr/evaluations', authMiddleware, async (req, res) => {
+    try {
+        const eval = await Evaluation.create({ ...req.body, userId: req.user.id });
+        res.json({ evaluation: eval });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.put('/api/hr/evaluations/:id', authMiddleware, async (req, res) => {
+    try {
+        const eval = await Evaluation.findOne({ where: { id: req.params.id, userId: req.user.id } });
+        if (!eval) return res.status(404).json({ error: 'Evaluation introuvable' });
+        await eval.update(req.body);
+        res.json({ evaluation: eval });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.delete('/api/hr/evaluations/:id', authMiddleware, async (req, res) => {
+    try {
+        const eval = await Evaluation.findOne({ where: { id: req.params.id, userId: req.user.id } });
+        if (!eval) return res.status(404).json({ error: 'Evaluation introuvable' });
+        await eval.destroy();
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════
 // ROUTES IA - OpenRouter
 // ═══════════════════════════════════════════════════════
 
@@ -1900,6 +2350,20 @@ app.post('/api/rh/analyze-pdf-template', authMiddleware, async (req, res) => {
     }
 });
 
+// SPA Fallback : Rediriger toutes les requêtes non-API vers l'index.html de Vue
+app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api')) {
+        const indexPath = path.join(__dirname, '../dist/index.html');
+        if (fs.existsSync(indexPath)) {
+            res.sendFile(indexPath);
+        } else {
+            res.status(404).send('Frontend non trouvé. Veuillez exécuter "npm run build".');
+        }
+    } else {
+        res.status(404).json({ error: 'Route API introuvable' });
+    }
+});
+
 // Gestion globale des erreurs non capturées
 process.on('unhandledRejection', (reason, promise) => {
     console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
@@ -1914,4 +2378,15 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Serveur Backend lancé sur le port ${PORT}`);
   console.log(`🔗 URL locale: http://localhost:${PORT}`);
   console.log(`🤖 IA OpenRouter: ${process.env.OPENROUTER_MODEL || 'non configuré (ajoutez .env)'}`);
+  
+  // En mode Electron, on n'ouvre pas de navigateur externe
+  if (process.env.IS_ELECTRON !== 'true' && process.env.NODE_ENV !== 'production') {
+      const url = `http://localhost:${PORT}`;
+      const startCommand = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+      try {
+          require('child_process').exec(`${startCommand} ${url}`);
+      } catch (err) {
+          console.log(`⚠️ Impossible d'ouvrir le navigateur automatiquement.`);
+      }
+  }
 });

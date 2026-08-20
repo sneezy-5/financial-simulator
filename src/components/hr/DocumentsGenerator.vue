@@ -12,6 +12,8 @@ const props = defineProps({
 
 const countryInfo = computed(() => COUNTRIES_CONFIG[props.country] || COUNTRIES_CONFIG['CI'])
 
+const isElectron = /electron/i.test(navigator.userAgent)
+
 // ── Employés de l'annuaire local
 const employees = ref([])
 const selectedEmployeeId = ref('')
@@ -128,7 +130,11 @@ const fmt = (n) => {
 }
 
 // ── Liste des templates (Défaut + Personnalisés)
-const DEFAULT_TEMPLATES = []
+const DEFAULT_TEMPLATES = [
+  { id: 'stc', label: 'Solde de Tout Compte', color: '#f59e0b', content: '<div style="text-align: center; margin-bottom: 2rem;"><h2>SOLDE DE TOUT COMPTE</h2></div><p>Je soussigné(e) <strong>{{signataireNom}}</strong>, agissant en qualité de <strong>{{signatairePoste}}</strong> de l\'entreprise <strong>{{entreprise}}</strong>,</p><p>Reconnais par la présente remettre à <strong>{{nomComplet}}</strong>, employé(e) en tant que <strong>{{poste}}</strong> depuis le {{dateEntree}}, la somme de <strong>{{salaireAff}}</strong> au titre du règlement de son solde de tout compte.</p><p>Cette somme inclut :</p><ul><li>Le prorata du mois en cours</li><li>L\'indemnité compensatrice de congés payés</li><li>L\'indemnité de fin de contrat / licenciement</li></ul><p>Fait à {{lieu}}, le {{dateDoc}}.</p><br><br><p>Signature de l\'employeur :</p><br><br><br><p>Signature du salarié (Précédée de la mention "Pour solde de tout compte") :</p>' },
+  { id: 'contrat_cdi', label: 'Contrat CDI', color: '#10b981', content: '<div style="text-align: center; margin-bottom: 2rem;"><h2>CONTRAT DE TRAVAIL À DURÉE INDÉTERMINÉE (CDI)</h2></div><p>Entre <strong>{{entreprise}}</strong>, représentée par <strong>{{signataireNom}}</strong> en qualité de <strong>{{signatairePoste}}</strong>, d\'une part,</p><p>Et <strong>{{nomComplet}}</strong>, d\'autre part.</p><p><strong>Article 1 : Engagement</strong></p><p>L\'entreprise engage <strong>{{nomComplet}}</strong> en qualité de <strong>{{poste}}</strong> à compter du {{dateEntree}}.</p><p><strong>Article 2 : Rémunération</strong></p><p>En contrepartie de ses services, le salarié percevra une rémunération mensuelle brute de <strong>{{salaireAff}}</strong>.</p><p>Fait à {{lieu}}, le {{dateDoc}} en deux exemplaires originaux.</p>' },
+  { id: 'attestation', label: 'Attestation de travail', color: '#3b82f6', content: '<div style="text-align: center; margin-bottom: 2rem;"><h2>ATTESTATION DE TRAVAIL</h2></div><p>Je soussigné(e) <strong>{{signataireNom}}</strong>, <strong>{{signatairePoste}}</strong> de l\'entreprise <strong>{{entreprise}}</strong>,</p><p>Certifie par la présente que <strong>{{nomComplet}}</strong> est employé(e) au sein de notre structure depuis le {{dateEntree}} en qualité de <strong>{{poste}}</strong>.</p><p>Cette attestation est délivrée pour servir et valoir ce que de droit.</p><br><br><p>Fait à {{lieu}}, le {{dateDoc}}.</p><br><br><p>La Direction</p>' }
+]
 
 const customTemplates = ref(JSON.parse(localStorage.getItem('onda_custom_templates') || '[]'))
 const allTemplates = computed(() => [...DEFAULT_TEMPLATES, ...customTemplates.value])
@@ -491,7 +497,7 @@ const FIELD_LABELS = {
         <button class="add-model-btn" style="background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2);" @click="openModelEditor()">
           Créer un modèle vierge
         </button>
-        <button class="add-model-btn" @click="triggerTemplateUpload()" :disabled="aiMappingLoading" style="background: white; color: #7c3aed; border: none;">
+        <button v-if="!isElectron" class="add-model-btn" @click="triggerTemplateUpload()" :disabled="aiMappingLoading" style="background: white; color: #7c3aed; border: none;">
           <svg v-if="!aiMappingLoading" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           <span v-else class="loader-spinner" style="border-top-color: #7c3aed;"></span>
           {{ aiMappingLoading ? 'Analyse...' : 'Importer un modèle' }}

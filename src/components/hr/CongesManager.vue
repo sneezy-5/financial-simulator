@@ -6,7 +6,7 @@ import EmployeeSelect from './EmployeeSelect.vue'
 
 // ── Données
 const employees = ref([])
-const absences = ref(JSON.parse(localStorage.getItem('onda_conges') || '[]'))
+const absences = ref([])
 
 const TYPES_CONGES = [
   { id: 'annuel', label: 'Congé annuel', color: '#2563eb', jours_par_an: 26 },
@@ -17,10 +17,14 @@ const TYPES_CONGES = [
   { id: 'autre', label: 'Autre', color: '#8b5cf6', jours_par_an: null },
 ]
 
-const saveAbsences = () => localStorage.setItem('onda_conges', JSON.stringify(absences.value))
-
 onMounted(async () => {
-  try { employees.value = await localDb.getEmployees() } catch (e) { employees.value = [] }
+  try { 
+    employees.value = await localDb.getEmployees() 
+    absences.value = await localDb.getAbsences()
+  } catch (e) { 
+    employees.value = [] 
+    absences.value = []
+  }
 })
 
 // ── Formulaire ajout
@@ -46,12 +50,12 @@ const calcJours = (d1Str, d2Str) => {
 
 const joursForm = computed(() => calcJours(form.value.dateDebut, form.value.dateFin))
 
-const addAbsence = () => {
+const addAbsence = async () => {
   if (!form.value.employeeId) { showToast('Sélectionnez un employé', 'error'); return }
   if (!form.value.dateDebut || !form.value.dateFin) { showToast('Dates requises', 'error'); return }
   const emp = employees.value.find(e => e.id === form.value.employeeId)
+  
   const entry = {
-    id: Date.now(),
     employeeId: form.value.employeeId,
     employeNom: emp ? `${emp.prenom || ''} ${emp.nom || ''}`.trim() : 'Inconnu',
     type: form.value.type,
@@ -60,16 +64,17 @@ const addAbsence = () => {
     jours: joursForm.value,
     commentaire: form.value.commentaire,
   }
-  absences.value.unshift(entry)
-  saveAbsences()
+  
+  const saved = await localDb.saveAbsence(entry);
+  absences.value.unshift(saved)
   showToast(`Absence enregistrée : ${joursForm.value} jour(s)`, 'success')
   form.value = { employeeId: '', type: 'annuel', dateDebut: '', dateFin: '', commentaire: '' }
   showForm.value = false
 }
 
-const removeAbsence = (id) => {
+const removeAbsence = async (id) => {
+  await localDb.deleteAbsence(id)
   absences.value = absences.value.filter(a => a.id !== id)
-  saveAbsences()
   showToast('Absence supprimée', 'success')
 }
 

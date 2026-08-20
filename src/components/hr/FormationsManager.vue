@@ -5,16 +5,21 @@ import { showToast } from '../../services/toast.js'
 import EmployeeSelect from './EmployeeSelect.vue'
 
 const employees = ref([])
-const formations = ref(JSON.parse(localStorage.getItem('onda_formations') || '[]'))
+const formations = ref([])
 const competences = ref(JSON.parse(localStorage.getItem('onda_competences') || '[]'))
 
-const save = () => {
-  localStorage.setItem('onda_formations', JSON.stringify(formations.value))
+const saveComp = () => {
   localStorage.setItem('onda_competences', JSON.stringify(competences.value))
 }
 
 onMounted(async () => {
-  try { employees.value = await localDb.getEmployees() } catch (e) { employees.value = [] }
+  try { 
+    employees.value = await localDb.getEmployees() 
+    formations.value = await localDb.getFormations()
+  } catch (e) { 
+    employees.value = [] 
+    formations.value = []
+  }
 })
 
 // ── Formations
@@ -26,18 +31,21 @@ const formF = ref(emptyFormF())
 const TYPES_FORM = ['Interne', 'Externe', 'E-learning', 'Certification', 'Séminaire']
 const STATUTS = ['Planifiée', 'En cours', 'Terminée', 'Annulée']
 
-const addOrUpdateFormation = () => {
+const addOrUpdateFormation = async () => {
   if (!formF.value.nom) { showToast('Nom de la formation requis', 'error'); return }
-  const entry = { id: editFormId.value || Date.now(), ...formF.value }
+  const entry = { id: editFormId.value || undefined, ...formF.value }
+  
+  const saved = await localDb.saveFormation(entry);
+
   if (editFormId.value) {
     const idx = formations.value.findIndex(f => f.id === editFormId.value)
-    if (idx !== -1) formations.value[idx] = entry
+    if (idx !== -1) formations.value[idx] = saved
     showToast('Formation mise à jour', 'success')
   } else {
-    formations.value.unshift(entry)
+    formations.value.unshift(saved)
     showToast('Formation enregistrée', 'success')
   }
-  save()
+  
   formF.value = emptyFormF()
   editFormId.value = null
   showFormF.value = false
@@ -49,7 +57,11 @@ const editFormation = (f) => {
   showFormF.value = true
 }
 
-const removeFormation = (id) => { formations.value = formations.value.filter(f => f.id !== id); save(); showToast('Formation supprimée', 'success') }
+const removeFormation = async (id) => { 
+  await localDb.deleteFormation(id);
+  formations.value = formations.value.filter(f => f.id !== id); 
+  showToast('Formation supprimée', 'success') 
+}
 
 const toggleEmployee = (empId) => {
   const idx = formF.value.employeeIds.indexOf(empId)
@@ -90,13 +102,13 @@ const addOrUpdateComp = () => {
     competences.value.unshift(entry)
     showToast('Compétence enregistrée', 'success')
   }
-  save()
+  saveComp()
   formC.value = emptyFormC()
   editCompId.value = null
   showFormC.value = false
 }
 
-const removeComp = (id) => { competences.value = competences.value.filter(c => c.id !== id); save(); showToast('Compétence supprimée', 'success') }
+const removeComp = (id) => { competences.value = competences.value.filter(c => c.id !== id); saveComp(); showToast('Compétence supprimée', 'success') }
 
 const setNiveau = (compId, empId, niveau) => {
   const comp = competences.value.find(c => c.id === compId)
@@ -104,7 +116,7 @@ const setNiveau = (compId, empId, niveau) => {
   if (!comp.employeeIds) comp.employeeIds = {}
   if (niveau === 0) delete comp.employeeIds[empId]
   else comp.employeeIds[empId] = niveau
-  save()
+  saveComp()
 }
 
 const activeTab = ref('formations') // 'formations' | 'matrice' | 'alertes'

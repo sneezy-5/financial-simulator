@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api'
 const MAIN_APP_URL = import.meta.env.VITE_MAIN_APP_URL || 'https://eonda.online'
@@ -57,14 +57,43 @@ const features = [
 ]
 
 const deferredPrompt = ref(null)
+const plans = ref([])
+const plansLoading = ref(true)
 
-onMounted(() => {
+const priceFree = computed(() => {
+  const p = plans.value.find(x => x.code === 'free' || x.code === 'starter')
+  return p ? p.price.toLocaleString('fr-FR') : '0'
+})
+
+const pricePro = computed(() => {
+  const p = plans.value.find(x => x.code === 'pro')
+  return p ? p.price.toLocaleString('fr-FR') : '35 000'
+})
+
+const priceEnterprise = computed(() => {
+  const p = plans.value.find(x => x.code.toLowerCase() === 'entreprise' || x.code === 'enterprise')
+  return p ? p.price.toLocaleString('fr-FR') : '300 000'
+})
+
+onMounted(async () => {
+  // PWA Prompt
   window.addEventListener('beforeinstallprompt', (e) => {
-    // Empêcher l'affichage automatique du prompt
     e.preventDefault()
-    // Sauvegarder l'événement pour le déclencher plus tard
     deferredPrompt.value = e
   })
+
+  // Chargement des tarifs
+  try {
+    const res = await fetch(`${API_URL}/billing/plans`)
+    if (res.ok) {
+      const data = await res.json()
+      plans.value = data.plans || []
+    }
+  } catch (err) {
+    console.error('Erreur chargement des tarifs:', err)
+  } finally {
+    plansLoading.value = false
+  }
 })
 
 const handleInstallPWA = async () => {
@@ -122,7 +151,7 @@ const handleInstallPWA = async () => {
       </div>
       <div class="demo-gallery">
         <div class="demo-item">
-          <img src="/demo-bureau.jpg" alt="Bureau ONDA RH Pro" />
+          <img src="/dashboard.png" alt="Bureau ONDA RH Pro" />
           <div class="demo-caption">
             <h4>Le Bureau Central</h4>
             <p>Accédez instantanément à vos 13 modules RH via une interface visuelle claire et personnalisée.</p>
@@ -133,10 +162,10 @@ const handleInstallPWA = async () => {
             <h4>Analytique & Dashboards</h4>
             <p>Pilotez votre masse salariale et suivez l'absentéisme en temps réel avec des graphiques interactifs.</p>
           </div>
-          <img src="/demo-dashboard.jpg" alt="Dashboard RH Analytique" />
+          <img src="/demo-bureau.png" alt="Dashboard RH Analytique" />
         </div>
         <div class="demo-item">
-          <img src="/demo-documents.jpg" alt="Générateur de documents RH" />
+          <img src="/document.png" alt="Générateur de documents RH" />
           <div class="demo-caption">
             <h4>Générateur de Documents</h4>
             <p>Automatisez la création de vos contrats, attestations et lettres RH, pré-remplis avec les données de vos salariés.</p>
@@ -145,10 +174,99 @@ const handleInstallPWA = async () => {
       </div>
     </section>
 
-    <!-- Removed comparison, pricing, steps, download, faq, and purchase form for SaaS model -->
+    <!-- PRICING SECTION -->
+    <section class="ent-pricing-section">
+      <div class="pricing-header">
+        <h2>Commencez gratuitement, évoluez quand vous êtes prêt</h2>
+        <p>Pas de carte bancaire requise pour démarrer. Passez au Pro en quelques secondes.</p>
+      </div>
+
+      <div class="pricing-cards">
+        <!-- FREE -->
+        <div class="pricing-card pricing-free">
+          <div class="pricing-card-top">
+            <div class="pricing-plan-name">Gratuit</div>
+            <div class="pricing-amount">
+              <span class="pricing-price">{{ priceFree }}</span>
+              <span class="pricing-currency">FCFA / mois</span>
+            </div>
+            <p class="pricing-desc">Les outils essentiels pour simuler et comprendre la paie, sans engagement.</p>
+            <a :href="MAIN_APP_URL" class="pricing-cta pricing-cta-free">Commencer gratuitement →</a>
+          </div>
+          <ul class="pricing-features">
+            <li><span class="feat-icon feat-ok">✓</span> Simulateur de bulletin de paie</li>
+            <li><span class="feat-icon feat-ok">✓</span> Calcul de congés payés</li>
+            <li><span class="feat-icon feat-ok">✓</span> Solde de tout compte</li>
+            <li><span class="feat-icon feat-ok">✓</span> Paramètres & modèles PDF</li>
+            <li><span class="feat-icon feat-ok">✓</span> CI, Bénin, Togo</li>
+            <li class="feat-disabled"><span class="feat-icon feat-no">✗</span> Annuaire illimité</li>
+            <li class="feat-disabled"><span class="feat-icon feat-no">✗</span> Historique bulletins</li>
+            <li class="feat-disabled"><span class="feat-icon feat-no">✗</span> Import Excel en masse</li>
+            <li class="feat-disabled"><span class="feat-icon feat-no">✗</span> Alertes contrats CDD</li>
+            <li class="feat-disabled"><span class="feat-icon feat-no">✗</span> Générateur de documents</li>
+          </ul>
+        </div>
+
+        <!-- PRO -->
+        <div class="pricing-card pricing-pro">
+          <div class="pricing-popular-badge">⭐ Le plus populaire</div>
+          <div class="pricing-card-top">
+            <div class="pricing-plan-name">Pro (Cloud)</div>
+            <div class="pricing-amount">
+              <span class="pricing-price" v-if="!plansLoading">{{ pricePro }}</span>
+              <span class="pricing-price" v-else>...</span>
+              <span class="pricing-currency">FCFA / mois</span>
+            </div>
+            <p class="pricing-desc">La gestion RH complète pour les PME et cabinets comptables hébergée sur nos serveurs sécurisés.</p>
+            <a :href="MAIN_APP_URL" class="pricing-cta pricing-cta-pro">Démarrer l'essai gratuit →</a>
+          </div>
+          <ul class="pricing-features">
+            <li><span class="feat-icon feat-ok">✓</span> <strong>Tout le plan Gratuit</strong></li>
+            <li><span class="feat-icon feat-ok">✓</span> Annuaire employés illimité</li>
+            <li><span class="feat-icon feat-ok">✓</span> Historique complet des bulletins</li>
+            <li><span class="feat-icon feat-ok">✓</span> Import Excel → bulletins en masse</li>
+            <li><span class="feat-icon feat-ok">✓</span> Alertes contrats CDD (J-30, J-15, J-7)</li>
+            <li><span class="feat-icon feat-ok">✓</span> Rappels par e-mail automatiques</li>
+            <li><span class="feat-icon feat-ok">✓</span> Générateur de documents RH</li>
+            <li><span class="feat-icon feat-ok">✓</span> Dashboards & analytique masse salariale</li>
+            <li><span class="feat-icon feat-ok">✓</span> Gestion absences & congés (calendrier)</li>
+            <li><span class="feat-icon feat-ok">✓</span> Support prioritaire WhatsApp</li>
+          </ul>
+        </div>
+
+        <!-- ENTREPRISE (LICENCE) -->
+        <div class="pricing-card pricing-enterprise">
+          <div class="pricing-card-top">
+            <div class="pricing-plan-name">Entreprise (Licence)</div>
+            <div class="pricing-amount">
+              <span class="pricing-price" v-if="!plansLoading">{{ priceEnterprise }}</span>
+              <span class="pricing-price" v-else>...</span>
+              <span class="pricing-currency">FCFA / achat unique</span>
+            </div>
+            <p class="pricing-desc">Logiciel complet hors-ligne, installé une seule fois sur votre machine. Sans abonnement, ni frais cachés.</p>
+            <a :href="WHATSAPP_URL" target="_blank" class="pricing-cta pricing-cta-enterprise">Contacter les ventes →</a>
+          </div>
+          <ul class="pricing-features">
+            <li><span class="feat-icon feat-ok">✓</span> <strong>Fonctionnalités RH hors-ligne</strong></li>
+            <li><span class="feat-icon feat-ok">✓</span> Paiement unique (clé d'activation)</li>
+            <li><span class="feat-icon feat-ok">✓</span> Installation autonome via exécutable (.exe)</li>
+            <li><span class="feat-icon feat-ok">✓</span> Base de données locale (100% privé)</li>
+            <li><span class="feat-icon feat-warn">⚠</span> <em>Aucune mise à jour logicielle</em></li>
+            <li><span class="feat-icon feat-warn">⚠</span> <em>Aucune maintenance technique</em></li>
+            <li><span class="feat-icon feat-warn">⚠</span> <em>Pas d'accès aux futurs modules</em></li>
+            <li><span class="feat-icon feat-warn">⚠</span> <em>Pas d'accès à l'IA</em></li>
+          </ul>
+        </div>
+      </div>
+
+      <p class="pricing-mobile-money">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 6px; color: #10b981;"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg>
+        Paiement accepté via <strong>Mobile Money</strong> (Wave, Orange Money, MTN MoMo) et carte bancaire.
+      </p>
+    </section>
 
     <section class="ent-contact">
-      <h2>Une question avant d'acheter ?</h2>
+      <h2>Une question avant de vous lancer ?</h2>
       <div class="ent-contact-links">
         <a :href="WHATSAPP_URL" target="_blank" rel="noopener" class="ent-contact-link">
           <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.29-1.39a9.9 9.9 0 0 0 4.75 1.21h.01c5.46 0 9.91-4.45 9.91-9.91S17.5 2 12.04 2zm0 18.15h-.01a8.24 8.24 0 0 1-4.2-1.15l-.3-.18-3.13.82.84-3.05-.2-.31a8.23 8.23 0 0 1-1.26-4.37c0-4.55 3.7-8.25 8.26-8.25 2.21 0 4.28.86 5.84 2.42a8.2 8.2 0 0 1 2.42 5.84c0 4.55-3.71 8.23-8.26 8.23z"/></svg>
@@ -674,6 +792,231 @@ const handleInstallPWA = async () => {
 @media (max-width: 640px) {
   .ent-hero-title {
     font-size: 1.6rem;
+  }
+}
+
+/* ═══ PRICING SECTION ═══ */
+.ent-pricing-section {
+  padding: 6rem 2rem;
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  border-top: 1px solid #e2e8f0;
+}
+
+.pricing-header {
+  text-align: center;
+  max-width: 650px;
+  margin: 0 auto 4rem auto;
+}
+
+.pricing-badge {
+  display: inline-block;
+  background: #eef2ff;
+  color: #4f46e5;
+  border: 1px solid #c7d2fe;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 0.35rem 0.9rem;
+  border-radius: 99px;
+  margin-bottom: 1.25rem;
+  letter-spacing: 0.03em;
+}
+
+.pricing-header h2 {
+  font-size: 2.25rem;
+  font-weight: 900;
+  color: #0f172a;
+  margin: 0 0 1rem 0;
+  letter-spacing: -0.02em;
+}
+
+.pricing-header p {
+  color: #64748b;
+  font-size: 1.05rem;
+}
+
+.pricing-cards {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 2rem;
+  align-items: start;
+}
+
+.pricing-card {
+  background: #ffffff;
+  border-radius: 1.5rem;
+  border: 1px solid #e2e8f0;
+  overflow: hidden;
+  position: relative;
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.03);
+}
+
+.pricing-pro {
+  border: 2px solid #4f46e5;
+  box-shadow: 0 20px 40px -10px rgba(79, 70, 229, 0.2);
+  transform: scale(1.02);
+}
+
+.pricing-enterprise {
+  border: 2px solid #0f172a;
+}
+
+.pricing-popular-badge {
+  background: linear-gradient(135deg, #4f46e5 0%, #ec4899 100%);
+  color: white;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 0.5rem;
+  letter-spacing: 0.02em;
+}
+
+.pricing-card-top {
+  padding: 2rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.pricing-plan-name {
+  font-size: 1rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #64748b;
+  margin-bottom: 1rem;
+}
+
+.pricing-pro .pricing-plan-name {
+  color: #4f46e5;
+}
+
+.pricing-amount {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.pricing-price {
+  font-size: 2.75rem;
+  font-weight: 900;
+  color: #0f172a;
+  letter-spacing: -0.03em;
+}
+
+.pricing-currency {
+  font-size: 0.9rem;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.pricing-desc {
+  color: #64748b;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0 0 1.5rem 0;
+}
+
+.pricing-cta {
+  display: block;
+  text-align: center;
+  padding: 0.85rem 1.5rem;
+  border-radius: 99px;
+  font-weight: 700;
+  font-size: 0.95rem;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+
+.pricing-cta-free {
+  background: #f1f5f9;
+  color: #0f172a;
+  border: 1px solid #e2e8f0;
+}
+
+.pricing-cta-free:hover {
+  background: #e2e8f0;
+}
+
+.pricing-cta-enterprise {
+  background: #0f172a;
+  color: #ffffff;
+  border: 1px solid #0f172a;
+}
+
+.pricing-cta-enterprise:hover {
+  background: #1e293b;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.2);
+}
+
+.pricing-cta-pro {
+  background: linear-gradient(135deg, #4f46e5 0%, #ec4899 100%);
+  color: white;
+  box-shadow: 0 8px 20px -5px rgba(79, 70, 229, 0.4);
+}
+
+.pricing-cta-pro:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 25px -5px rgba(79, 70, 229, 0.5);
+}
+
+.pricing-features {
+  list-style: none;
+  padding: 1.75rem 2rem;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.pricing-features li {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.9rem;
+  color: #334155;
+}
+
+.feat-disabled {
+  color: #94a3b8 !important;
+}
+
+.feat-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.feat-ok {
+  background: #d1fae5;
+  color: #059669;
+}
+
+.feat-no {
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+
+.pricing-mobile-money {
+  text-align: center;
+  color: #64748b;
+  font-size: 0.9rem;
+  margin-top: 2.5rem;
+}
+
+@media (max-width: 720px) {
+  .pricing-cards {
+    grid-template-columns: 1fr;
+  }
+  .pricing-pro {
+    transform: none;
   }
 }
 </style>

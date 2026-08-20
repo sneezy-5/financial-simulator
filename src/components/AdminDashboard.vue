@@ -2491,6 +2491,9 @@ tr:last-child td {
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
   overflow: hidden;
   border: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
 }
 
 .modal-header {
@@ -2500,6 +2503,7 @@ tr:last-child td {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
 }
 
 .modal-header h3 {
@@ -2535,6 +2539,8 @@ tr:last-child td {
   display: flex;
   flex-direction: column;
   gap: 1.1rem;
+  overflow-y: auto;
+  flex: 1;
 }
 
 .modal-actions {

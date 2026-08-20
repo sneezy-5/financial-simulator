@@ -39,7 +39,8 @@ const selectCountry = (code) => {
 const scheduleSettings = ref({
   autoGenerate: false,
   generationDay: 25,
-  defaultTemplateId: null
+  defaultTemplateId: null,
+  emailRemindersContracts: false
 })
 
 // Profil entreprise (numéros CNPS/contribuable employeur) — persistant côté serveur,
@@ -82,9 +83,11 @@ const loadData = async () => {
     templates.value = await localDb.getTemplates()
     const autoGen = await localDb.getSetting('autoGenerate', false)
     const genDay = await localDb.getSetting('generationDay', 25)
+    const emailReminders = await localDb.getSetting('emailRemindersContracts', false)
     scheduleSettings.value = {
       autoGenerate: autoGen,
-      generationDay: genDay
+      generationDay: genDay,
+      emailRemindersContracts: emailReminders
     }
   } catch (e) {
     console.error(e)
@@ -212,6 +215,7 @@ const saveScheduleSettings = async () => {
   try {
     await localDb.saveSetting('autoGenerate', scheduleSettings.value.autoGenerate)
     await localDb.saveSetting('generationDay', scheduleSettings.value.generationDay)
+    await localDb.saveSetting('emailRemindersContracts', scheduleSettings.value.emailRemindersContracts)
     showToast("Paramètres de planification sauvegardés avec succès !", 'success')
   } catch (e) {
     showToast("Erreur lors de la sauvegarde", 'error')
@@ -348,10 +352,22 @@ const saveScheduleSettings = async () => {
         <label style="display: block; font-weight: 600; color: #475569; margin-bottom: 8px;">Jour de génération (chaque mois)</label>
         <div style="display: flex; align-items: center; gap: 12px;">
           Le 
-          <input type="number" min="1" max="31" v-model="scheduleSettings.generationDay" style="width: 80px; padding: 10px; border-radius: 8px; border: 1px solid #e2e8f0; background: #ffffff; color: #0f172a; text-align: center; font-weight: bold; outline: none;" />
-          du mois.
+          <input type="number" v-model="scheduleSettings.generationDay" min="1" max="31" style="width: 70px; padding: 10px; border-radius: 8px; border: 1px solid #cbd5e1; outline: none; font-weight: bold; color: #0f172a;" />
+          du mois
         </div>
       </div>
+      
+      <div style="margin-bottom: 32px; padding-top: 16px; border-top: 1px solid #e2e8f0;">
+        <h4 style="margin: 0 0 16px 0; color: #0f172a;">Rappels & Expiration</h4>
+        <label style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+          <input type="checkbox" v-model="scheduleSettings.emailRemindersContracts" style="width: 20px; height: 20px; accent-color: #3b82f6;" />
+          <span style="font-weight: 600; color: #0f172a;">M'envoyer des rappels par e-mail</span>
+        </label>
+        <p style="margin-top: 8px; margin-left: 32px; color: #64748b; font-size: 0.9rem; line-height: 1.5;">
+          ONDA RH Pro vous alertera directement par e-mail en cas de contrats CDD ou périodes d'essai arrivant à échéance (J-30, J-15 et J-7) pour ne manquer aucune date critique.
+        </p>
+      </div>
+
 
       <button @click="saveScheduleSettings" style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 700; width: 100%; box-shadow: 0 4px 12px rgba(59,130,246,0.25);">
         Sauvegarder la planification

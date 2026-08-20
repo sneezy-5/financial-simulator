@@ -5,11 +5,16 @@ import { showToast } from '../../services/toast.js'
 import EmployeeSelect from './EmployeeSelect.vue'
 
 const employees = ref([])
-const evaluations = ref(JSON.parse(localStorage.getItem('onda_evaluations') || '[]'))
-const saveEvals = () => localStorage.setItem('onda_evaluations', JSON.stringify(evaluations.value))
+const evaluations = ref([])
 
 onMounted(async () => {
-  try { employees.value = await localDb.getEmployees() } catch (e) { employees.value = [] }
+  try { 
+    employees.value = await localDb.getEmployees() 
+    evaluations.value = await localDb.getEvaluations()
+  } catch (e) { 
+    employees.value = [] 
+    evaluations.value = []
+  }
 })
 
 const CRITERES = [
@@ -47,12 +52,13 @@ const noteLabel = (n) => {
   return 'Insuffisant'
 }
 
-const addOrUpdateEval = () => {
+const addOrUpdateEval = async () => {
   if (!form.value.employeeId) { showToast("Sélectionnez un employé", 'error'); return }
   if (!form.value.periode) { showToast("Indiquez la période d'évaluation", 'error'); return }
   const emp = employees.value.find(e => e.id === form.value.employeeId)
+  
   const entry = {
-    id: editId.value || Date.now(),
+    id: editId.value || undefined,
     employeeId: form.value.employeeId,
     empNom: emp ? `${emp.prenom || ''} ${emp.nom || ''}`.trim() : 'Inconnu',
     empPoste: emp?.poste || '',
@@ -63,15 +69,18 @@ const addOrUpdateEval = () => {
     recommandation: form.value.recommandation,
     date: new Date().toLocaleDateString('fr-FR'),
   }
+
+  const saved = await localDb.saveEvaluation(entry)
+
   if (editId.value) {
     const idx = evaluations.value.findIndex(e => e.id === editId.value)
-    if (idx !== -1) evaluations.value[idx] = entry
+    if (idx !== -1) evaluations.value[idx] = saved
     showToast('Évaluation mise à jour', 'success')
   } else {
-    evaluations.value.unshift(entry)
+    evaluations.value.unshift(saved)
     showToast('Évaluation enregistrée', 'success')
   }
-  saveEvals()
+  
   form.value = emptyForm()
   editId.value = null
   showForm.value = false
@@ -83,9 +92,9 @@ const editEval = (ev) => {
   showForm.value = true
 }
 
-const removeEval = (id) => {
+const removeEval = async (id) => {
+  await localDb.deleteEvaluation(id)
   evaluations.value = evaluations.value.filter(e => e.id !== id)
-  saveEvals()
   showToast('Évaluation supprimée', 'success')
 }
 

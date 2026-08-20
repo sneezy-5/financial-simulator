@@ -9,11 +9,25 @@ import TaxOutilsFinanciers from './components/tax/TaxOutilsFinanciers.vue'
 import AuthModal from './components/AuthModal.vue'
 import BillingModal from './components/BillingModal.vue'
 import ProfileModal from './components/ProfileModal.vue'
+import DesktopLicenseActivation from './components/DesktopLicenseActivation.vue'
 import { user, fetchMe, logout } from './services/auth'
 import { localDb } from './services/localDatabase.js'
 import { toastState, showToast } from './services/toast.js'
 import { confirmState, resolveConfirm } from './services/confirmModal.js'
 import { lastPaymentNotification } from './services/socketService.js'
+
+// ══════════════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════════════
+
+const isDesktop = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron');
+const isLicenseValid = ref(false);
+const showLicenseScreen = computed(() => isDesktop && !isLicenseValid.value);
+
+const handleLicenseUnlocked = (key) => {
+  isLicenseValid.value = true;
+  naviguer('hr');
+};
 
 // ══════════════════════════════════════════════════════════════
 // STATE
@@ -91,9 +105,26 @@ const checkSchedule = async () => {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  if (isDesktop) {
+    try {
+      const res = await fetch('/api/local-license/status');
+      const data = await res.json();
+      if (data.activated) {
+        isLicenseValid.value = true;
+        naviguer('hr');
+      }
+    } catch (e) {
+      console.error('Erreur vérification licence locale', e);
+    }
+  }
+
   loadBanques()
-  fetchMe() // Chargement du profil utilisateur si connecté
+  fetchMe().finally(() => {
+    if (showHR.value && !isElectron && !user.value) {
+      showAuthModal.value = true
+    }
+  }) // Chargement du profil utilisateur si connecté
   setTimeout(checkSchedule, 2000) // Delay the alert slightly after page load
 })
 watch(currentCountry, (newC) => {
@@ -582,6 +613,9 @@ function naviguer(module, skipReload = false) {
   currentModule.value = module
   if (module === 'hr') { 
     showHR.value = true
+    if (!isElectron && !user.value) {
+      showAuthModal.value = true
+    }
   } else { 
     showHR.value = false 
   }
@@ -846,8 +880,10 @@ const toggleNotifMenu = () => {
 </script>
 
 <template>
-  <div class="app-container">
-    
+  <div v-if="showLicenseScreen">
+    <DesktopLicenseActivation @unlocked="handleLicenseUnlocked" />
+  </div>
+  <div v-else class="app-container">
     <!-- Admin Dashboard Overlay -->
     <div v-if="showAdmin" style="position: fixed; inset: 0; background: #f1f5f9; z-index: 10000; overflow-y: auto;">
       <button @click="showAdmin = false" class="admin-close-btn" title="Fermer la console d'administration">
@@ -908,7 +944,7 @@ const toggleNotifMenu = () => {
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
               <span>Bureau</span>
             </button>
-            <button v-else-if="!isHRApp" @click="naviguer('home')" class="hr-back-button" title="Retour au simulateur">
+            <button v-else-if="!isHRApp && !isElectron" @click="user && (user.subscriptionTier === 'pro' || user.subscriptionTier === 'enterprise') ? window.location.href='https://eonda.online' : naviguer('home')" class="hr-back-button" title="Retour à l'accueil">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
               <span>Accueil</span>
             </button>
@@ -987,7 +1023,7 @@ const toggleNotifMenu = () => {
                    Quitter
                  </button>
                </div>
-               <div v-else>
+               <div v-else-if="!isElectron">
                  <button @click="showAuthModal = true" style="background: #10b981; color: white; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.5rem 0.85rem; border-radius: 0.5rem; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
                    <svg style="width: 14px; height: 14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"></path></svg>
                    Connexion / Inscription

@@ -85,6 +85,7 @@
             Paiement sécurisé · Mobile Money, Wave, Carte bancaire (FCFA)
           </p>
         </div>
+
       </div>
     </div>
   </div>
@@ -271,6 +272,9 @@ const handlePurchase = async () => {
   box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
   width: 100%;
   max-width: 600px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   border: 1px solid #e2e8f0;
   animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
@@ -285,6 +289,7 @@ const handlePurchase = async () => {
   align-items: center;
   justify-content: space-between;
   color: #0f172a;
+  flex-shrink: 0;
 }
 
 .billing-header-title {
@@ -325,6 +330,7 @@ const handlePurchase = async () => {
   justify-content: center;
   font-size: 1rem;
   transition: all 0.2s;
+  flex-shrink: 0;
 }
 
 .billing-close-btn:hover {
@@ -334,6 +340,7 @@ const handlePurchase = async () => {
 
 .billing-modal-body {
   padding: 1.5rem 1.25rem;
+  overflow-y: auto;
 }
 
 .balance-banner {

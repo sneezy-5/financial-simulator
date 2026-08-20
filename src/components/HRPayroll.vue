@@ -65,7 +65,8 @@ const emit = defineEmits([
 
 const countryRules = computed(() => getCountryRules(props.country))
 
-const isPro = computed(() => !!user.value)
+const isElectron = /electron/i.test(navigator.userAgent);
+const isPro = computed(() => !!user.value || isElectron)
 const enterpriseUrl = import.meta.env.VITE_ENTERPRISE_URL || 'http://localhost:5174/'
 // Vente de licences entreprise mise en pause pour le moment (réactivable en repassant à true)
 const ENTERPRISE_SALES_ENABLED = false
@@ -1207,10 +1208,10 @@ const modules = computed(() => {
     subtitle: 'Configuration RH',
     description: `Configurez vos modèles PDF personnalisés, le mapping et la planification automatique de paie.`,
     icon: `<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>`,
-    isPro: true,
+    isPro: false,
     color: '#64748b',
     gradient: 'linear-gradient(135deg, #334155 0%, #64748b 100%)',
-    badge: 'Pro',
+    badge: 'Gratuit',
     steps: ['Modèles PDF', 'Planification']
   },
   {

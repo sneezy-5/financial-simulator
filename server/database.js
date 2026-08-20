@@ -16,6 +16,7 @@ if (process.env.DATABASE_URL) {
 } else {
     sequelize = new Sequelize({
         dialect: 'sqlite',
+        dialectModule: require('@vscode/sqlite3'),
         storage: process.env.DB_PATH || path.join(__dirname, 'financial_db.sqlite'),
         logging: false
     });
@@ -211,6 +212,80 @@ const PayslipRecord = sequelize.define('PayslipRecord', {
     joursTravailles: { type: DataTypes.FLOAT, defaultValue: 0 },
     absencesJours: { type: DataTypes.FLOAT, defaultValue: 0 }
 });
+
+// Modèles RH (Multi-tenant via userId)
+const Employee = sequelize.define('Employee', {
+    prenom: { type: DataTypes.STRING, allowNull: false },
+    nom: { type: DataTypes.STRING, allowNull: false },
+    matricule: { type: DataTypes.STRING, allowNull: true },
+    numeroCnps: { type: DataTypes.STRING, allowNull: true },
+    poste: { type: DataTypes.STRING, allowNull: true },
+    departement: { type: DataTypes.STRING, allowNull: true },
+    dateEmbauche: { type: DataTypes.DATE, allowNull: true },
+    dateNaissance: { type: DataTypes.DATE, allowNull: true },
+    salaireBase: { type: DataTypes.FLOAT, defaultValue: 0 },
+    situationMatrimoniale: { type: DataTypes.STRING, allowNull: true },
+    nombreEnfants: { type: DataTypes.INTEGER, defaultValue: 0 },
+    genre: { type: DataTypes.STRING, allowNull: true },
+    email: { type: DataTypes.STRING, allowNull: true },
+    telephone: { type: DataTypes.STRING, allowNull: true }
+});
+
+const Absence = sequelize.define('Absence', {
+    type: { type: DataTypes.STRING, allowNull: false }, // 'annuel', 'maladie', etc.
+    dateDebut: { type: DataTypes.DATE, allowNull: false },
+    dateFin: { type: DataTypes.DATE, allowNull: false },
+    jours: { type: DataTypes.FLOAT, allowNull: false },
+    commentaire: { type: DataTypes.STRING, allowNull: true },
+    status: { type: DataTypes.STRING, defaultValue: 'valide' } // 'en_attente', 'valide', 'refuse'
+});
+
+const Formation = sequelize.define('Formation', {
+    titre: { type: DataTypes.STRING, allowNull: false },
+    organisme: { type: DataTypes.STRING, allowNull: true },
+    dateFormation: { type: DataTypes.DATE, allowNull: true },
+    cout: { type: DataTypes.FLOAT, defaultValue: 0 },
+    status: { type: DataTypes.STRING, defaultValue: 'planifie' } // 'planifie', 'termine'
+});
+
+const Evaluation = sequelize.define('Evaluation', {
+    dateEvaluation: { type: DataTypes.DATE, allowNull: false },
+    evaluateur: { type: DataTypes.STRING, allowNull: true },
+    note: { type: DataTypes.FLOAT, allowNull: true }, // sur 5 ou 10
+    objectifsAtteints: { type: DataTypes.BOOLEAN, defaultValue: false },
+    commentaire: { type: DataTypes.TEXT, allowNull: true }
+});
+
+// Paramètres Locaux (pour la licence Desktop)
+const LocalSettings = sequelize.define('LocalSettings', {
+    key: {
+        type: DataTypes.STRING,
+        primaryKey: true
+    },
+    value: {
+        type: DataTypes.TEXT,
+        allowNull: false
+    }
+});
+
+// Associations RH
+User.hasMany(Employee, { foreignKey: 'userId', onDelete: 'CASCADE' });
+Employee.belongsTo(User, { foreignKey: 'userId' });
+
+Employee.hasMany(Absence, { foreignKey: 'employeeId', onDelete: 'CASCADE' });
+Absence.belongsTo(Employee, { foreignKey: 'employeeId' });
+User.hasMany(Absence, { foreignKey: 'userId', onDelete: 'CASCADE' });
+Absence.belongsTo(User, { foreignKey: 'userId' });
+
+Employee.hasMany(Formation, { foreignKey: 'employeeId', onDelete: 'CASCADE' });
+Formation.belongsTo(Employee, { foreignKey: 'employeeId' });
+User.hasMany(Formation, { foreignKey: 'userId', onDelete: 'CASCADE' });
+Formation.belongsTo(User, { foreignKey: 'userId' });
+
+Employee.hasMany(Evaluation, { foreignKey: 'employeeId', onDelete: 'CASCADE' });
+Evaluation.belongsTo(Employee, { foreignKey: 'employeeId' });
+User.hasMany(Evaluation, { foreignKey: 'userId', onDelete: 'CASCADE' });
+Evaluation.belongsTo(User, { foreignKey: 'userId' });
 
 User.hasMany(PayrollPeriod, { foreignKey: 'userId', onDelete: 'CASCADE' });
 PayrollPeriod.belongsTo(User, { foreignKey: 'userId' });
@@ -414,6 +489,8 @@ const SubscriptionPlan = sequelize.define('SubscriptionPlan', {
     }
 });
 
+SubscriptionPlan.hasMany(User, { foreignKey: 'plan_id', onDelete: 'CASCADE' });
+
 // Modèle PRÊT BANCAIRE (Offres bancaires configurables par l'Admin pour la simulation)
 const BankLoan = sequelize.define('BankLoan', {
     bankName: {
@@ -524,15 +601,57 @@ const isSqlite = sequelize.getDialect() === 'sqlite';
             console.error('⚠️ Erreur lors du seeding CreditPack:', packErr);
         }
 
-        // Auto-seeding des formules d'abonnement (Starter / Pro) si aucune n'existe
+        // ──────────────────────────────────────────────────────────────────
+        // Seed des formules d'abonnement : Gratuit & Pro
+        // La licence Entreprise (sans limite & expirable) est gérée via la
+        // table License — elle est créée manuellement depuis le panneau Admin.
+        // ──────────────────────────────────────────────────────────────────
         try {
             const planCount = await SubscriptionPlan.count();
             if (planCount === 0) {
                 await SubscriptionPlan.bulkCreate([
-                    { code: 'starter', tier: 'starter', billingCycle: 'monthly', name: 'Starter', bulletinLimit: 10, price: 5000, popular: false, active: true },
-                    { code: 'pro', tier: 'pro', billingCycle: 'monthly', name: 'Pro', bulletinLimit: 30, price: 10000, popular: true, active: true }
+                    {
+                        code: 'free',
+                        tier: 'free',
+                        billingCycle: 'monthly',
+                        name: 'Gratuit',
+                        bulletinLimit: 5,   // 5 bulletins/mois pour tester
+                        price: 0,
+                        popular: false,
+                        active: true
+                    },
+                    {
+                        code: 'pro',
+                        tier: 'pro',
+                        billingCycle: 'monthly',
+                        name: 'Pro',
+                        bulletinLimit: 99999, // illimité en pratique
+                        price: 35000,
+                        popular: true,
+                        active: true
+                    }
                 ]);
-                console.log('📋 Formules d\'abonnement initiales (Starter / Pro) créées avec succès.');
+                console.log('📋 Formules d\'abonnement initiales (Gratuit / Pro) créées avec succès.');
+            } else {
+                // Mise à jour du plan Pro si le prix est encore à l'ancien tarif
+                const proPlan = await SubscriptionPlan.findOne({ where: { code: 'pro' } });
+                if (proPlan && proPlan.price !== 35000) {
+                    proPlan.price = 35000;
+                    proPlan.bulletinLimit = 99999;
+                    proPlan.name = 'Pro';
+                    await proPlan.save();
+                    console.log('📋 Formule Pro mise à jour : 35 000 FCFA / mois, bulletins illimités.');
+                }
+                // S'assurer que le plan Gratuit existe
+                const freePlan = await SubscriptionPlan.findOne({ where: { code: 'free' } });
+                if (!freePlan) {
+                    await SubscriptionPlan.create({
+                        code: 'free', tier: 'free', billingCycle: 'monthly',
+                        name: 'Gratuit', bulletinLimit: 5, price: 0,
+                        popular: false, active: true
+                    });
+                    console.log('📋 Formule Gratuit créée (manquante).');
+                }
             }
         } catch (planErr) {
             console.error('⚠️ Erreur lors du seeding SubscriptionPlan:', planErr);
@@ -550,37 +669,9 @@ const isSqlite = sequelize.getDialect() === 'sqlite';
             console.error('⚠️ Erreur lors du rattrapage tier SubscriptionPlan:', tierErr);
         }
 
-        // Auto-seeding des formules annuelles (10 mois payés sur 12), dérivées dynamiquement
-        // des formules mensuelles actives (prix/quota annuel = 10x le mensuel courant), pour
-        // rester cohérent même si les tarifs mensuels sont modifiés depuis l'admin
-        try {
-            const monthlyPlans = await SubscriptionPlan.findAll({ where: { billingCycle: 'monthly', active: true } });
-            for (const monthly of monthlyPlans) {
-                const annualCode = `${monthly.code}_annual`;
-                const annualDefaults = {
-                    code: annualCode,
-                    tier: monthly.tier || monthly.code,
-                    billingCycle: 'annual',
-                    name: `${monthly.name} Annuel`,
-                    bulletinLimit: monthly.bulletinLimit,
-                    price: monthly.price * 10,
-                    popular: monthly.popular,
-                    active: true
-                };
-                const [annualPlan, created] = await SubscriptionPlan.findOrCreate({
-                    where: { code: annualCode },
-                    defaults: annualDefaults
-                });
-                if (!created && (annualPlan.price !== annualDefaults.price || annualPlan.bulletinLimit !== annualDefaults.bulletinLimit || annualPlan.name !== annualDefaults.name)) {
-                    annualPlan.price = annualDefaults.price;
-                    annualPlan.bulletinLimit = annualDefaults.bulletinLimit;
-                    annualPlan.name = annualDefaults.name;
-                    await annualPlan.save();
-                }
-            }
-        } catch (annualErr) {
-            console.error('⚠️ Erreur lors du seeding des formules annuelles:', annualErr);
-        }
+        // Note : les licences Entreprise (durée et prix libres, bulletins illimités)
+        // sont créées manuellement depuis le panneau Admin → Licences Entreprise.
+        // Aucun plan annuel automatique n'est généré.
 
         // Auto-seeding de l'ENSEMBLE des offres de prêts bancaires régionales si moins de 15 offres sont en BD
         try {
@@ -667,7 +758,7 @@ const isSqlite = sequelize.getDialect() === 'sqlite';
         console.error('❌ Erreur de synchronisation de la base de données:', err);
     });
 
-module.exports = { sequelize, Visit, PayrollRequest, User, AdminUser, CreditPack, SubscriptionPlan, BankLoan, Transaction, Invoice, License, PayrollPeriod, PayslipRecord };
+module.exports = { sequelize, Visit, PayrollRequest, User, AdminUser, CreditPack, SubscriptionPlan, BankLoan, Transaction, Invoice, License, PayrollPeriod, PayslipRecord, Employee, Absence, Formation, Evaluation, LocalSettings };
 
 
 
