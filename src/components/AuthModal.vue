@@ -142,7 +142,7 @@
         <div v-if="!isForgotPassword && !isResetMode && !isOtpMode" class="auth-toggle-box">
           <span v-if="isLogin">
             Pas encore de compte ? 
-            <button type="button" @click="isLogin = false" class="auth-link">S'inscrire (5 crédits offerts)</button>
+            <button type="button" @click="isLogin = false" class="auth-link">S'inscrire</button>
           </span>
           <span v-else>
             Déjà inscrit ? 
@@ -150,10 +150,7 @@
           </span>
         </div>
         
-        <div v-if="!isLogin && !isForgotPassword && !isResetMode && !isOtpMode" class="bonus-badge">
-          <svg class="bonus-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12v10H4V12"/><path d="M2 7h20v5H2z"/><path d="M12 22V7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg>
-          <span><strong>5 crédits offerts</strong> instantanément pour tester le générateur RH !</span>
-        </div>
+
       </div>
     </div>
   </div>

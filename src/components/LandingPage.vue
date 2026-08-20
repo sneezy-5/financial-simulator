@@ -1,4 +1,6 @@
 <script setup>
+defineEmits(['login'])
+
 import { ref, onMounted, computed } from 'vue'
 defineEmits(['login'])
 
@@ -1021,4 +1023,3 @@ const handleInstallPWA = async () => {
   }
 }
 </style>
- 

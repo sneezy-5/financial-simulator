@@ -10,6 +10,7 @@ import AuthModal from './components/AuthModal.vue'
 import BillingModal from './components/BillingModal.vue'
 import ProfileModal from './components/ProfileModal.vue'
 import DesktopLicenseActivation from './components/DesktopLicenseActivation.vue'
+import LandingPage from '../enterprise-site/src/App.vue'
 import { user, fetchMe, logout } from './services/auth'
 import { localDb } from './services/localDatabase.js'
 import { toastState, showToast } from './services/toast.js'
@@ -78,6 +79,13 @@ const showAuthModal = ref(false)
 const showBillingModal = ref(false)
 const showProfileModal = ref(false)
 
+const handleAuthClose = () => {
+  showAuthModal.value = false;
+  if (showHR.value && !user.value) {
+    naviguer('landing');
+  }
+}
+
 const loadBanques = async () => {
   banques.value = await api.getBanques(currentCountry.value)
   selectedBanque.value = null
@@ -121,7 +129,12 @@ onMounted(async () => {
 
   loadBanques()
   await fetchMe()
-  if (showHR.value && !isElectron && !user.value) {
+  
+  if (user.value && currentModule.value === 'landing' && !urlParams.get('module')) {
+    naviguer('hr', true)
+  }
+
+  if (showHR.value && !isDesktop && !user.value) {
     showAuthModal.value = true
   }
   // Chargement du profil utilisateur si connecté
@@ -571,18 +584,18 @@ const goToStep = (s) => {
 const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.value = null }
 
 const showAdmin = ref(false)
-const showHR = ref(true)
+const showHR = ref(false)
 
 // ── Navigation Modules ──────────────────────────────────────
-// 'home' | 'loan' | 'tax' | 'hr'
-const currentModule = ref('hr')
+// 'home' | 'loan' | 'tax' | 'hr' | 'landing'
+const currentModule = ref('landing')
 
 function syncUrlParams() {
   try {
     const params = new URLSearchParams()
     if (showHR.value) {
       params.set('module', 'hr')
-    } else if (currentModule.value && currentModule.value !== 'home') {
+    } else if (currentModule.value && currentModule.value !== 'landing') {
       params.set('module', currentModule.value)
     }
     if (currentCountry.value && currentCountry.value !== 'CI') {
@@ -613,7 +626,7 @@ function naviguer(module, skipReload = false) {
   currentModule.value = module
   if (module === 'hr') { 
     showHR.value = true
-    if (!isElectron && !user.value) {
+    if (!isDesktop && !user.value) {
       showAuthModal.value = true
     }
   } else { 
@@ -746,7 +759,7 @@ async function logVisit(pageName) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
-        page: pageName || (typeof currentModule !== 'undefined' ? currentModule.value : 'home'), 
+        page: pageName || (typeof currentModule !== 'undefined' ? currentModule.value : 'landing'), 
         clientId: clientId.value 
       })
     })
@@ -901,9 +914,15 @@ const toggleNotifMenu = () => {
       Installer l'Application
     </button>
 
+    <!-- LANDING PAGE (Vient de enterprise-site) -->
+    <LandingPage 
+      v-if="currentModule === 'landing'" 
+      @login="naviguer('hr', true)"
+    />
+
     <!-- MODULE : Accueil Dashboard -->
     <AppHome 
-      v-if="!showAdmin && !showHR && currentModule === 'home'" 
+      v-else-if="!showAdmin && !showHR && currentModule === 'home'" 
       :country="currentCountry" 
       @navigate="naviguer" 
       @country-changed="(c) => currentCountry = c" 
@@ -944,7 +963,7 @@ const toggleNotifMenu = () => {
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
               <span>Bureau</span>
             </button>
-            <button v-else-if="!isHRApp && !isElectron" @click="user && (user.subscriptionTier === 'pro' || user.subscriptionTier === 'enterprise') ? window.location.href='https://eonda.online' : naviguer('home')" class="hr-back-button" title="Retour à l'accueil">
+            <button v-else-if="!isDesktop" @click="naviguer('landing')" class="hr-back-button" title="Retour à l'accueil">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
               <span>Accueil</span>
             </button>
@@ -1019,11 +1038,11 @@ const toggleNotifMenu = () => {
                  
                  <div style="width: 1px; height: 16px; background: #cbd5e1; margin: 0 0.1rem;"></div>
                  
-                 <button @click="logout" style="background: transparent; color: #ef4444; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.75rem; border-radius: 9999px; cursor: pointer; transition: all 0.2s;" title="Se déconnecter" onmouseover="this.style.background='#fee2e2'" onmouseout="this.style.background='transparent'">
+                 <button @click="() => { logout(); naviguer('landing'); }" style="background: transparent; color: #ef4444; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.75rem; border-radius: 9999px; cursor: pointer; transition: all 0.2s;" title="Se déconnecter" onmouseover="this.style.background='#fee2e2'" onmouseout="this.style.background='transparent'">
                    Quitter
                  </button>
                </div>
-               <div v-else-if="!isElectron">
+               <div v-else-if="!isDesktop">
                  <button @click="showAuthModal = true" style="background: #10b981; color: white; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.5rem 0.85rem; border-radius: 0.5rem; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
                    <svg style="width: 14px; height: 14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"></path></svg>
                    Connexion / Inscription
@@ -1040,7 +1059,7 @@ const toggleNotifMenu = () => {
         </div>
       </div>
       <!-- HR Page Content -->
-      <div class="hr-page-content">
+      <div class="hr-page-content" v-if="user">
         <HRPayroll 
           :country="currentCountry" 
           :initialModule="hrInitialModule" 
@@ -1051,6 +1070,9 @@ const toggleNotifMenu = () => {
           @update:active-type="(val) => hrActiveType = val"
           @change-country="(c) => currentCountry = c" 
         />
+      </div>
+      <div v-else style="min-height: calc(100vh - 60px); display: flex; align-items: center; justify-content: center; background: #f8fafc;">
+         <!-- Espace vide, la modale de connexion s'affiche par-dessus -->
       </div>
     </div>
 
@@ -1893,7 +1915,7 @@ const toggleNotifMenu = () => {
   </div>
 
   <!-- Modals (Auth, Billing, Profile) -->
-  <AuthModal :show="showAuthModal" @close="showAuthModal = false" />
+  <AuthModal :show="showAuthModal" @close="handleAuthClose" />
   <BillingModal :show="showBillingModal" @close="showBillingModal = false" />
   <ProfileModal 
     :show="showProfileModal" 
