@@ -42,7 +42,14 @@ const app = express();
 const PORT = process.env.PORT || 3002;
 
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ 
+    limit: '50mb',
+    verify: (req, res, buf) => {
+        if (req.originalUrl.startsWith('/api/billing/paystack/webhook')) {
+            req.rawBody = buf.toString();
+        }
+    }
+}));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.set('trust proxy', true);
 
@@ -501,16 +508,19 @@ app.post('/api/billing/verify-paystack', authMiddleware, async (req, res) => {
 // ==========================================
 
 // IMPORTANT : Ce webhook doit recevoir le body brut (raw) pour valider la signature HMAC
-app.post('/api/billing/paystack/webhook', bodyParser.raw({ type: 'application/json' }), async (req, res) => {
+app.post('/api/billing/paystack/webhook', async (req, res) => {
     const secret = process.env.PAYSTACK_WEBHOOK_SECRET || process.env.PAYSTACK_SECRET_KEY;
     if (!secret) {
         console.error('❌ Webhook: PAYSTACK_WEBHOOK_SECRET non configuré');
         return res.sendStatus(500);
     }
 
+    // req.rawBody est défini par le middleware express.json
+    const payload = req.rawBody || JSON.stringify(req.body);
+
     // Valider la signature Paystack
     const hash = crypto.createHmac('sha512', secret)
-        .update(req.body)
+        .update(payload)
         .digest('hex');
 
     if (hash !== req.headers['x-paystack-signature']) {
@@ -518,9 +528,12 @@ app.post('/api/billing/paystack/webhook', bodyParser.raw({ type: 'application/js
         return res.sendStatus(400);
     }
 
-    let event;
+    let event = req.body;
     try {
-        event = JSON.parse(req.body.toString());
+        // Optionnel : on s'assure que event est bien un objet
+        if (typeof event === 'string') {
+            event = JSON.parse(event);
+        }
     } catch (e) {
         console.error('❌ Webhook Paystack: JSON invalide', e.message);
         return res.sendStatus(400);
@@ -876,12 +889,16 @@ app.get('/api/billing/invoices/:id/download', authMiddleware, async (req, res) =
         if (!invoice || invoice.userId !== req.user.id) {
             return res.status(404).json({ error: "Facture introuvable" });
         }
-        if (!invoice.pdfPath || !fs.existsSync(invoice.pdfPath)) {
+        
+        const filename = invoice.pdfPath ? path.basename(invoice.pdfPath) : `${invoice.invoiceNumber}.pdf`;
+        const actualPdfPath = path.join(__dirname, 'uploads', 'invoices', filename);
+
+        if (!fs.existsSync(actualPdfPath)) {
             return res.status(404).json({ error: "Fichier de facture introuvable" });
         }
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${invoice.invoiceNumber}.pdf"`);
-        fs.createReadStream(invoice.pdfPath).pipe(res);
+        fs.createReadStream(actualPdfPath).pipe(res);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }

@@ -130,6 +130,8 @@ onMounted(async () => {
   loadBanques()
   await fetchMe()
   
+  initDeeplink()
+  
   if (user.value && currentModule.value === 'landing' && !urlParams.get('module')) {
     naviguer('hr', true)
   }
@@ -735,7 +737,6 @@ const handleKeydown = (e) => {
 }
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
-  initDeeplink()
 })
 
 // ══════════════════════════════════════════════════════════════
