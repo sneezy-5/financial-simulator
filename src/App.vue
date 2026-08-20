@@ -120,11 +120,11 @@ onMounted(async () => {
   }
 
   loadBanques()
-  fetchMe().finally(() => {
-    if (showHR.value && !isElectron && !user.value) {
-      showAuthModal.value = true
-    }
-  }) // Chargement du profil utilisateur si connecté
+  await fetchMe()
+  if (showHR.value && !isElectron && !user.value) {
+    showAuthModal.value = true
+  }
+  // Chargement du profil utilisateur si connecté
   setTimeout(checkSchedule, 2000) // Delay the alert slightly after page load
 })
 watch(currentCountry, (newC) => {
@@ -627,7 +627,7 @@ const hrInitialModule = ref(null)
 const hrInitialType = ref(null)
 const hrActiveModule = ref(null)
 const hrActiveType = ref(null)
-const isHRApp = ref(false)
+const isHRApp = ref(true)
 
 // ── Deeplink Handler (LinkedIn & URL Direct) ──────────────────
 function initDeeplink() {
