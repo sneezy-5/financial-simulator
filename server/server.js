@@ -39,7 +39,7 @@ try {
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-onda-key';
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3002;
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
