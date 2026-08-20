@@ -85,7 +85,8 @@ async function renderPdf(html) {
         '/usr/bin/google-chrome',
         '/usr/bin/google-chrome-stable',
         '/usr/bin/chromium-browser',
-        '/usr/bin/chromium'
+        '/usr/bin/chromium',
+        '/snap/bin/chromium'
     ];
     let executablePath;
     for (const p of commonPaths) {
@@ -94,11 +95,21 @@ async function renderPdf(html) {
             break;
         }
     }
+    
+    if (!executablePath) {
+        try {
+            executablePath = require('child_process').execSync('which chromium-browser').toString().trim();
+        } catch (e) {
+            try {
+                executablePath = require('child_process').execSync('which google-chrome').toString().trim();
+            } catch (err) {}
+        }
+    }
 
     const browser = await puppeteer.launch({ 
         headless: 'new', 
-        executablePath, // Sera undefined sur Windows/Mac local, ce qui utilisera le Chrome par défaut
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] 
+        executablePath: executablePath || undefined,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] 
     });
     
     try {
