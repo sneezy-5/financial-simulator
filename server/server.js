@@ -176,7 +176,18 @@ app.post('/api/auth/register', async (req, res) => {
         if (!email || !password) return res.status(400).json({ error: "Email et mot de passe requis" });
 
         const existingUser = await User.findOne({ where: { email } });
-        if (existingUser) return res.status(400).json({ error: "Cet email est déjà utilisé" });
+        if (existingUser) {
+            if (!existingUser.emailVerified) {
+                const newVerificationToken = Math.floor(100000 + Math.random() * 900000).toString();
+                existingUser.verificationToken = newVerificationToken;
+                existingUser.password = await bcrypt.hash(password, 10); // Update password in case they changed their mind
+                await existingUser.save();
+                
+                emailService.sendVerificationEmail(existingUser.email, newVerificationToken).catch(console.error);
+                return res.json({ success: true, requiresVerification: true, message: "Un nouveau code de vérification a été envoyé." });
+            }
+            return res.status(400).json({ error: "Cet email est déjà utilisé et vérifié" });
+        }
 
         const hashedPassword = await bcrypt.hash(password, 10);
         // Generate a 6-digit OTP code (e.g. 123456)
