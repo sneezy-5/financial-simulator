@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 defineEmits(['login'])
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3002/api'
+const API_URL = import.meta.env.VITE_API_URL || '/api'
 const MAIN_APP_URL = import.meta.env.VITE_MAIN_APP_URL || 'https://rh.eonda.online/'
 const WHATSAPP_URL = 'https://wa.me/225151144337'
 

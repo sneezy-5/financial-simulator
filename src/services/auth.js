@@ -4,7 +4,7 @@ import { connectSocket, disconnectSocket } from './socketService.js';
 export const user = ref(null);
 export const token = ref(localStorage.getItem('auth_token') || null);
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 // Callback appelé quand le serveur confirme un paiement via Socket.IO
 const onPaymentSuccess = (data) => {

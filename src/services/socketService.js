@@ -13,8 +13,8 @@ export const lastPaymentNotification = ref(null);
 let socket = null;
 
 const SOCKET_URL = import.meta.env.VITE_API_URL
-  ? import.meta.env.VITE_API_URL.replace('/api', '')
-  : 'http://localhost:3001';
+  ? import.meta.env.VITE_SOCKET_URL
+  : '/';
 
 /**
  * Connecte le socket avec le token JWT de l'utilisateur.
