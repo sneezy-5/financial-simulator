@@ -194,8 +194,7 @@ app.post('/api/auth/register', async (req, res) => {
         // Envoi de l'email de vérification (non bloquant)
         emailService.sendVerificationEmail(newUser.email, verificationToken).catch(console.error);
 
-        const token = jwt.sign({ id: newUser.id, email: newUser.email, role: newUser.role }, JWT_SECRET, { expiresIn: '7d' });
-        res.json({ success: true, token, user: { id: newUser.id, email: newUser.email, subscriptionTier: trialUser.subscriptionTier, subscriptionExpiresAt: trialUser.subscriptionExpiresAt, subscriptionIsTrial: trialUser.subscriptionIsTrial, role: newUser.role } });
+        res.json({ success: true, requiresVerification: true, message: "Un code de vérification a été envoyé." });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -211,6 +210,15 @@ app.post('/api/auth/login', async (req, res) => {
 
         if (user.isBlocked) {
             return res.status(403).json({ error: "Votre compte a été suspendu par un administrateur." });
+        }
+
+        if (!user.emailVerified) {
+            // Renvoyer un nouveau code si l'utilisateur essaie de se connecter sans être vérifié
+            const newVerificationToken = Math.floor(100000 + Math.random() * 900000).toString();
+            user.verificationToken = newVerificationToken;
+            await user.save();
+            emailService.sendVerificationEmail(user.email, newVerificationToken).catch(console.error);
+            return res.status(403).json({ error: "email_not_verified" });
         }
 
         const isMatch = await bcrypt.compare(password, user.password);
@@ -292,7 +300,13 @@ app.post('/api/auth/verify-otp', async (req, res) => {
         user.verificationToken = null;
         await user.save();
 
-        res.json({ success: true, message: "Compte vérifié avec succès" });
+        const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+        res.json({ 
+            success: true, 
+            message: "Compte vérifié avec succès",
+            token, 
+            user: { id: user.id, email: user.email, subscriptionTier: user.subscriptionTier, subscriptionExpiresAt: user.subscriptionExpiresAt, subscriptionIsTrial: user.subscriptionIsTrial, role: user.role } 
+        });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }

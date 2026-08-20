@@ -158,7 +158,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { login, register } from '../services/auth'
+import { login, register, verifyOtp } from '../services/auth.js'
 
 const props = defineProps({
   show: Boolean
@@ -193,14 +193,25 @@ const handleSubmit = async () => {
   
   try {
     if (isLogin.value) {
-      await login(email.value, password.value)
-      emit('success')
-      emit('close')
-      email.value = ''
-      password.value = ''
+      try {
+        await login(email.value, password.value)
+        emit('success')
+        emit('close')
+        email.value = ''
+        password.value = ''
+      } catch (err) {
+        if (err.message === 'email_not_verified') {
+          isOtpMode.value = true
+          isLogin.value = false
+          successMsg.value = "Votre compte n'est pas vérifié. Un nouveau code vous a été envoyé."
+        } else {
+          throw err
+        }
+      }
     } else {
       await register(email.value, password.value)
       isOtpMode.value = true
+      isLogin.value = false
       successMsg.value = "Compte créé ! Veuillez vérifier votre e-mail."
       password.value = '' // clear password
     }
@@ -275,24 +286,15 @@ const handleVerifyOtp = async () => {
   errorMsg.value = ''
   successMsg.value = ''
   try {
-    const res = await fetch('/api/auth/verify-otp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email.value, otp: otpCode.value })
-    })
-    const data = await res.json()
-    if (res.ok) {
-      successMsg.value = "Compte vérifié avec succès !"
-      setTimeout(() => {
-        emit('success')
-        emit('close')
-        isOtpMode.value = false
-        email.value = ''
-        otpCode.value = ''
-      }, 1500)
-    } else {
-      throw new Error(data.error || "Code invalide")
-    }
+    await verifyOtp(email.value, otpCode.value)
+    successMsg.value = "Compte vérifié avec succès !"
+    setTimeout(() => {
+      emit('success')
+      emit('close')
+      isOtpMode.value = false
+      email.value = ''
+      otpCode.value = ''
+    }, 1500)
   } catch (err) {
     errorMsg.value = err.message
   } finally {

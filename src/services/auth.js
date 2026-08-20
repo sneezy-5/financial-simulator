@@ -72,10 +72,27 @@ export const register = async (email, password) => {
     });
     const data = await res.json();
     if (res.ok) {
-        setAuth(data.token, data.user);
-        return true;
+        if (data.token) {
+            setAuth(data.token, data.user);
+        }
+        return data;
     }
     throw new Error(data.error || 'Erreur d\'inscription');
+};
+
+export const verifyOtp = async (email, otp) => {
+    const res = await fetch(`${API_URL}/auth/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, otp })
+    });
+    const data = await res.json();
+    if (res.ok) {
+        setAuth(data.token, data.user);
+        connectSocket(data.token, onPaymentSuccess);
+        return true;
+    }
+    throw new Error(data.error || 'Code invalide');
 };
 
 export const logout = () => {
