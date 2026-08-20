@@ -571,11 +571,11 @@ const goToStep = (s) => {
 const reset = () => { step.value = 1; selectedBanque.value = null; selectedPret.value = null }
 
 const showAdmin = ref(false)
-const showHR = ref(false)
+const showHR = ref(true)
 
 // ── Navigation Modules ──────────────────────────────────────
 // 'home' | 'loan' | 'tax' | 'hr'
-const currentModule = ref('home')
+const currentModule = ref('hr')
 
 function syncUrlParams() {
   try {
