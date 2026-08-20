@@ -890,14 +890,30 @@ app.get('/api/billing/invoices/:id/download', authMiddleware, async (req, res) =
             return res.status(404).json({ error: "Facture introuvable" });
         }
         
-        const filename = invoice.pdfPath ? path.basename(invoice.pdfPath) : `${invoice.invoiceNumber}.pdf`;
-        const actualPdfPath = path.join(__dirname, 'uploads', 'invoices', filename);
+        const filename = (invoice.pdfPath ? path.basename(invoice.pdfPath) : invoice.invoiceNumber) 
+            || `ONDA-${new Date(invoice.createdAt).getFullYear()}-${String(invoice.id).padStart(6, '0')}`;
+            
+        let actualPdfPath = path.join(__dirname, 'uploads', 'invoices', filename.endsWith('.pdf') ? filename : `${filename}.pdf`);
 
         if (!fs.existsSync(actualPdfPath)) {
-            return res.status(404).json({ error: "Fichier de facture introuvable" });
+            // Tentative de regénération du PDF si le fichier a été perdu ou non généré
+            const user = await User.findByPk(invoice.userId);
+            const plan = await SubscriptionPlan.findOne({ where: { code: invoice.subscriptionTier } });
+            
+            if (user && plan) {
+                try {
+                    actualPdfPath = await invoiceService.regenerateInvoicePdf(invoice, user, plan);
+                } catch (e) {
+                    console.error("Échec de la regénération de la facture:", e);
+                    return res.status(404).json({ error: "Fichier de facture introuvable et regénération impossible." });
+                }
+            } else {
+                return res.status(404).json({ error: "Fichier de facture introuvable." });
+            }
         }
+        
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${invoice.invoiceNumber}.pdf"`);
+        res.setHeader('Content-Disposition', `attachment; filename="${path.basename(actualPdfPath)}"`);
         fs.createReadStream(actualPdfPath).pipe(res);
     } catch (e) {
         res.status(500).json({ error: e.message });

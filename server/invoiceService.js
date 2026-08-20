@@ -115,4 +115,25 @@ async function createInvoiceForPayment({ userId, user, plan, amount, reference }
     return invoice;
 }
 
-module.exports = { createInvoiceForPayment };
+async function regenerateInvoicePdf(invoice, user, plan) {
+    if (!invoice.invoiceNumber) {
+        invoice.invoiceNumber = `ONDA-${new Date(invoice.createdAt).getFullYear()}-${String(invoice.id).padStart(6, '0')}`;
+    }
+    const html = generateInvoiceHtml({ 
+        invoiceNumber: invoice.invoiceNumber, 
+        date: invoice.createdAt, 
+        user, 
+        plan, 
+        amount: invoice.amount, 
+        reference: invoice.reference 
+    });
+    const pdfBuffer = await renderPdf(html);
+    const pdfPath = path.join(INVOICES_DIR, `${invoice.invoiceNumber}.pdf`);
+    fs.writeFileSync(pdfPath, pdfBuffer);
+    
+    invoice.pdfPath = pdfPath;
+    await invoice.save();
+    return pdfPath;
+}
+
+module.exports = { createInvoiceForPayment, regenerateInvoicePdf };
