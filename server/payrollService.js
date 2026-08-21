@@ -731,30 +731,23 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, m
                                     html = html.replace(/BULLETIN DE PAIE/gi, "BULLETIN D'ALLOCATION CONGÉ");
                                 }
 
-                                const fullHtml = `
-                                <!DOCTYPE html>
-                                <html>
-                                <head>
-                                    <meta charset="utf-8">
-                                    <script src="https://cdn.tailwindcss.com"></script>
-                                    <style>
-                                        body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background: white; color: #1f2937; font-size: 11px; line-height: 1.3; text-align: left; }
-                                        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                                        table { font-size: 11px; border-collapse: collapse; }
-                                        td, th { padding: 2px 8px !important; }
-                                        h1 { font-size: 15px !important; margin: 4px 0 !important; }
-                                        h2 { font-size: 13px !important; margin: 3px 0 !important; }
-                                        h3 { font-size: 12px !important; margin: 2px 0 !important; }
-                                        p { margin: 2px 0 !important; }
-                                        .mt-4, .mt-6, .mt-8, .mb-4, .mb-6, .mb-8, .my-4, .my-6, .my-8 { margin-top: 8px !important; margin-bottom: 8px !important; }
-                                        .pt-4, .pt-6, .pt-8, .pb-4, .pb-6, .pb-8, .py-4, .py-6, .py-8 { padding-top: 4px !important; padding-bottom: 4px !important; }
-                                    </style>
-                                </head>
-                                <body class="p-6">
-                                    ${html}
-                                </body>
-                                </html>
-                                `;
+                                let fullHtml = html;
+                                if (!html.toLowerCase().includes('<html')) {
+                                    fullHtml = `
+                                    <!DOCTYPE html>
+                                    <html>
+                                    <head>
+                                        <meta charset="utf-8">
+                                        <script src="https://cdn.tailwindcss.com"></script>
+                                        <style>
+                                            body { font-family: sans-serif; background: white; }
+                                            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                                        </style>
+                                    </head>
+                                    <body class="p-6">${html}</body>
+                                    </html>
+                                    `;
+                                }
 
                                 const page = await browser.newPage();
                                 await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
@@ -1706,22 +1699,23 @@ exports.generateSinglePdf = (employee, calculs, companyInfo = {}, htmlTemplate =
                 }
                 html = html.replace(/{[^}]+}/g, '0');
 
-                const fullHtml = `
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <meta charset="utf-8">
-                    <script src="https://cdn.tailwindcss.com"></script>
-                    <style>
-                        body { font-family: sans-serif; background: white; font-size: 11px; line-height: 1.3; }
-                        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                        table { font-size: 11px; border-collapse: collapse; }
-                        td, th { padding: 2px 8px !important; }
-                    </style>
-                </head>
-                <body class="p-6">${html}</body>
-                </html>
-                `;
+                let fullHtml = html;
+                if (!html.toLowerCase().includes('<html')) {
+                    fullHtml = `
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="utf-8">
+                        <script src="https://cdn.tailwindcss.com"></script>
+                        <style>
+                            body { font-family: sans-serif; background: white; }
+                            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                        </style>
+                    </head>
+                    <body class="p-6">${html}</body>
+                    </html>
+                    `;
+                }
 
                 // Tente de trouver un exécutable système sur Linux (VPS)
                 const commonPaths = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'];
@@ -1792,22 +1786,23 @@ exports.generateStcPdf = (employee, calculs, htmlTemplate = null) => {
                 }
                 html = html.replace(/{[^}]+}/g, '0');
 
-                const fullHtml = `
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <meta charset="utf-8">
-                    <script src="https://cdn.tailwindcss.com"></script>
-                    <style>
-                        body { font-family: sans-serif; background: white; font-size: 11px; line-height: 1.3; }
-                        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                        table { font-size: 11px; border-collapse: collapse; }
-                        td, th { padding: 2px 8px !important; }
-                    </style>
-                </head>
-                <body class="p-6">${html}</body>
-                </html>
-                `;
+                let fullHtml = html;
+                if (!html.toLowerCase().includes('<html')) {
+                    fullHtml = `
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="utf-8">
+                        <script src="https://cdn.tailwindcss.com"></script>
+                        <style>
+                            body { font-family: sans-serif; background: white; }
+                            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                        </style>
+                    </head>
+                    <body class="p-6">${html}</body>
+                    </html>
+                    `;
+                }
 
                 // Tente de trouver un exécutable système sur Linux (VPS)
                 const commonPaths = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'];
@@ -2123,22 +2118,23 @@ exports.processPayrollJson = async (employeesList, outputPath, templatePath = nu
                                     html = html.replace(/BULLETIN DE PAIE/gi, "BULLETIN D'ALLOCATION CONGÉ");
                                 }
 
-                                const fullHtml = `
-                                <!DOCTYPE html>
-                                <html>
-                                <head>
-                                    <meta charset="utf-8">
-                                    <script src="https://cdn.tailwindcss.com"></script>
-                                    <style>
-                                        body { font-family: sans-serif; background: white; font-size: 11px; line-height: 1.3; }
-                                        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                                        table { font-size: 11px; border-collapse: collapse; }
-                                        td, th { padding: 2px 8px !important; }
-                                    </style>
-                                </head>
-                                <body class="p-6">${html}</body>
-                                </html>
-                                `;
+                                let fullHtml = html;
+                                if (!html.toLowerCase().includes('<html')) {
+                                    fullHtml = `
+                                    <!DOCTYPE html>
+                                    <html>
+                                    <head>
+                                        <meta charset="utf-8">
+                                        <script src="https://cdn.tailwindcss.com"></script>
+                                        <style>
+                                            body { font-family: sans-serif; background: white; }
+                                            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                                        </style>
+                                    </head>
+                                    <body class="p-6">${html}</body>
+                                    </html>
+                                    `;
+                                }
 
                                 const page = await browser.newPage();
                                 await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
