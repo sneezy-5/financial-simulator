@@ -665,6 +665,15 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, m
                         try { executablePath = require('child_process').execSync('which google-chrome').toString().trim(); } catch (err) {}
                     }
                 }
+                if (!executablePath) {
+                    try {
+                        console.log("Installation automatique de Chrome (Puppeteer) en cours pour l'utilisateur serveur...");
+                        require('child_process').execSync('npx puppeteer browsers install chrome', { stdio: 'pipe' });
+                        console.log("Installation Chrome terminée.");
+                    } catch(e) {
+                        console.error("Erreur d'installation automatique:", e.message || e);
+                    }
+                }
                 browser = await puppeteer.launch({ headless: 'new', executablePath: executablePath || undefined, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
             }
 
@@ -2054,6 +2063,15 @@ exports.processPayrollJson = async (employeesList, outputPath, templatePath = nu
                         try { executablePath = require('child_process').execSync('which google-chrome').toString().trim(); } catch (err) {}
                     }
                 }
+                if (!executablePath) {
+                    try {
+                        console.log("Installation automatique de Chrome (Puppeteer) en cours pour l'utilisateur serveur...");
+                        require('child_process').execSync('npx puppeteer browsers install chrome', { stdio: 'pipe' });
+                        console.log("Installation Chrome terminée.");
+                    } catch(e) {
+                        console.error("Erreur d'installation automatique:", e.message || e);
+                    }
+                }
                 browser = await puppeteer.launch({ headless: 'new', executablePath: executablePath || undefined, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
             }
 
@@ -2074,7 +2092,7 @@ exports.processPayrollJson = async (employeesList, outputPath, templatePath = nu
                     const entNom = (companyInfo.nom_entreprise || emp.nom_entreprise || 'ENTREPRISE').toUpperCase();
                     const salNom = (emp.nom || `Employe${index}`).toUpperCase();
                     
-                    const leave = (leavesToProcess || []).find(l => l.id === emp.id || (l.matricule && l.matricule === emp.matricule));
+                    const leave = (typeof leavesToProcess !== 'undefined' ? leavesToProcess : []).find(l => l.id === emp.id || (l.matricule && l.matricule === emp.matricule));
                     const employesToGenerate = [emp];
                     if (leave) employesToGenerate.push({ ...emp, isLeavePayslip: true });
 
