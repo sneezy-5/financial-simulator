@@ -656,7 +656,16 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, m
             const promises = [];
             let browser = null;
             if (isHtmlTemplateMode && puppeteer) {
-                browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+                // Tente de trouver un exécutable système sur Linux (VPS)
+                const commonPaths = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'];
+                let executablePath;
+                for (const p of commonPaths) { if (fs.existsSync(p)) { executablePath = p; break; } }
+                if (!executablePath) {
+                    try { executablePath = require('child_process').execSync('which chromium-browser').toString().trim(); } catch (e) {
+                        try { executablePath = require('child_process').execSync('which google-chrome').toString().trim(); } catch (err) {}
+                    }
+                }
+                browser = await puppeteer.launch({ headless: 'new', executablePath: executablePath || undefined, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
             }
 
             for (const [index, emp] of fullEmployees.entries()) {
@@ -1705,7 +1714,16 @@ exports.generateSinglePdf = (employee, calculs, companyInfo = {}, htmlTemplate =
                 </html>
                 `;
 
-                const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+                // Tente de trouver un exécutable système sur Linux (VPS)
+                const commonPaths = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'];
+                let executablePath;
+                for (const p of commonPaths) { if (fs.existsSync(p)) { executablePath = p; break; } }
+                if (!executablePath) {
+                    try { executablePath = require('child_process').execSync('which chromium-browser').toString().trim(); } catch (e) {
+                        try { executablePath = require('child_process').execSync('which google-chrome').toString().trim(); } catch (err) {}
+                    }
+                }
+                const browser = await puppeteer.launch({ headless: 'new', executablePath: executablePath || undefined, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
                 const page = await browser.newPage();
                 await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
                 const pdfBytes = await page.pdf({ format: 'A4', printBackground: true });
@@ -1782,7 +1800,16 @@ exports.generateStcPdf = (employee, calculs, htmlTemplate = null) => {
                 </html>
                 `;
 
-                const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+                // Tente de trouver un exécutable système sur Linux (VPS)
+                const commonPaths = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'];
+                let executablePath;
+                for (const p of commonPaths) { if (fs.existsSync(p)) { executablePath = p; break; } }
+                if (!executablePath) {
+                    try { executablePath = require('child_process').execSync('which chromium-browser').toString().trim(); } catch (e) {
+                        try { executablePath = require('child_process').execSync('which google-chrome').toString().trim(); } catch (err) {}
+                    }
+                }
+                const browser = await puppeteer.launch({ headless: 'new', executablePath: executablePath || undefined, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
                 const page = await browser.newPage();
                 await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
                 const pdfBytes = await page.pdf({ format: 'A4', printBackground: true });
@@ -2018,7 +2045,16 @@ exports.processPayrollJson = async (employeesList, outputPath, templatePath = nu
             const promises = [];
             let browser = null;
             if (isHtmlTemplateMode && puppeteer) {
-                browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+                // Tente de trouver un exécutable système sur Linux (VPS)
+                const commonPaths = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'];
+                let executablePath;
+                for (const p of commonPaths) { if (fs.existsSync(p)) { executablePath = p; break; } }
+                if (!executablePath) {
+                    try { executablePath = require('child_process').execSync('which chromium-browser').toString().trim(); } catch (e) {
+                        try { executablePath = require('child_process').execSync('which google-chrome').toString().trim(); } catch (err) {}
+                    }
+                }
+                browser = await puppeteer.launch({ headless: 'new', executablePath: executablePath || undefined, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
             }
 
             for (const [index, emp] of fullEmployees.entries()) {

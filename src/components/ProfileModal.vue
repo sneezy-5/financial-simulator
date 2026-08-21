@@ -193,7 +193,8 @@ const downloadInvoice = async (inv) => {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${inv.invoiceNumber}.pdf`
+    const safeInvoiceNumber = inv.invoiceNumber || `ONDA-Facture-${inv.id}`;
+    a.download = `${safeInvoiceNumber}.pdf`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
