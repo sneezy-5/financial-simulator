@@ -1,6 +1,11 @@
 node_modules
 server/node_modules
-enterprise-site
+# enterprise-site n'est PAS ignoré en bloc : src/App.vue importe en dur
+# enterprise-site/src/App.vue (voir src/App.vue, "LandingPage") — un `COPY`
+# explicite dans le Dockerfile en dépend. Seuls node_modules/dist (~40 Mo,
+# jamais utilisés par ce build) sont exclus pour garder le contexte léger.
+enterprise-site/node_modules
+enterprise-site/dist
 
 # .env (racine) N'EST PAS ignoré, volontairement : le stage frontend-build en
 # a besoin pour les variables VITE_* (bakées dans le bundle à la compilation).

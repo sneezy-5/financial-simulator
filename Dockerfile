@@ -27,6 +27,12 @@ RUN npm ci --legacy-peer-deps
 COPY index.html vite.config.mjs ./
 COPY src ./src
 COPY public ./public
+# src/App.vue importe '../enterprise-site/src/App.vue' en dur (landing page
+# partagée avec le site marketing) — sans ce COPY, le build échoue avec
+# "Could not resolve" pendant le bundling, ce qui fait avorter tout le build
+# AVANT l'étape workbox (précaching PWA) et ressort sous la forme trompeuse
+# "Couldn't find configuration for either precaching or runtime caching."
+COPY enterprise-site/src ./enterprise-site/src
 # Variables VITE_* (voir .env, racine) : Vite les lit à la compilation et les
 # bake dans le bundle statique — sans ce COPY, le build tournait avec des
 # valeurs vides/par défaut (VITE_APP_MODE, VITE_PAYSTACK_PUBLIC_KEY...), pas
