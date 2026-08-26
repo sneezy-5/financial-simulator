@@ -7,7 +7,13 @@
 FROM node:20-bookworm-slim AS frontend-build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# --legacy-peer-deps : vite-plugin-pwa@0.20.x plafonne son peer vite à ^5,
+# alors que le projet est sur vite@^7 (déclaré ainsi dans package.json — pas
+# une erreur d'ici). `npm ci` est strict sur les peer deps par défaut depuis
+# npm 7+ et refuse sinon de résoudre ; en local le node_modules déjà installé
+# masquait le conflit. Idéalement, il faudrait faire monter vite-plugin-pwa
+# vers une version qui supporte vite 7 pour se passer de ce flag.
+RUN npm ci --legacy-peer-deps
 COPY index.html vite.config.mjs ./
 COPY src ./src
 COPY public ./public
