@@ -4,7 +4,11 @@ if (typeof global.File === 'undefined') {
 }
 
 try {
-    require('dotenv').config({ override: true });
+    // Chemin explicite (server/.env), pas relatif au cwd du process : sinon,
+    // lancer `node server.js` depuis un dossier différent (racine du dépôt vs
+    // server/, PM2 vs Docker...) charge un fichier différent en silence. Même
+    // fichier que celui déjà utilisé explicitement par aiService.js.
+    require('dotenv').config({ path: require('path').join(__dirname, '.env'), override: true });
 } catch (e) {
     // dotenv n'est pas nécessaire en production Electron
 }

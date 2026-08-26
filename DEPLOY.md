@@ -37,6 +37,13 @@ que les autres nœuds voient l'image (sans registre existant, le plus simple :
 adapter `IMAGE_NAME` dans `deploy/deploy.sh` en `localhost:5000/ondarh-server`
 et pousser après build).
 
+Le build lit aussi `.env` **à la racine** (pas `server/.env`) pour les
+variables `VITE_*` — Vite les compile dans le bundle frontend, contrairement à
+`server/.env` qui n'est lu qu'au runtime du serveur. Les deux fichiers ne se
+recouvrent plus depuis la séparation faite dans ce commit (`.env` racine =
+uniquement `VITE_*`, tout le reste dans `server/.env`) : mettez à jour l'un ou
+l'autre selon ce que vous changez, pas besoin de dupliquer.
+
 ## 3. Préparer les secrets
 
 Ne jamais mettre les vraies valeurs dans stack.yml (il pourrait finir commit).

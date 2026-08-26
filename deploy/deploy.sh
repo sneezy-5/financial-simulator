@@ -43,10 +43,30 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
-set -a
-# shellcheck source=/dev/null
-source "$ENV_FILE"
-set +a
+# Ne JAMAIS faire `source "$ENV_FILE"` : bash l'exécuterait comme du vrai
+# script shell, et la moindre apostrophe non appariée dans une valeur (un nom
+# d'expéditeur SMTP en français, par ex.) casse tout avec "unexpected EOF
+# while looking for matching `'". Lecture ligne à ligne à la place : on ne
+# coupe qu'au premier '=', le reste de la ligne (apostrophes, $, guillemets...)
+# est pris tel quel, jamais réinterprété par bash.
+while IFS= read -r ligne || [ -n "$ligne" ]; do
+  ligne="${ligne%$'\r'}"                # au cas où le fichier a des fins de ligne Windows
+  case "$ligne" in
+    ''|'#'*) continue ;;                # ligne vide ou commentaire
+  esac
+  ligne="${ligne#export }"              # tolère un éventuel préfixe "export "
+  cle="${ligne%%=*}"
+  valeur="${ligne#*=}"
+  [ -z "$cle" ] && continue
+  # Guillemets ou apostrophes entourant toute la valeur : dotenv les retire,
+  # on fait pareil pour rester cohérent avec ce que Node charge lui-même.
+  if [[ "$valeur" == \"*\" && "$valeur" == *\" ]]; then
+    valeur="${valeur%\"}"; valeur="${valeur#\"}"
+  elif [[ "$valeur" == \'*\' && "$valeur" == *\' ]]; then
+    valeur="${valeur%\'}"; valeur="${valeur#\'}"
+  fi
+  export "$cle=$valeur"
+done < "$ENV_FILE"
 
 manquantes=()
 for var in POSTGRES_PASSWORD JWT_SECRET; do

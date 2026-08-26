@@ -2,11 +2,15 @@ node_modules
 server/node_modules
 enterprise-site
 
-# Jamais dans l'image : les secrets prod sont injectés par le stack Docker
-# (variables d'environnement / secrets), pas copiés depuis le poste de dev.
-.env
+# .env (racine) N'EST PAS ignoré, volontairement : le stage frontend-build en
+# a besoin pour les variables VITE_* (bakées dans le bundle à la compilation).
+# Il ne contient plus que ça depuis la séparation avec server/.env — voir le
+# commentaire en tête de .env. Tout le reste (secrets serveur : Paystack,
+# SMTP, JWT, base de données) est injecté par le stack Docker au déploiement,
+# jamais copié depuis le poste de dev.
 server/.env
-.env.*
+.env.local
+.env.*.local
 server/.env.*
 
 # Données locales / builds précédents

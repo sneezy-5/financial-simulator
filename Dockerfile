@@ -11,6 +11,11 @@ RUN npm ci
 COPY index.html vite.config.mjs ./
 COPY src ./src
 COPY public ./public
+# Variables VITE_* (voir .env, racine) : Vite les lit à la compilation et les
+# bake dans le bundle statique — sans ce COPY, le build tournait avec des
+# valeurs vides/par défaut (VITE_APP_MODE, VITE_PAYSTACK_PUBLIC_KEY...), pas
+# celles réellement configurées.
+COPY .env ./
 RUN npm run build
 
 # ── Étape 2 : image d'exécution (API + frontend statique) ──────────────────
