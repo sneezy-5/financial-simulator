@@ -28,17 +28,23 @@ git clone <votre-repo> onda-app   # ou git pull si déjà cloné
 cd onda-app
 ```
 
-## 2. Construire l'image
+## 2. Construire le frontend et l'image
 
 Fait automatiquement par `deploy/deploy.sh` (étape 6) — inutile de le faire à
-la main sauf en **swarm à plusieurs nœuds**, où il faut alors un registre pour
-que les autres nœuds voient l'image (sans registre existant, le plus simple :
+la main. Le **frontend n'est pas construit dans Docker** : `deploy/deploy.sh`
+lance `npm run build` directement sur l'hôte (nginx sert `dist/` en statique,
+voir étape 7bis) — Node doit donc être installé nativement sur ce serveur,
+déjà le cas puisque PM2 en dépendait. L'image Docker, elle, ne contient plus
+que le backend (Express) et se construit à part.
+
+En **swarm à plusieurs nœuds**, il faut un registre pour que les autres nœuds
+voient l'image du backend (sans registre existant, le plus simple :
 `docker service create --name registry --publish 5000:5000 registry:2`, puis
 adapter `IMAGE_NAME` dans `deploy/deploy.sh` en `localhost:5000/ondarh-server`
 et pousser après build).
 
-Le build lit aussi `.env` **à la racine** (pas `server/.env`) pour les
-variables `VITE_*` — Vite les compile dans le bundle frontend, contrairement à
+Le build frontend lit `.env` **à la racine** (pas `server/.env`) pour les
+variables `VITE_*` — Vite les compile dans le bundle statique, contrairement à
 `server/.env` qui n'est lu qu'au runtime du serveur. Les deux fichiers ne se
 recouvrent plus depuis la séparation faite dans ce commit (`.env` racine =
 uniquement `VITE_*`, tout le reste dans `server/.env`) : mettez à jour l'un ou
@@ -108,12 +114,14 @@ les deux est que le service existe déjà. Ce qu'il fait, dans l'ordre :
 
 1. Vérifie que `docker` est là et que `server/.env` contient au minimum
    `POSTGRES_PASSWORD` et `JWT_SECRET`.
-2. Construit l'image, taguée avec le commit git courant **et** `:latest` — le
-   tag unique garantit que Swarm détecte toujours la nouvelle version (pas
-   besoin de compter sur `docker service update --force`, fait quand même en
-   filet de sécurité).
-3. Déploie/mets à jour le stack `onda` avec cette image précise.
-4. Affiche l'état du service et les 30 dernières lignes de log.
+2. Construit le frontend (`npm ci && npm run build`, sur l'hôte) — nginx sert
+   directement le `dist/` obtenu (étape 7bis), rien à copier ailleurs.
+3. Construit l'image du backend, taguée avec le commit git courant **et**
+   `:latest` — le tag unique garantit que Swarm détecte toujours la nouvelle
+   version (pas besoin de compter sur `docker service update --force`, fait
+   quand même en filet de sécurité).
+4. Déploie/mets à jour le stack `onda` avec cette image précise.
+5. Affiche l'état du service et les 30 dernières lignes de log.
 
 Pour cibler un autre fichier de secrets : `ONDA_ENV_FILE=/chemin/vers/onda.env deploy/deploy.sh`.
 
@@ -137,19 +145,28 @@ Si le conteneur ne démarre pas du tout à cause du port, c'est que l'étape 5 a
 
 ## 7bis. Pointer nginx dessus
 
-Le conteneur publie le port 3002 sur l'hôte — nginx, installé nativement sur
-le serveur, fait juste un reverse proxy classique vers `127.0.0.1:3002`.
-Modèle prêt à l'emploi : [deploy/nginx.example.conf](deploy/nginx.example.conf).
+nginx, installé nativement sur le serveur, sert le frontend **directement**
+depuis `dist/` (reconstruit à chaque `deploy/deploy.sh`, voir étape 6) — plus
+rapide qu'un aller-retour par Express — et ne proxy vers le conteneur
+(`127.0.0.1:3002`) que les routes `/api/` et `/socket.io/`. Modèle prêt à
+l'emploi : [deploy/nginx.example.conf](deploy/nginx.example.conf) — ajustez-y
+`server_name` et surtout `root` (chemin réel du dépôt cloné sur ce serveur).
 
-Deux points qui cassent silencieusement si on les oublie :
+Si nginx pointait déjà en reverse proxy pur vers `127.0.0.1:3002` pour PM2
+(l'ancien setup, où Express servait aussi le frontend), il faut remplacer ce
+bloc par le nouveau modèle — sinon le frontend continue de passer par le
+conteneur au lieu d'être servi en statique.
+
+Points qui cassent silencieusement si on les oublie :
+- **Fallback SPA** — `try_files $uri $uri/ /index.html` : sans lui, recharger
+  une route interne (F5 sur `/rh/employes` par ex.) donne une 404 nginx au
+  lieu de laisser le routeur Vue gérer l'URL.
 - **WebSocket** (Socket.IO, temps réel) — sans `proxy_set_header Upgrade`/
-  `Connection "upgrade"`, l'app retombe en polling HTTP sans erreur visible.
+  `Connection "upgrade"` sur `location /socket.io/`, l'app retombe en polling
+  HTTP sans erreur visible.
 - **Taille d'upload** — le défaut nginx (1 Mo) rejette les imports Excel/PDF
   avant même qu'ils atteignent l'app ; `client_max_body_size 25m` dans
   l'exemple.
-
-Si nginx pointait déjà vers `127.0.0.1:3002` pour PM2, il n'y a rien à changer
-côté nginx du tout — le nouveau conteneur reprend le même port.
 
 ## 8. Mises à jour futures
 
@@ -158,5 +175,6 @@ git pull
 deploy/deploy.sh
 ```
 
-C'est tout — même script qu'à l'étape 6. Pas besoin de retoucher PM2 (déjà
-coupé) ni nginx (pointe déjà sur le port 3002).
+C'est tout — même script qu'à l'étape 6, qui reconstruit `dist/` à chaque
+fois. Pas besoin de retoucher PM2 (déjà coupé) ni nginx (son `root` pointe
+déjà sur le même dossier `dist/`, régénéré sur place).

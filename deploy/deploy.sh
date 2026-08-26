@@ -14,10 +14,12 @@
 #
 # Ce que fait ce script, dans l'ordre :
 #   1. Vérifie que docker et le fichier de secrets sont là.
-#   2. Construit l'image, taguée avec le commit git (traçable, jamais réutilisée
-#      par erreur) ET :latest.
-#   3. Déploie/met à jour le stack avec cette image précise.
-#   4. Force la recréation des tâches (filet de sécurité) et affiche l'état +
+#   2. Construit le frontend (npm run build, sur l'hôte — nginx sert dist/
+#      directement, voir deploy/nginx.example.conf).
+#   3. Construit l'image du backend, taguée avec le commit git (traçable,
+#      jamais réutilisée par erreur) ET :latest.
+#   4. Déploie/met à jour le stack avec cette image précise.
+#   5. Force la recréation des tâches (filet de sécurité) et affiche l'état +
 #      les derniers logs pour vérifier que ça a démarré correctement.
 
 set -euo pipefail
@@ -79,12 +81,16 @@ if [ "${#manquantes[@]}" -gt 0 ]; then
   exit 1
 fi
 
-# ── 2. Build ──────────────────────────────────────────────────────────────
+# ── 2. Build frontend (sur l'hôte, nginx sert dist/ directement) ───────────
+echo "→ Construction du frontend (npm run build)"
+( cd "$REPO_ROOT" && npm ci --legacy-peer-deps && npm run build )
+
+# ── 3. Build backend ─────────────────────────────────────────────────────
 TAG="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)"
 echo "→ Construction de ${IMAGE_NAME}:${TAG}"
 docker build -t "${IMAGE_NAME}:${TAG}" -t "${IMAGE_NAME}:latest" "$REPO_ROOT"
 
-# ── 3. Déploiement ────────────────────────────────────────────────────────
+# ── 4. Déploiement ────────────────────────────────────────────────────────
 export ONDA_IMAGE="${IMAGE_NAME}:${TAG}"
 echo "→ Déploiement du stack '${STACK_NAME}' avec l'image ${ONDA_IMAGE}"
 docker stack deploy -c "$STACK_FILE" "$STACK_NAME"
@@ -94,7 +100,7 @@ docker stack deploy -c "$STACK_FILE" "$STACK_NAME"
 # ne coûte rien de le garantir).
 docker service update --force --quiet "${STACK_NAME}_${SERVICE_NAME}" >/dev/null 2>&1 || true
 
-# ── 4. Vérification ───────────────────────────────────────────────────────
+# ── 5. Vérification ───────────────────────────────────────────────────────
 echo "→ Attente du démarrage (10s)..."
 sleep 10
 echo ""

@@ -1,18 +1,15 @@
 node_modules
 server/node_modules
-# enterprise-site n'est PAS ignoré en bloc : src/App.vue importe en dur
-# enterprise-site/src/App.vue (voir src/App.vue, "LandingPage") — un `COPY`
-# explicite dans le Dockerfile en dépend. Seuls node_modules/dist (~40 Mo,
-# jamais utilisés par ce build) sont exclus pour garder le contexte léger.
-enterprise-site/node_modules
-enterprise-site/dist
+# Le Dockerfile ne construit plus que le backend (voir son commentaire
+# d'en-tête) : plus besoin de src/, public/, enterprise-site/, index.html,
+# vite.config.mjs ni du .env racine dans le contexte — tout ça reste ignoré.
+enterprise-site
+src
+public
+index.html
+vite.config.mjs
+.env
 
-# .env (racine) N'EST PAS ignoré, volontairement : le stage frontend-build en
-# a besoin pour les variables VITE_* (bakées dans le bundle à la compilation).
-# Il ne contient plus que ça depuis la séparation avec server/.env — voir le
-# commentaire en tête de .env. Tout le reste (secrets serveur : Paystack,
-# SMTP, JWT, base de données) est injecté par le stack Docker au déploiement,
-# jamais copié depuis le poste de dev.
 server/.env
 .env.local
 .env.*.local
