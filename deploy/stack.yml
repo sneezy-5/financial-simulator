@@ -16,9 +16,9 @@
 #   3. Confirmez qu'infra_pgbouncer est bien attaché à whatsapp-network :
 #      `docker service inspect infra_pgbouncer --format '{{json .Spec.TaskTemplate.Networks}}'`
 #      — sinon les deux services ne se verront pas malgré ce fichier.
-#   4. Les secrets (${...}) sont lus depuis l'environnement du shell au moment
-#      du déploiement : `set -a; source /root/onda.env; set +a` avant de lancer
-#      `docker stack deploy` (voir DEPLOY.md étape 3).
+#   4. Les secrets (${...}) sont lus depuis server/.env par deploy/deploy.sh
+#      au moment du déploiement — rien à charger à la main (voir DEPLOY.md
+#      étape 3 et 6).
 #
 # Piège classique avec PgBouncer : en mode "transaction pooling" (le plus
 # courant), les requêtes préparées (prepared statements) ne fonctionnent pas

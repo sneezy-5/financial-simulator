@@ -5,7 +5,12 @@
 #
 # Usage (sur le serveur de prod, depuis n'importe où dans le dépôt) :
 #   deploy/deploy.sh
-#   ONDA_ENV_FILE=/chemin/vers/onda.env deploy/deploy.sh   # fichier d'env différent
+#   ONDA_ENV_FILE=/chemin/vers/autre.env deploy/deploy.sh   # fichier d'env différent
+#
+# Par défaut, lit server/.env — le même fichier que PM2 charge déjà via
+# dotenv. Rien à dupliquer : les secrets déjà en place (SMTP, Paystack...)
+# sont repris tels quels ; il suffit d'y ajouter POSTGRES_PASSWORD et
+# JWT_SECRET s'ils n'y sont pas encore.
 #
 # Ce que fait ce script, dans l'ordre :
 #   1. Vérifie que docker et le fichier de secrets sont là.
@@ -20,11 +25,11 @@ set -euo pipefail
 STACK_NAME="ondarh"
 SERVICE_NAME="ondarh-server"
 IMAGE_NAME="ondarh-server"
-ENV_FILE="${ONDA_ENV_FILE:-/root/onda.env}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 STACK_FILE="$SCRIPT_DIR/stack.yml"
+ENV_FILE="${ONDA_ENV_FILE:-$REPO_ROOT/server/.env}"
 
 # ── 1. Pré-requis ────────────────────────────────────────────────────────
 if ! command -v docker >/dev/null 2>&1; then

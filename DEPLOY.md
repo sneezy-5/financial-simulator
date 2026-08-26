@@ -40,34 +40,25 @@ et pousser après build).
 ## 3. Préparer les secrets
 
 Ne jamais mettre les vraies valeurs dans stack.yml (il pourrait finir commit).
-Créez un fichier d'environnement à part, hors du dépôt git :
+`deploy/deploy.sh` lit par défaut **`server/.env`** — le même fichier que PM2
+charge déjà via `dotenv`, jamais copié dans l'image (voir `.dockerignore`).
+Rien à dupliquer : les secrets déjà en place (SMTP, Paystack...) sont repris
+tels quels. Complétez-le juste avec ce qui manque pour Postgres/l'auth :
 
 ```bash
-nano /root/onda.env
+nano server/.env
 ```
 
-En vous basant sur [server/.env.example](server/.env.example) — au minimum :
+En vous basant sur [server/.env.example](server/.env.example) pour la liste
+complète — les deux nouvelles, à ajouter si absentes :
 ```
 POSTGRES_PASSWORD=<le mot de passe déjà utilisé par le service Postgres>
 JWT_SECRET=<générez une valeur aléatoire longue, ex: openssl rand -hex 32>
-PAYSTACK_SECRET_KEY=sk_live_...
-VITE_PAYSTACK_PUBLIC_KEY=pk_live_...
-PAYSTACK_WEBHOOK_SECRET=...
-SMTP_HOST=...
-SMTP_USER=...
-SMTP_PASS=...
-SMTP_FROM=...
 ```
 
-Chargez-les dans l'environnement du shell avant le déploiement (Swarm ne lit pas
-les fichiers `.env` automatiquement comme `docker-compose` le fait) :
-```bash
-set -a; source /root/onda.env; set +a
-```
-
-`deploy/deploy.sh` (étape 6) fait aussi ce chargement lui-même — cette étape
-manuelle ne sert que si vous voulez lancer des commandes `docker` à la main
-avant/après.
+`deploy/deploy.sh` (étape 6) charge ce fichier lui-même avant de déployer —
+rien à faire à la main, sauf si vous préférez un fichier séparé
+(`ONDA_ENV_FILE=/chemin/vers/autre.env deploy/deploy.sh`).
 
 ## 4. Adapter le stack.yml
 
@@ -108,7 +99,7 @@ Un seul script pour le premier déploiement et pour toutes les mises à jour
 suivantes — `docker stack deploy` est idempotent, la seule différence entre
 les deux est que le service existe déjà. Ce qu'il fait, dans l'ordre :
 
-1. Vérifie que `docker` est là et que `/root/onda.env` contient au minimum
+1. Vérifie que `docker` est là et que `server/.env` contient au minimum
    `POSTGRES_PASSWORD` et `JWT_SECRET`.
 2. Construit l'image, taguée avec le commit git courant **et** `:latest` — le
    tag unique garantit que Swarm détecte toujours la nouvelle version (pas
