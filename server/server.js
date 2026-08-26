@@ -275,7 +275,8 @@ app.post('/api/auth/register', async (req, res) => {
 
         res.json({ success: true, requiresVerification: true, message: "Un code de vérification a été envoyé." });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/auth/register :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -306,7 +307,8 @@ app.post('/api/auth/login', async (req, res) => {
         const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
         res.json({ success: true, token, user: { id: user.id, email: user.email, subscriptionTier: user.subscriptionTier, subscriptionExpiresAt: user.subscriptionExpiresAt, subscriptionIsTrial: user.subscriptionIsTrial, role: user.role } });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/auth/login :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -325,7 +327,8 @@ app.post('/api/auth/forgot-password', async (req, res) => {
 
         res.json({ success: true, message: "Un code de réinitialisation a été envoyé à votre adresse email" });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/auth/forgot-password :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -357,7 +360,8 @@ app.post('/api/auth/reset-password', async (req, res) => {
 
         res.json({ success: true, message: "Mot de passe réinitialisé avec succès" });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/auth/reset-password :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -387,7 +391,8 @@ app.post('/api/auth/verify-otp', async (req, res) => {
             user: { id: user.id, email: user.email, subscriptionTier: user.subscriptionTier, subscriptionExpiresAt: user.subscriptionExpiresAt, subscriptionIsTrial: user.subscriptionIsTrial, role: user.role } 
         });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/auth/verify-otp :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -402,7 +407,8 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
         userJson.bulletinCanvasLayout = userJson.bulletinCanvasLayout ? JSON.parse(userJson.bulletinCanvasLayout) : null;
         res.json({ success: true, user: userJson });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/auth/me :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -448,7 +454,8 @@ app.post('/api/auth/activate-license', authMiddleware, async (req, res) => {
             user: { id: user.id, email: user.email, subscriptionTier: user.subscriptionTier, subscriptionExpiresAt: user.subscriptionExpiresAt, subscriptionIsTrial: user.subscriptionIsTrial, role: user.role }
         });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/auth/activate-license :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -491,7 +498,8 @@ app.put('/api/auth/profile', authMiddleware, async (req, res) => {
 
         res.json({ success: true, user: updatedUser, message: "Profil mis à jour avec succès !" });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur PUT /api/auth/profile :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -783,7 +791,8 @@ app.post('/api/admin/auth/login', async (req, res) => {
             admin: { id: admin.id, email: admin.email, name: admin.name, role: admin.role }
         });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/admin/auth/login :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -795,7 +804,8 @@ app.get('/api/admin/auth/me', adminAuthMiddleware, async (req, res) => {
             admin: { id: req.admin.id, email: req.admin.email, name: req.admin.name, role: req.admin.role }
         });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/admin/auth/me :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -816,7 +826,8 @@ app.get('/api/admin/users', adminMiddleware, async (req, res) => {
         });
         res.json({ success: true, users });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/admin/users :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -842,7 +853,8 @@ app.post('/api/admin/users', adminMiddleware, async (req, res) => {
             user: { id: newUser.id, email: newUser.email, subscriptionTier: newUser.subscriptionTier, subscriptionExpiresAt: newUser.subscriptionExpiresAt, role: newUser.role, createdAt: newUser.createdAt }
         });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/admin/users :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -881,7 +893,8 @@ app.put('/api/admin/users/:id/subscription', adminMiddleware, async (req, res) =
             user: { id: targetUser.id, email: targetUser.email, subscriptionTier: targetUser.subscriptionTier, subscriptionExpiresAt: targetUser.subscriptionExpiresAt, bulletinsUsed: targetUser.bulletinsUsed }
         });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur PUT /api/admin/users/:id/subscription :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -900,7 +913,8 @@ app.put('/api/admin/users/:id/toggle-block', adminMiddleware, async (req, res) =
             message: targetUser.isBlocked ? `Compte de ${targetUser.email} suspendu.` : `Compte de ${targetUser.email} réactivé.` 
         });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur PUT /api/admin/users/:id/toggle-block :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -922,7 +936,8 @@ app.delete('/api/admin/users/:id', adminMiddleware, async (req, res) => {
         await targetUser.destroy();
         res.json({ success: true, message: `Utilisateur ${targetUser.email} supprimé avec succès.` });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur DELETE /api/admin/users/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -936,7 +951,8 @@ app.get('/api/admin/analytics/countries', adminMiddleware, async (req, res) => {
         });
         res.json({ success: true, countryStats });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/admin/analytics/countries :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -950,7 +966,8 @@ app.get('/api/billing/plans', async (req, res) => {
         const plans = await billingService.getActivePlans();
         res.json({ success: true, plans });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/billing/plans :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -963,7 +980,8 @@ app.get('/api/billing/invoices', authMiddleware, async (req, res) => {
         });
         res.json({ success: true, invoices });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/billing/invoices :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1001,7 +1019,8 @@ app.get('/api/billing/invoices/:id/download', authMiddleware, async (req, res) =
         res.setHeader('Content-Disposition', `attachment; filename="${path.basename(actualPdfPath)}"`);
         fs.createReadStream(actualPdfPath).pipe(res);
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/billing/invoices/:id/download :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1017,7 +1036,8 @@ app.get('/api/admin/subscription-plans', adminMiddleware, async (req, res) => {
         });
         res.json({ success: true, plans });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/admin/subscription-plans :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1042,7 +1062,8 @@ app.post('/api/admin/subscription-plans', adminMiddleware, async (req, res) => {
 
         res.json({ success: true, plan: newPlan, message: "Formule d'abonnement créée avec succès !" });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/admin/subscription-plans :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1065,7 +1086,8 @@ app.put('/api/admin/subscription-plans/:id', adminMiddleware, async (req, res) =
         await plan.save();
         res.json({ success: true, plan, message: "Formule mise à jour avec succès !" });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur PUT /api/admin/subscription-plans/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1078,7 +1100,8 @@ app.delete('/api/admin/subscription-plans/:id', adminMiddleware, async (req, res
         await plan.destroy();
         res.json({ success: true, message: "Formule d'abonnement supprimée." });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur DELETE /api/admin/subscription-plans/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1150,7 +1173,8 @@ app.post('/api/licenses/activate', async (req, res) => {
         if (!result.ok) return res.status(400).json({ error: result.message, reason: result.reason });
         res.json({ success: true, token: result.token, expiresAt: result.expiresAt });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/licenses/activate :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1162,7 +1186,8 @@ app.post('/api/licenses/verify', async (req, res) => {
         if (!result.ok) return res.status(400).json({ error: result.message, reason: result.reason });
         res.json({ success: true, token: result.token, expiresAt: result.expiresAt });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/licenses/verify :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1218,7 +1243,8 @@ app.get('/api/admin/licenses', adminMiddleware, async (req, res) => {
         const licenses = await License.findAll({ order: [['createdAt', 'DESC']] });
         res.json({ success: true, licenses });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/admin/licenses :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1239,7 +1265,8 @@ app.post('/api/admin/licenses', adminMiddleware, async (req, res) => {
 
         res.json({ success: true, license, message: "Licence créée avec succès. Transmettez la clé à l'entreprise." });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/admin/licenses :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1264,7 +1291,8 @@ app.put('/api/admin/licenses/:id', adminMiddleware, async (req, res) => {
         await license.save();
         res.json({ success: true, license, message: "Licence mise à jour avec succès !" });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur PUT /api/admin/licenses/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1277,7 +1305,8 @@ app.delete('/api/admin/licenses/:id', adminMiddleware, async (req, res) => {
         await license.destroy();
         res.json({ success: true, message: "Licence supprimée." });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur DELETE /api/admin/licenses/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1299,7 +1328,8 @@ app.get('/api/bank-loans', async (req, res) => {
         });
         res.json({ success: true, loans });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/bank-loans :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1311,7 +1341,8 @@ app.get('/api/admin/bank-loans', adminMiddleware, async (req, res) => {
         });
         res.json({ success: true, loans });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/admin/bank-loans :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1338,7 +1369,8 @@ app.post('/api/admin/bank-loans', adminMiddleware, async (req, res) => {
 
         res.json({ success: true, loan: newLoan, message: "Offre de prêt bancaire créée avec succès !" });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/admin/bank-loans :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1363,7 +1395,8 @@ app.put('/api/admin/bank-loans/:id', adminMiddleware, async (req, res) => {
         await loan.save();
         res.json({ success: true, loan, message: "Offre mise à jour !" });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur PUT /api/admin/bank-loans/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1376,7 +1409,8 @@ app.delete('/api/admin/bank-loans/:id', adminMiddleware, async (req, res) => {
         await loan.destroy();
         res.json({ success: true, message: "Offre de prêt supprimée." });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur DELETE /api/admin/bank-loans/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1422,7 +1456,7 @@ app.post('/api/rh/extract-headers', authMiddleware, upload.single('file'), (req,
         res.json({ success: true, headers, sheetNames: workbook.SheetNames, selectedSheet: sheetName });
     } catch (error) {
         console.error("Erreur extraction en-têtes:", error);
-        res.status(500).json({ error: error.message || "Erreur de lecture du fichier" });
+        res.status(500).json({ error: "Erreur de lecture du fichier" });
     }
 });
 
@@ -1451,7 +1485,7 @@ app.post('/api/rh/import/classeur', authMiddleware, upload.single('file'), (req,
         res.json({ success: true, ...lu });
     } catch (e) {
         console.error('Lecture du classeur :', e.message);
-        res.status(400).json({ error: e.message });
+        res.status(400).json({ error: "Requête invalide." });
     } finally {
         if (chemin && fs.existsSync(chemin)) fs.unlinkSync(chemin);
     }
@@ -1481,7 +1515,7 @@ app.post('/api/rh/extract-data', authMiddleware, upload.single('file'), (req, re
         res.json({ success: true, data });
     } catch (error) {
         console.error("Erreur extraction données:", error);
-        res.status(500).json({ error: error.message || "Erreur de lecture du fichier" });
+        res.status(500).json({ error: "Erreur de lecture du fichier" });
     }
 });
 
@@ -1498,7 +1532,7 @@ app.post('/api/rh/smart-mapping', authMiddleware, async (req, res) => {
         res.json({ success: true, mapping });
     } catch (e) {
         console.error('Erreur smart mapping IA:', e.message);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1738,7 +1772,7 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
 
     } catch (error) {
         console.error("Erreur RH:", error);
-        res.status(500).json({ error: error.message || "Erreur lors du traitement" });
+        res.status(500).json({ error: "Erreur lors du traitement" });
     }
 });
 
@@ -1757,7 +1791,8 @@ app.get('/api/rh/periods', authMiddleware, async (req, res) => {
         }));
         res.json({ success: true, periods: periodsWithCount });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/rh/periods :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1771,7 +1806,8 @@ app.get('/api/rh/periods/:id', authMiddleware, async (req, res) => {
         const records = await PayslipRecord.findAll({ where: { periodId: period.id } });
         res.json({ success: true, period, records });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/rh/periods/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1849,7 +1885,8 @@ app.get('/api/rh/employees/:matricule/stats', authMiddleware, async (req, res) =
             }
         });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/rh/employees/:matricule/stats :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -1987,7 +2024,8 @@ app.get('/api/rh/analytics/company', authMiddleware, async (req, res) => {
             }
         });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/rh/analytics/company :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2052,7 +2090,7 @@ app.post('/api/rh/generate-single-payslip', authMiddleware, async (req, res) => 
         res.send(pdfBuffer);
     } catch (error) {
         console.error('Erreur génération bulletin individuel:', error);
-        res.status(500).json({ error: error.message || 'Erreur lors de la génération' });
+        res.status(500).json({ error: "Erreur lors de la génération" });
     }
 });
 
@@ -2081,7 +2119,8 @@ app.get('/api/rh/bulletin-canvas-layout', authMiddleware, async (req, res) => {
             page: payrollService.CANVAS_PAGE
         });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/rh/bulletin-canvas-layout :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2100,7 +2139,7 @@ app.post('/api/rh/bulletin-canvas-ia', authMiddleware, async (req, res) => {
         res.json({ success: true, ...resultat });
     } catch (e) {
         console.error('Erreur IA canvas bulletin:', e.message);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2141,7 +2180,7 @@ app.post('/api/rh/bulletin-canvas-from-pdf', authMiddleware, async (req, res) =>
         res.json({ success: true, layout, message, stats });
     } catch (e) {
         console.error('Erreur import PDF canvas:', e.message);
-        res.status(500).json({ error: e.message || "Erreur lors de l'import" });
+        res.status(500).json({ error: "Erreur lors de l'import" });
     }
 });
 
@@ -2186,7 +2225,7 @@ app.post('/api/rh/preview-bulletin-style', authMiddleware, async (req, res) => {
         res.send(pdfBuffer);
     } catch (error) {
         console.error('Erreur aperçu modèle de bulletin:', error);
-        res.status(500).json({ error: error.message || "Erreur lors de l'aperçu" });
+        res.status(500).json({ error: "Erreur lors de l'aperçu" });
     }
 });
 
@@ -2203,7 +2242,7 @@ app.post('/api/rh/generate-stc', async (req, res) => {
         res.send(pdfBuffer);
     } catch (error) {
         console.error('Erreur génération STC:', error);
-        res.status(500).json({ error: error.message || 'Erreur lors de la génération' });
+        res.status(500).json({ error: "Erreur lors de la génération" });
     }
 });
 
@@ -2216,7 +2255,7 @@ app.post('/api/loans/scrape', async (req, res) => {
         res.json({ success: true, results });
     } catch (e) {
         console.error("Erreur scraping:", e);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2332,7 +2371,7 @@ app.get('/api/admin/subscription-plans', adminAuthMiddleware, async (req, res) =
         res.json({ plans });
     } catch (e) {
         console.error('Erreur lecture plans:', e.message);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2354,7 +2393,7 @@ app.post('/api/admin/subscription-plans', adminAuthMiddleware, async (req, res) 
             return res.status(409).json({ error: `Un plan avec le code "${req.body.code}" existe déjà.` });
         }
         console.error('Erreur création plan:', e.message);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2373,7 +2412,7 @@ app.put('/api/admin/subscription-plans/:id', adminAuthMiddleware, async (req, re
         res.json({ plan });
     } catch (e) {
         console.error('Erreur mise à jour plan:', e.message);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2386,7 +2425,7 @@ app.delete('/api/admin/subscription-plans/:id', adminAuthMiddleware, async (req,
         res.json({ success: true });
     } catch (e) {
         console.error('Erreur suppression plan:', e.message);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2400,7 +2439,8 @@ app.get('/api/admin/licenses', adminAuthMiddleware, async (req, res) => {
         const licenses = await License.findAll({ order: [['createdAt', 'DESC']] });
         res.json({ licenses });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/admin/licenses :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2452,7 +2492,7 @@ app.post('/api/admin/licenses', adminAuthMiddleware, async (req, res) => {
         res.json({ license });
     } catch (e) {
         console.error('Erreur création licence:', e.message);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2471,7 +2511,7 @@ app.put('/api/admin/licenses/:id', adminAuthMiddleware, async (req, res) => {
         res.json({ license });
     } catch (e) {
         console.error('Erreur mise à jour licence:', e.message);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2483,7 +2523,8 @@ app.delete('/api/admin/licenses/:id', adminAuthMiddleware, async (req, res) => {
         await license.destroy();
         res.json({ success: true });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur DELETE /api/admin/licenses/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2493,7 +2534,8 @@ app.get('/api/billing/plans', async (req, res) => {
         const plans = await SubscriptionPlan.findAll({ where: { active: true }, order: [['price', 'ASC']] });
         res.json({ plans });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/billing/plans :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2552,7 +2594,8 @@ app.get('/api/hr/employees', authMiddleware, async (req, res) => {
         const employees = await Employee.findAll({ where: { userId: req.user.id } });
         res.json({ employees: employees.map(employeVersClient) });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/hr/employees :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 app.post('/api/hr/employees', authMiddleware, async (req, res) => {
@@ -2560,7 +2603,8 @@ app.post('/api/hr/employees', authMiddleware, async (req, res) => {
         const emp = await Employee.create({ ...employeVersModele(req.body), userId: req.user.id });
         res.json({ employee: employeVersClient(emp) });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/hr/employees :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 app.put('/api/hr/employees/:id', authMiddleware, async (req, res) => {
@@ -2570,7 +2614,8 @@ app.put('/api/hr/employees/:id', authMiddleware, async (req, res) => {
         await emp.update(employeVersModele(req.body));
         res.json({ employee: employeVersClient(emp) });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur PUT /api/hr/employees/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 app.delete('/api/hr/employees/:id', authMiddleware, async (req, res) => {
@@ -2580,7 +2625,8 @@ app.delete('/api/hr/employees/:id', authMiddleware, async (req, res) => {
         await emp.destroy();
         res.json({ success: true });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur DELETE /api/hr/employees/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2594,7 +2640,8 @@ app.get('/api/hr/templates', authMiddleware, async (req, res) => {
         const templates = lignes.map(l => JSON.parse(l.payload));
         res.json({ templates });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/hr/templates :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 app.post('/api/hr/templates', authMiddleware, async (req, res) => {
@@ -2611,7 +2658,8 @@ app.post('/api/hr/templates', authMiddleware, async (req, res) => {
         }
         res.json({ template });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/hr/templates :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 app.delete('/api/hr/templates/:id', authMiddleware, async (req, res) => {
@@ -2619,7 +2667,8 @@ app.delete('/api/hr/templates/:id', authMiddleware, async (req, res) => {
         await Template.destroy({ where: { templateId: req.params.id, userId: req.user.id } });
         res.json({ success: true });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur DELETE /api/hr/templates/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2642,7 +2691,8 @@ app.get('/api/hr/absences', authMiddleware, async (req, res) => {
         const absences = await Absence.findAll({ where: { userId: req.user.id }, include: [Employee] });
         res.json({ absences: absences.map(absenceVersClient) });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/hr/absences :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 app.post('/api/hr/absences', authMiddleware, async (req, res) => {
@@ -2652,7 +2702,8 @@ app.post('/api/hr/absences', authMiddleware, async (req, res) => {
         const abs = await Absence.findByPk(created.id, { include: [Employee] });
         res.json({ absence: absenceVersClient(abs) });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/hr/absences :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 app.put('/api/hr/absences/:id', authMiddleware, async (req, res) => {
@@ -2664,7 +2715,8 @@ app.put('/api/hr/absences/:id', authMiddleware, async (req, res) => {
         const misAJour = await Absence.findByPk(abs.id, { include: [Employee] });
         res.json({ absence: absenceVersClient(misAJour) });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur PUT /api/hr/absences/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 app.delete('/api/hr/absences/:id', authMiddleware, async (req, res) => {
@@ -2674,7 +2726,8 @@ app.delete('/api/hr/absences/:id', authMiddleware, async (req, res) => {
         await abs.destroy();
         res.json({ success: true });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur DELETE /api/hr/absences/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2684,7 +2737,8 @@ app.get('/api/hr/formations', authMiddleware, async (req, res) => {
         const formations = await Formation.findAll({ where: { userId: req.user.id }, include: [Employee] });
         res.json({ formations });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/hr/formations :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 app.post('/api/hr/formations', authMiddleware, async (req, res) => {
@@ -2692,7 +2746,8 @@ app.post('/api/hr/formations', authMiddleware, async (req, res) => {
         const form = await Formation.create({ ...req.body, userId: req.user.id });
         res.json({ formation: form });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/hr/formations :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 app.put('/api/hr/formations/:id', authMiddleware, async (req, res) => {
@@ -2702,7 +2757,8 @@ app.put('/api/hr/formations/:id', authMiddleware, async (req, res) => {
         await form.update(req.body);
         res.json({ formation: form });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur PUT /api/hr/formations/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 app.delete('/api/hr/formations/:id', authMiddleware, async (req, res) => {
@@ -2712,7 +2768,8 @@ app.delete('/api/hr/formations/:id', authMiddleware, async (req, res) => {
         await form.destroy();
         res.json({ success: true });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur DELETE /api/hr/formations/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2722,7 +2779,8 @@ app.get('/api/hr/evaluations', authMiddleware, async (req, res) => {
         const evaluations = await Evaluation.findAll({ where: { userId: req.user.id }, include: [Employee] });
         res.json({ evaluations });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur GET /api/hr/evaluations :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 app.post('/api/hr/evaluations', authMiddleware, async (req, res) => {
@@ -2730,7 +2788,8 @@ app.post('/api/hr/evaluations', authMiddleware, async (req, res) => {
         const eval = await Evaluation.create({ ...req.body, userId: req.user.id });
         res.json({ evaluation: eval });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/hr/evaluations :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 app.put('/api/hr/evaluations/:id', authMiddleware, async (req, res) => {
@@ -2740,7 +2799,8 @@ app.put('/api/hr/evaluations/:id', authMiddleware, async (req, res) => {
         await eval.update(req.body);
         res.json({ evaluation: eval });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur PUT /api/hr/evaluations/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 app.delete('/api/hr/evaluations/:id', authMiddleware, async (req, res) => {
@@ -2750,7 +2810,8 @@ app.delete('/api/hr/evaluations/:id', authMiddleware, async (req, res) => {
         await eval.destroy();
         res.json({ success: true });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur DELETE /api/hr/evaluations/:id :', e);
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2802,7 +2863,7 @@ app.post('/api/ai/analyse', limiterIaPublique, async (req, res) => {
         res.json({ success: true, analyse });
     } catch (e) {
         console.error('Erreur IA analyse:', e.message);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2820,7 +2881,7 @@ app.post('/api/ai/chat', limiterIaPublique, async (req, res) => {
         res.json({ success: true, reponse });
     } catch (e) {
         console.error('Erreur IA chat:', e.message);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2863,7 +2924,8 @@ app.post('/api/rh/analyze-pdf-template', authMiddleware, async (req, res) => {
     try {
         if (!(await gateAiAccess(req, res))) return;
     } catch (e) {
-        return res.status(500).json({ error: e.message });
+        console.error('❌ Erreur sur POST /api/rh/analyze-pdf-template :', e);
+        return res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
     const { imageBase64, textItems, pageSize, refinePasses, docType, fileBase64, engine: forced } = req.body;
 
@@ -2954,7 +3016,7 @@ app.post('/api/rh/analyze-pdf-template', authMiddleware, async (req, res) => {
         res.json({ success: true, engine: 'ai-vision', engineVersion: 0, htmlTemplate });
     } catch (e) {
         console.error('Erreur IA Auto-Mapping:', e.message);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -2990,7 +3052,7 @@ app.post('/api/rh/upload-template', authMiddleware, upload.single('file'), async
         });
     } catch (e) {
         console.error('Erreur upload-template:', e);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     } finally {
         if (req.file && require('fs').existsSync(req.file.path)) {
             require('fs').unlinkSync(req.file.path);
@@ -3042,7 +3104,7 @@ app.post('/api/rh/fill-docx', authMiddleware, async (req, res) => {
         });
     } catch (e) {
         console.error('Erreur remplissage DOCX:', e);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 
@@ -3107,7 +3169,7 @@ app.post('/api/rh/generate-payroll-docx', authMiddleware, async (req, res) => {
 
     } catch (e) {
         console.error('Erreur génération ZIP DOCX:', e);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
 /**
@@ -3154,7 +3216,7 @@ app.post('/api/rh/office/analyser', authMiddleware, async (req, res) => {
         });
     } catch (e) {
         console.error('Analyse du modèle Office :', e.message);
-        res.status(400).json({ error: e.message });
+        res.status(400).json({ error: "Requête invalide." });
     }
 });
 
@@ -3179,7 +3241,7 @@ app.post('/api/rh/office/gabarit', authMiddleware, async (req, res) => {
         });
     } catch (e) {
         console.error('Génération du gabarit Office :', e.message);
-        res.status(400).json({ error: e.message });
+        res.status(400).json({ error: "Requête invalide." });
     }
 });
 
@@ -3212,7 +3274,7 @@ app.post('/api/rh/office/remplir', authMiddleware, async (req, res) => {
         });
     } catch (e) {
         console.error('Remplissage du gabarit Office :', e.message);
-        res.status(400).json({ error: e.message });
+        res.status(400).json({ error: "Requête invalide." });
     }
 });
 
@@ -3290,11 +3352,18 @@ app.all('/api/*', (req, res) => {
  * cause. Mieux vaut un message exact qu'un symptôme.
  */
 app.use((err, req, res, next) => {
-    console.error(`Erreur non rattrapée sur ${req.method} ${req.path} :`, err.message);
+    console.error(`❌ Erreur non rattrapée sur ${req.method} ${req.path} :`, err);
     if (res.headersSent) return next(err);
     const statut = err.status || err.statusCode || 500;
+    // En dessous de 500, l'erreur est délibérément levée avec un statut (donc
+    // un message pensé pour le client). À 500 (exception non prévue), le
+    // message brut peut contenir des détails internes (chemins, requêtes SQL,
+    // noms de modules...) — jamais à exposer, d'où le message générique.
+    const messageClient = statut < 500 && err.message
+        ? err.message
+        : 'Une erreur interne est survenue. Veuillez réessayer plus tard.';
     res.status(statut).json({
-        error: err.message || 'Erreur interne du serveur',
+        error: messageClient,
         route: `${req.method} ${req.path}`
     });
 });
