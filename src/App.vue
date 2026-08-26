@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { api, LABELS } from './services/mockData'
+import { isCountryActive, ACTIVE_COUNTRIES } from './services/countryConfig.js'
 import AdminDashboard from './components/AdminDashboard.vue'
 import HRPayroll from './components/HRPayroll.vue'
 import AppHome from './components/AppHome.vue'
@@ -14,7 +15,7 @@ import LandingPage from '../enterprise-site/src/App.vue'
 import { user, fetchMe, logout } from './services/auth'
 import { localDb } from './services/localDatabase.js'
 import { toastState, showToast } from './services/toast.js'
-import { confirmState, resolveConfirm } from './services/confirmModal.js'
+import { confirmState, resolveConfirm, showConfirm } from './services/confirmModal.js'
 import { lastPaymentNotification } from './services/socketService.js'
 
 // ══════════════════════════════════════════════════════════════
@@ -36,7 +37,16 @@ const handleLicenseUnlocked = (key) => {
 
 const step = ref(1)
 const urlParams = new URLSearchParams(window.location.search)
-const currentCountry = ref(urlParams.get('country') || 'CI')
+/**
+ * Un pays désactivé ne doit pas pouvoir être imposé par l'URL : un lien déjà
+ * ouvert ou un favori ancien appliquerait sinon une réglementation qui n'a pas
+ * encore été éprouvée sur de vrais bulletins.
+ */
+const normaliserPays = (code) => {
+  const c = (code || '').toUpperCase()
+  return isCountryActive(c) ? c : ACTIVE_COUNTRIES[0]
+}
+const currentCountry = ref(normaliserPays(urlParams.get('country')))
 
 const isSimulatorMode = import.meta.env.VITE_APP_MODE === 'simulator'
 
@@ -101,9 +111,14 @@ const checkSchedule = async () => {
       if (today.getDate() >= genDay) {
          const lastGenMonth = await localDb.getSetting('lastGenerationMonth', -1)
          if (lastGenMonth !== today.getMonth()) {
-           if (confirm(`📅 Rappel de paie : C'est le moment de générer la paie du mois ! (Paramétrée au ${genDay} du mois). Voulez-vous aller à l'espace RH maintenant ?`)) {
-              await localDb.saveSetting('lastGenerationMonth', today.getMonth())
-              naviguer('hr')
+           // showConfirm et non confirm : le second est réécrit et rend toujours false.
+           const allerRH = await showConfirm(
+             `Rappel de paie : c'est le moment de générer la paie du mois (paramétrée au ${genDay} du mois). Voulez-vous aller à l'espace RH maintenant ?`,
+             { title: 'Rappel de paie', confirmLabel: "Aller à l'espace RH", cancelLabel: 'Plus tard', type: 'info' }
+           )
+           if (allerRH) {
+             await localDb.saveSetting('lastGenerationMonth', today.getMonth())
+             naviguer('hr')
            }
          }
       }
@@ -663,8 +678,8 @@ function initDeeplink() {
 
     // 1. Détection du Pays
     const cParam = searchParams.get('country')
-    if (cParam && ['CI', 'BJ', 'TG', 'ML', 'BF', 'SN', 'CM', 'GA'].includes(cParam.toUpperCase())) {
-      currentCountry.value = cParam.toUpperCase()
+    if (cParam) {
+      currentCountry.value = normaliserPays(cParam)
     }
 
     // 2. Détection du Type RH / Sous-module (habituel, conges, import, solde)
@@ -2049,6 +2064,15 @@ const toggleNotifMenu = () => {
   margin: 0 auto;
   opacity: 0;
   animation: fadeIn 0.5s ease-out forwards;
+}
+
+/* En dessous de 900px, .hr-wrapper (dans HRPayroll.vue) se fixe lui-même
+ * entre l'en-tête et la barre des tâches — ce padding ne ferait plus que
+ * créer un espace vide au-dessus de lui. */
+@media (max-width: 900px) {
+  .hr-page-content {
+    padding: 0;
+  }
 }
 
 @keyframes fadeIn {

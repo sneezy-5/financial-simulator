@@ -1,0 +1,71 @@
+# Stack réel — dérivé de stack.example.yml.
+#
+# Réseau confirmé : whatsapp-network.
+# La connexion DB passe par PgBouncer (service infra_pgbouncer, port 6432),
+# pas directement par Postgres — c'est lui qui figure dans DATABASE_URL.
+#
+# Reste à combler avant `docker stack deploy` :
+#   1. `image:` — après `docker build -t onda-server:latest .` (voir DEPLOY.md
+#      étape 2 ; laissez tel quel si swarm à un seul nœud).
+#   2. Dans DATABASE_URL : `onda_user`/`onda_prod` sont des PLACEHOLDERS —
+#      remplacez par le vrai nom d'utilisateur et de base configurés côté
+#      Postgres/PgBouncer. PgBouncer refuse souvent une base non déclarée dans
+#      son propre pgbouncer.ini ([databases]) : vérifiez qu'"onda_prod" (ou le
+#      nom que vous visez) y figure, sinon la connexion échouera même avec le
+#      bon mot de passe.
+#   3. Confirmez qu'infra_pgbouncer est bien attaché à whatsapp-network :
+#      `docker service inspect infra_pgbouncer --format '{{json .Spec.TaskTemplate.Networks}}'`
+#      — sinon les deux services ne se verront pas malgré ce fichier.
+#   4. Les secrets (${...}) sont lus depuis l'environnement du shell au moment
+#      du déploiement : `set -a; source /root/onda.env; set +a` avant de lancer
+#      `docker stack deploy` (voir DEPLOY.md étape 3).
+#
+# Piège classique avec PgBouncer : en mode "transaction pooling" (le plus
+# courant), les requêtes préparées (prepared statements) ne fonctionnent pas
+# de façon fiable — Sequelize/pg peuvent alors échouer par intermittence avec
+# des erreurs du style "prepared statement already exists". Si ça arrive après
+# le premier déploiement, la piste est `pgbouncer.ini` (pool_mode) côté infra,
+# pas ce fichier.
+
+version: "3.8"
+
+services:
+  ondarh-server:
+    image: ${ONDA_IMAGE:-ondarh-server:latest}
+    environment:
+      DATABASE_URL: postgres://root:${POSTGRES_PASSWORD}@infra_pgbouncer:6432/onda_rh
+      DB_SSL: "false"
+      JWT_SECRET: ${JWT_SECRET}
+      PAYSTACK_SECRET_KEY: ${PAYSTACK_SECRET_KEY}
+      VITE_PAYSTACK_PUBLIC_KEY: ${VITE_PAYSTACK_PUBLIC_KEY}
+      PAYSTACK_WEBHOOK_SECRET: ${PAYSTACK_WEBHOOK_SECRET}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      VITE_APP_MODE: pro
+    ports:
+      - "3002:3002"          # seul port exposé à l'extérieur — jamais celui de Postgres
+    networks:
+      - whatsapp-network
+    volumes:
+      # server/uploads/ (chemin réel dans l'image : /app/server/uploads, voir
+      # WORKDIR dans le Dockerfile) contient les ZIP de bulletins générés,
+      # servis ensuite via /api/rh/download/:filename — sans volume, ils
+      # disparaissent à chaque recréation du conteneur (redéploiement, crash,
+      # mise à jour). Un volume nommé local suffit tant que le swarm est à un
+      # seul nœud (`docker node ls`) — sur plusieurs nœuds, Swarm peut
+      # replanifier la tâche ailleurs et se retrouver avec un volume vide.
+      - onda_uploads:/app/server/uploads
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+networks:
+  whatsapp-network:
+    external: true            # le réseau existe déjà (créé avec le stack Postgres)
+
+volumes:
+  onda_uploads:

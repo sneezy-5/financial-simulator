@@ -19,9 +19,36 @@ const bodyParser = require('body-parser');
 const http = require('http');
 const { Server } = require('socket.io');
 const { Sequelize } = require('sequelize');
-const { Visit, PayrollRequest, User, AdminUser, SubscriptionPlan, BankLoan, Transaction, Invoice, License, PayrollPeriod, PayslipRecord, Employee, Absence, Formation, Evaluation, LocalSettings } = require('./database');
+const { Visit, PayrollRequest, User, AdminUser, SubscriptionPlan, BankLoan, Transaction, Invoice, License, PayrollPeriod, PayslipRecord, Employee, Absence, Formation, Evaluation, Template, LocalSettings } = require('./database');
 const payrollService = require('./payrollService');
 const aiService = require('./aiService');
+const templateEngine = require('./templateEngine');
+const docEngine = require('./docengine');
+const { irToCanvasLayout } = require('./docengine/toCanvasLayout');
+const { createAiDetector } = require('./docengine/detect/aiDetect');
+const { createProseAiDetector } = require('./docengine/detect/proseAi');
+const { checkConformity } = require('./docengine/conformity');
+const { extraireOffice } = require('./docengine/office/officeExtract');
+const { analyserModele } = require('./docengine/office/officeAnalyse');
+const { poserVariables, remplir: remplirOffice } = require('./docengine/office/officeRemplir');
+const { listerTypes: listerTypesDocuments } = require('./docengine/office/typesDocuments');
+const { construireClasseur } = require('./import/classeurModele');
+const { lireClasseur } = require('./import/classeurLecture');
+
+// Le moteur ne connaît aucun fournisseur d'IA : on lui injecte le nôtre. L'IA
+// n'intervient que sur les fragments que le lexique métier n'a pas su nommer,
+// et chacune de ses réponses est vérifiée contre le texte réellement extrait.
+const askModel = (maxTokens) => async (prompt) =>
+    aiService.callOpenRouter([{ role: 'user', content: prompt }], { maxTokens, temperature: 0 });
+
+docEngine.registerDetector(createAiDetector(askModel(1500)));
+
+// Sur un document RÉDIGÉ, la structure ne porte aucun sens : « je soussigné »
+// désigne l'employeur dans une attestation et le salarié dans une demande de
+// congés. Aucun motif ne peut trancher, seule la lecture du document le peut.
+// Le modèle propose des portions de texte ; chacune doit exister telle quelle
+// dans le texte extrait du PDF pour être retenue.
+docEngine.registerDetector(createProseAiDetector(askModel(1200)));
 const emailService = require('./emailService');
 const billingService = require('./billingService');
 const invoiceService = require('./invoiceService');
@@ -111,6 +138,36 @@ const authMiddleware = async (req, res, next) => {
         return res.status(401).json({ error: "Token invalide ou expiré" });
     }
 };
+
+/**
+ * Portail commun aux routes qui appellent un modèle IA (coût réel par appel).
+ * Binaire : abonnement Pro (ou supérieur) actif = accès illimité ; sinon,
+ * chaque appel consomme une unité de l'allocation gratuite mensuelle (même
+ * pool que la génération groupée de bulletins). Pas de crédits à acheter à la
+ * pièce — c'est l'abonnement Pro qui donne accès, rien d'autre.
+ *
+ * Doit être appelé après authMiddleware (a besoin de req.user.id). Renvoie
+ * l'utilisateur si l'accès est accordé (et décrémente déjà l'unité gratuite le
+ * cas échéant), ou envoie directement la réponse 402 et renvoie null.
+ */
+async function gateAiAccess(req, res) {
+    const userObj = await User.findByPk(req.user.id);
+    if (!userObj) {
+        res.status(404).json({ error: "Utilisateur non trouvé" });
+        return null;
+    }
+    await billingService.ensureFreeMonthlyPeriod(userObj);
+    const access = billingService.checkAiAccess(userObj);
+    if (!access.ok) {
+        res.status(402).json({ error: billingService.quotaErrorMessage(access.reason), reason: access.reason });
+        return null;
+    }
+    if (access.useFreeMonthly) {
+        userObj.freeMonthlyUsed = (userObj.freeMonthlyUsed || 0) + 1;
+        await userObj.save();
+    }
+    return userObj;
+}
 
 // Route de santé pour le monitoring/débogage
 app.get('/api/health', (req, res) => {
@@ -334,7 +391,12 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
     try {
         const user = await User.findByPk(req.user.id, { attributes: { exclude: ['password'] } });
         if (!user) return res.status(404).json({ error: "Utilisateur introuvable" });
-        res.json({ success: true, user });
+        const userJson = user.toJSON();
+        // Stocké en JSON (colonne texte) : reparsé pour que le client
+        // manipule toujours un objet, jamais une chaîne à re-parser lui-même.
+        userJson.rubriqueCodes = userJson.rubriqueCodes ? JSON.parse(userJson.rubriqueCodes) : null;
+        userJson.bulletinCanvasLayout = userJson.bulletinCanvasLayout ? JSON.parse(userJson.bulletinCanvasLayout) : null;
+        res.json({ success: true, user: userJson });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -392,17 +454,36 @@ app.put('/api/auth/profile', authMiddleware, async (req, res) => {
         const user = await User.findByPk(req.user.id);
         if (!user) return res.status(404).json({ error: "Utilisateur introuvable" });
 
-        const { name, companyName, phone, accountType, companyNumeroCnps, companyNumeroContribuable } = req.body;
+        const {
+            name, companyName, phone, accountType, companyNumeroCnps, companyNumeroContribuable, companyLogo,
+            companyAdresse, companyTelephone, companyEmail, companyVille, companySignataireNom, companySignataireFonction,
+            defaultBulletinStyle, rubriqueCodes, bulletinCouleur, bulletinCanvasLayout
+        } = req.body;
         if (name !== undefined) user.name = name;
         if (companyName !== undefined) user.companyName = companyName;
         if (phone !== undefined) user.phone = phone;
         if (accountType !== undefined) user.accountType = accountType;
         if (companyNumeroCnps !== undefined) user.companyNumeroCnps = companyNumeroCnps;
         if (companyNumeroContribuable !== undefined) user.companyNumeroContribuable = companyNumeroContribuable;
+        if (companyLogo !== undefined) user.companyLogo = companyLogo;
+        if (companyAdresse !== undefined) user.companyAdresse = companyAdresse;
+        if (companyTelephone !== undefined) user.companyTelephone = companyTelephone;
+        if (companyEmail !== undefined) user.companyEmail = companyEmail;
+        if (companyVille !== undefined) user.companyVille = companyVille;
+        if (companySignataireNom !== undefined) user.companySignataireNom = companySignataireNom;
+        if (companySignataireFonction !== undefined) user.companySignataireFonction = companySignataireFonction;
+        if (defaultBulletinStyle !== undefined) user.defaultBulletinStyle = defaultBulletinStyle;
+        // Stocké en JSON (colonne texte) ; { } explicitement envoyé remet aux
+        // valeurs par défaut ONDA plutôt que de laisser d'anciens codes traîner.
+        if (rubriqueCodes !== undefined) user.rubriqueCodes = rubriqueCodes ? JSON.stringify(rubriqueCodes) : null;
+        if (bulletinCouleur !== undefined) user.bulletinCouleur = bulletinCouleur || null;
+        if (bulletinCanvasLayout !== undefined) user.bulletinCanvasLayout = bulletinCanvasLayout ? JSON.stringify(bulletinCanvasLayout) : null;
 
         await user.save();
         const updatedUser = user.toJSON();
         delete updatedUser.password;
+        updatedUser.rubriqueCodes = updatedUser.rubriqueCodes ? JSON.parse(updatedUser.rubriqueCodes) : null;
+        updatedUser.bulletinCanvasLayout = updatedUser.bulletinCanvasLayout ? JSON.parse(updatedUser.bulletinCanvasLayout) : null;
 
         res.json({ success: true, user: updatedUser, message: "Profil mis à jour avec succès !" });
     } catch (e) {
@@ -1299,7 +1380,11 @@ app.delete('/api/admin/bank-loans/:id', adminMiddleware, async (req, res) => {
 // ROUTES RH (Extraction & PDF)
 // ==========================================
 
-app.post('/api/rh/extract-headers', upload.single('file'), (req, res) => {
+// Réservé au module RH (annuaire/contrats/saisie mensuelle) — jamais utilisé
+// par les simulateurs publics (bulletin, congés, STC), qui n'exigent pas de
+// compte. Voir HRPayroll.vue : ces modules sont exclus de la liste autorisée
+// en VITE_APP_MODE=simulator.
+app.post('/api/rh/extract-headers', authMiddleware, upload.single('file'), (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: "Aucun fichier fourni" });
@@ -1337,7 +1422,38 @@ app.post('/api/rh/extract-headers', upload.single('file'), (req, res) => {
     }
 });
 
-app.post('/api/rh/extract-data', upload.single('file'), (req, res) => {
+/**
+ * POST /api/rh/import/classeur
+ *
+ * Lit le classeur unique et rend ses trois volets separes. Rien n'est
+ * enregistre ici : le client decide quoi conserver, et voit d'abord ce qui
+ * a ete compris.
+ */
+app.post('/api/rh/import/classeur', authMiddleware, upload.single('file'), (req, res) => {
+    let chemin = null;
+    try {
+        if (!req.file) return res.status(400).json({ error: 'Aucun fichier fourni.' });
+        chemin = req.file.path;
+        const classeur = XLSX.readFile(chemin, { cellDates: true });
+        const lu = lireClasseur(XLSX, classeur);
+
+        if (!lu.feuillesLues.length) {
+            return res.status(400).json({
+                error: "Aucune feuille reconnue. Le classeur doit contenir au moins une feuille ENTREPRISE, EMPLOYES ou CONTRATS.",
+                feuillesTrouvees: classeur.SheetNames
+            });
+        }
+
+        res.json({ success: true, ...lu });
+    } catch (e) {
+        console.error('Lecture du classeur :', e.message);
+        res.status(400).json({ error: e.message });
+    } finally {
+        if (chemin && fs.existsSync(chemin)) fs.unlinkSync(chemin);
+    }
+});
+
+app.post('/api/rh/extract-data', authMiddleware, upload.single('file'), (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: "Aucun fichier fourni" });
@@ -1369,6 +1485,7 @@ app.post('/api/rh/extract-data', upload.single('file'), (req, res) => {
 // par mots-clés déjà calculé côté frontend ; ne bloque jamais l'import en cas d'échec)
 app.post('/api/rh/smart-mapping', authMiddleware, async (req, res) => {
     try {
+        if (!(await gateAiAccess(req, res))) return;
         const { headers, fields } = req.body;
         if (!Array.isArray(headers) || headers.length === 0 || !Array.isArray(fields) || fields.length === 0) {
             return res.status(400).json({ error: "En-têtes et champs standards requis." });
@@ -1393,6 +1510,8 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
         const mapping = req.body.mapping ? JSON.parse(req.body.mapping) : null;
         const sheetName = req.body.sheetName || null;
         const htmlTemplate = req.body.htmlTemplate ? req.body.htmlTemplate : null;
+        const docxTemplateBase64 = req.body.docxTemplateBase64 ? req.body.docxTemplateBase64 : null;
+        const templateStyle = req.body.templateStyle || null;
         const country = req.body.country || 'CI';
         const mois = parseInt(req.body.mois) || (new Date().getMonth() + 1);
         const annee = parseInt(req.body.annee) || new Date().getFullYear();
@@ -1402,6 +1521,7 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
         console.log("Parsed employeesData is Array?", Array.isArray(employeesData), "Length:", employeesData ? employeesData.length : 0);
 
         const leavesToProcess = req.body.leavesToProcess ? JSON.parse(req.body.leavesToProcess) : [];
+        const entrepriseProfile = req.body.entreprise ? JSON.parse(req.body.entreprise) : null;
 
         if (!dataFile && !employeesData) {
             return res.status(400).json({ error: "Aucune donnée fournie (fichier Excel ou JSON manquant)" });
@@ -1471,6 +1591,7 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
         }
 
         const plan = await billingService.getPlanByCode(userObj.subscriptionTier);
+        await billingService.ensureFreeMonthlyPeriod(userObj);
         const quotaCheck = billingService.checkQuota(userObj, plan, employeeCount);
         if (!quotaCheck.ok) {
             if (finalDataPath && fs.existsSync(finalDataPath)) fs.unlinkSync(finalDataPath);
@@ -1497,13 +1618,49 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
 
         const payrollReq = await PayrollRequest.create({
             filename: dataFile ? dataFile.originalname : 'Local_DB_Export',
-            status: 'PROCESSING'
+            status: 'PROCESSING',
+            UserId: req.user.id
         });
 
-        const zipFilename = `bulletins_${payrollReq.id}_${Date.now()}.zip`;
+        // Jeton aléatoire plutôt que Date.now() : le ZIP contient les bulletins de
+        // paie complets (salaires, N° CNPS, RIB) de tous les employés du lot, et
+        // /api/rh/download/:filename n'accepte que ce format précis — un suffixe
+        // temporel était trivialement énumérable.
+        const zipFilename = `bulletins_${payrollReq.id}_${crypto.randomBytes(16).toString('hex')}.zip`;
         const zipPath = path.join(__dirname, 'uploads', zipFilename);
 
         console.log(`🚀 Démarrage traitement RH (${country}) pour: ${dataFile ? dataFile.originalname : 'Données locales'}`);
+
+        // Le profil entreprise vient des paramètres (raisonSociale, numeroCnpsEmployeur...
+        // en camelCase, comme partout où il est stocké) ; processPayrollJson attend le
+        // snake_case du reste du moteur de paie.
+        //
+        // Le logo, lui, est un attribut du compte (Paramètres > Profil Entreprise),
+        // indépendant de la présence ou non d'un classeur "ENTREPRISE" — on le
+        // récupère donc même quand entrepriseProfile est absent.
+        const userPourLogo = await User.findByPk(req.user.id);
+        // Un classeur "ENTREPRISE" importé (entrepriseProfile) prime sur le profil
+        // enregistré dans Paramètres — celui-ci ne sert que de repli, pour les
+        // champs qu'un import ponctuel ne fournit pas.
+        const companyInfoOverride = (entrepriseProfile || userPourLogo?.companyLogo || userPourLogo?.companyName || userPourLogo?.rubriqueCodes || userPourLogo?.bulletinCouleur || userPourLogo?.bulletinCanvasLayout) ? {
+            nom_entreprise: entrepriseProfile?.raisonSociale || entrepriseProfile?.nom_entreprise || userPourLogo?.companyName || '',
+            adresse: entrepriseProfile?.adresse || userPourLogo?.companyAdresse || '',
+            numero_cnps: entrepriseProfile?.numeroCnpsEmployeur || entrepriseProfile?.numero_cnps || userPourLogo?.companyNumeroCnps || '',
+            numero_contribuable: entrepriseProfile?.numeroContribuable || entrepriseProfile?.numero_contribuable || userPourLogo?.companyNumeroContribuable || '',
+            telephone: entrepriseProfile?.telephone || userPourLogo?.companyTelephone || '',
+            email: entrepriseProfile?.email || userPourLogo?.companyEmail || '',
+            ville: entrepriseProfile?.ville || userPourLogo?.companyVille || '',
+            signataire_nom: entrepriseProfile?.signataireNom || entrepriseProfile?.signataire_nom || userPourLogo?.companySignataireNom || '',
+            signataire_fonction: entrepriseProfile?.signataireFonction || entrepriseProfile?.signataire_fonction || userPourLogo?.companySignataireFonction || '',
+            logo: userPourLogo?.companyLogo || null,
+            rubriqueCodes: userPourLogo?.rubriqueCodes ? JSON.parse(userPourLogo.rubriqueCodes) : null,
+            bulletinCouleur: userPourLogo?.bulletinCouleur || null,
+            bulletinCanvasLayout: userPourLogo?.bulletinCanvasLayout ? JSON.parse(userPourLogo.bulletinCanvasLayout) : null
+        } : null;
+
+        // Si l'appelant n'a pas explicitement choisi, on retombe sur le style
+        // enregistré dans Paramètres > Modèles de bulletin.
+        const templateStyleFinal = templateStyle || userPourLogo?.defaultBulletinStyle || null;
 
         let result;
         if (employeesData) {
@@ -1514,7 +1671,10 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
                 mapping,
                 htmlTemplate,
                 country,
-                leavesToProcess
+                companyInfoOverride,
+                leavesToProcess,
+                docxTemplateBase64,
+                templateStyleFinal
              );
         } else {
              result = await payrollService.processPayrollFile(
@@ -1525,7 +1685,9 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
                 htmlTemplate,
                 country,
                 sheetName,
-                leavesToProcess
+                leavesToProcess,
+                docxTemplateBase64,
+                templateStyleFinal
              );
         }
 
@@ -1542,9 +1704,10 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
             );
         }
 
-        // Incrémentation du quota consommé ou décrémentation des crédits
-        if (quotaCheck.useCredits) {
-            userObj.credits -= result.count;
+        // Décompte selon la source retenue par checkQuota : allocation gratuite
+        // mensuelle, ou quota de la formule payante active.
+        if (quotaCheck.useFreeMonthly) {
+            userObj.freeMonthlyUsed = (userObj.freeMonthlyUsed || 0) + result.count;
         } else {
             userObj.bulletinsUsed = (userObj.bulletinsUsed || 0) + result.count;
         }
@@ -1825,45 +1988,54 @@ app.get('/api/rh/analytics/company', authMiddleware, async (req, res) => {
 });
 
 // ─── Génération bulletin individuel (Simulateur manuel) ───────────────────
+// Hors quota, délibérément : le bulletin individuel (habituel ou congé, selon
+// employee.bulletin_type) reste toujours disponible sans limite, y compris
+// pour un compte gratuit — seule la génération groupée (import Excel) et les
+// fonctionnalités IA sont comptées dans l'allocation gratuite mensuelle. Voir
+// billingService.js.
 app.post('/api/rh/generate-single-payslip', authMiddleware, async (req, res) => {
     try {
-        const { employee, htmlTemplate } = req.body;
+        const { employee, htmlTemplate, templateStyle } = req.body;
         if (!employee || !employee.nom) {
             return res.status(400).json({ error: 'Données employé manquantes' });
         }
 
-        // Vérification du quota d'abonnement (1 bulletin)
         const userObj = await User.findByPk(req.user.id);
         if (!userObj) {
             return res.status(404).json({ error: "Utilisateur non trouvé" });
         }
 
-        const plan = await billingService.getPlanByCode(userObj.subscriptionTier);
-        const quotaCheck = billingService.checkQuota(userObj, plan, 1);
-        if (!quotaCheck.ok) {
-            return res.status(402).json({
-                error: billingService.quotaErrorMessage(quotaCheck.reason, { plan, user: userObj, countNeeded: 1 }),
-                reason: quotaCheck.reason,
-                ...billingService.getSubscriptionSnapshot(userObj, plan)
-            });
-        }
-
         const calculs = payrollService.calculateSinglePayroll(employee);
         const companyInfo = {
-            nom_entreprise: employee.nom_entreprise,
-            adresse: employee.adresse,
-            siege_social: employee.siege_social,
-            email_entreprise: employee.email_entreprise,
-            tel_entreprise: employee.tel_entreprise,
-            numero_cnps: employee.numero_cnps,
-            numero_contribuable: employee.numero_contribuable,
+            // Le formulaire de saisie prime ; le profil enregistré dans Paramètres
+            // ne sert que de repli pour ce que ce formulaire ne fournit pas.
+            nom_entreprise: employee.nom_entreprise || userObj.companyName || '',
+            adresse: employee.adresse || userObj.companyAdresse || '',
+            siege_social: employee.siege_social || userObj.companyAdresse || '',
+            ville: employee.ville || userObj.companyVille || '',
+            // `email`/`telephone` : mêmes noms que companyInfoOverride (génération en
+            // lot) et que la feuille ENTREPRISE du classeur Excel — pour que le
+            // second modèle par défaut (grille numérotée), qui les affiche, les
+            // trouve quel que soit le chemin de génération emprunté.
+            email: employee.email_entreprise || userObj.companyEmail || '',
+            telephone: employee.tel_entreprise || userObj.companyTelephone || '',
+            numero_cnps: employee.numero_cnps || userObj.companyNumeroCnps || '',
+            numero_contribuable: employee.numero_contribuable || userObj.companyNumeroContribuable || '',
+            // Le logo est un attribut du compte (Paramètres > Profil Entreprise), pas
+            // du formulaire de saisie : on le prend directement sur l'utilisateur
+            // authentifié, absent s'il n'en a pas configuré.
+            logo: userObj.companyLogo || null,
+            // Numérotation de rubrique du compte (Paramètres > Modèles de bulletin) :
+            // il n'existe pas de code universel entre logiciels de paie, donc chaque
+            // compte peut redéfinir les siens plutôt que de subir ceux d'ONDA.
+            rubriqueCodes: userObj.rubriqueCodes ? JSON.parse(userObj.rubriqueCodes) : null,
+            bulletinCouleur: userObj.bulletinCouleur || null,
+            bulletinCanvasLayout: userObj.bulletinCanvasLayout ? JSON.parse(userObj.bulletinCanvasLayout) : null,
         };
 
-        const pdfBuffer = await payrollService.generateSinglePdf(employee, calculs, companyInfo, htmlTemplate);
-
-        // Incrémentation du quota consommé après génération réussie
-        userObj.bulletinsUsed = (userObj.bulletinsUsed || 0) + 1;
-        await userObj.save();
+        // Si l'appelant n'a pas explicitement choisi, on retombe sur le style
+        // enregistré dans Paramètres > Modèles de bulletin.
+        const pdfBuffer = await payrollService.generateSinglePdf(employee, calculs, companyInfo, htmlTemplate, templateStyle || userObj.defaultBulletinStyle || null);
 
         const moisNoms = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
         const moisNom = moisNoms[parseInt(employee.mois || 1) - 1] || 'Mois';
@@ -1877,6 +2049,140 @@ app.post('/api/rh/generate-single-payslip', authMiddleware, async (req, res) => 
     } catch (error) {
         console.error('Erreur génération bulletin individuel:', error);
         res.status(500).json({ error: error.message || 'Erreur lors de la génération' });
+    }
+});
+
+// ─── Aperçu d'un modèle de bulletin ONDA intégré (Paramètres) ─────────────
+// Un salarié fictif, le profil entreprise réel du compte : sert uniquement à
+// comparer visuellement les modèles avant d'en choisir un par défaut. Aucun
+// impact sur le quota — ce n'est pas un vrai bulletin.
+// ─── Catalogue des codes de rubrique (Paramètres > Modèles de bulletin) ───
+app.get('/api/rh/rubrique-codes-catalogue', authMiddleware, (req, res) => {
+    res.json({ catalogue: payrollService.CATALOGUE_RUBRIQUES, defauts: payrollService.CODE_RUBRIQUE });
+});
+
+// ─── Éditeur visuel du modèle « Sur-mesure » (Paramètres) ─────────────────
+// Sert la disposition enregistrée du compte (ou la disposition par défaut
+// s'il n'a encore rien personnalisé), le catalogue des champs disponibles
+// pour un bloc texte, et les dimensions de page — un seul endroit pour ces
+// trois informations, jamais recopiées à la main côté client.
+app.get('/api/rh/bulletin-canvas-layout', authMiddleware, async (req, res) => {
+    try {
+        const userObj = await User.findByPk(req.user.id);
+        if (!userObj) return res.status(404).json({ error: 'Utilisateur non trouvé' });
+        res.json({
+            layout: userObj.bulletinCanvasLayout ? JSON.parse(userObj.bulletinCanvasLayout) : payrollService.CANVAS_LAYOUT_DEFAUT,
+            layoutParDefaut: payrollService.CANVAS_LAYOUT_DEFAUT,
+            champs: payrollService.CANVAS_CHAMPS_DISPONIBLES,
+            page: payrollService.CANVAS_PAGE
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Conception du modèle « Sur-mesure » par conversation : plutôt que de
+// glisser-déposer des blocs, l'utilisateur décrit ce qu'il veut et l'IA
+// renvoie directement la disposition (même format que bulletinCanvasLayout),
+// que le client prévisualise via /preview-bulletin-style avant d'enregistrer.
+app.post('/api/rh/bulletin-canvas-ia', authMiddleware, async (req, res) => {
+    try {
+        if (!(await gateAiAccess(req, res))) return;
+        const { messages, currentLayout, image } = req.body;
+        if (!Array.isArray(messages) || messages.length === 0) {
+            return res.status(400).json({ error: 'Message manquant' });
+        }
+        const resultat = await aiService.genererBulletinCanvasIA(messages, currentLayout, payrollService.CANVAS_CHAMPS_DISPONIBLES, payrollService.CANVAS_PAGE, image || null);
+        res.json({ success: true, ...resultat });
+    } catch (e) {
+        console.error('Erreur IA canvas bulletin:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Import d'un PDF réel comme point de départ du modèle « Sur-mesure » :
+// la voie déterministe (docengine) donne des POSITIONS exactes, pas devinées
+// par un modèle de vision — la reproduction par photo s'est révélée trop peu
+// fidèle pour être proposée telle quelle (voir BulletinCanvasEditor.vue).
+// Une fois importée, la disposition se retouche comme n'importe quelle autre
+// via /api/rh/bulletin-canvas-ia (le chat).
+app.post('/api/rh/bulletin-canvas-from-pdf', authMiddleware, async (req, res) => {
+    try {
+        const { fileBase64, filename } = req.body;
+        if (!fileBase64) return res.status(400).json({ error: 'Fichier manquant' });
+
+        const buffer = decodeDataUrl(fileBase64);
+        const result = await docEngine.buildTemplate(buffer, {
+            filename: filename || 'modele.pdf',
+            nature: 'grid',
+            minConfidence: 0.6,
+            // Même choix que l'import de bulletin existant : aucune IA dans la
+            // détection des variables, un fragment non reconnu par le lexique
+            // reste simplement absent de la disposition plutôt qu'inventé.
+            useAi: false
+        });
+
+        if (!result.ok) {
+            const raison = result.reason === 'no-text-layer'
+                ? "Ce PDF est un scan sans texte exploitable (image) : l'import déterministe a besoin d'un PDF natif, avec du texte sélectionnable."
+                : "Ce PDF n'a pas pu être analysé.";
+            return res.status(422).json({ error: raison, reason: result.reason });
+        }
+
+        const { layout, stats } = irToCanvasLayout(result, payrollService.CANVAS_PAGE);
+        const message = stats.tableauDetecte
+            ? `Bulletin importé : tableau des rubriques repéré${stats.showPatronal ? ' (avec charges patronales)' : ''}, ${stats.reconnus} champ(s) d'identité reconnu(s) et repositionné(s). Demandez-moi des ajustements si besoin.`
+            : `Bulletin importé, mais je n'ai pas repéré de tableau de rubriques net dans ce PDF — j'ai placé un tableau par défaut, à repositionner. ${stats.reconnus} champ(s) d'identité reconnu(s).`;
+
+        res.json({ success: true, layout, message, stats });
+    } catch (e) {
+        console.error('Erreur import PDF canvas:', e.message);
+        res.status(500).json({ error: e.message || "Erreur lors de l'import" });
+    }
+});
+
+app.post('/api/rh/preview-bulletin-style', authMiddleware, async (req, res) => {
+    try {
+        const templateStyle = payrollService.STYLES_BULLETIN_DISPONIBLES.includes(req.body.templateStyle) ? req.body.templateStyle : null;
+        const userObj = await User.findByPk(req.user.id);
+        if (!userObj) return res.status(404).json({ error: 'Utilisateur non trouvé' });
+
+        const employee = {
+            pays: 'CI', nom: 'YAO', prenom: 'Kouadio', matricule: 'EMP-001',
+            poste: 'Développeur', categorie: 'M2', numero_cnps: '00011223344',
+            date_embauche: '2022-03-01', situation_matrimoniale: 'marie', nombre_enfants: 2,
+            salaire_base: 250000, sursalaire: 50000, prime_transport: 30000,
+            primes: [{ libelle: 'Prime de responsabilité', montant: 40000 }],
+            mois: String(new Date().getMonth() + 1), annee: String(new Date().getFullYear()),
+            virement: true
+        };
+        const calculs = payrollService.calculateSinglePayroll(employee);
+        const companyInfo = {
+            nom_entreprise: userObj.companyName || 'VOTRE ENTREPRISE',
+            adresse: userObj.companyAdresse || '',
+            siege_social: userObj.companyAdresse || '',
+            ville: userObj.companyVille || '',
+            email: userObj.companyEmail || '',
+            telephone: userObj.companyTelephone || '',
+            numero_cnps: userObj.companyNumeroCnps || '',
+            numero_contribuable: userObj.companyNumeroContribuable || '',
+            logo: userObj.companyLogo || null,
+            // Un brouillon non enregistré (l'utilisateur teste ses codes avant de
+            // cliquer sur « Enregistrer ») prime sur ceux déjà sauvegardés.
+            rubriqueCodes: req.body.rubriqueCodes || (userObj.rubriqueCodes ? JSON.parse(userObj.rubriqueCodes) : null),
+            bulletinCouleur: req.body.bulletinCouleur || userObj.bulletinCouleur || null,
+            // Idem : un agencement en cours d'édition dans le canvas (pas encore
+            // enregistré) prime sur celui déjà sauvegardé, pour un aperçu fidèle
+            // à ce qui est affiché à l'écran au moment du clic.
+            bulletinCanvasLayout: req.body.bulletinCanvasLayout || (userObj.bulletinCanvasLayout ? JSON.parse(userObj.bulletinCanvasLayout) : null)
+        };
+        const pdfBuffer = await payrollService.generateSinglePdf(employee, calculs, companyInfo, null, templateStyle);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'inline; filename="apercu-modele-bulletin.pdf"');
+        res.send(pdfBuffer);
+    } catch (error) {
+        console.error('Erreur aperçu modèle de bulletin:', error);
+        res.status(500).json({ error: error.message || "Erreur lors de l'aperçu" });
     }
 });
 
@@ -1913,42 +2219,12 @@ app.post('/api/loans/scrape', async (req, res) => {
 app.get('/api/rh/download/:filename', (req, res) => {
     const fileName = req.params.filename;
     if (fileName === 'modele-paie.xlsx') {
-        // Génération dynamique du modèle avec les colonnes exactes du Smart Mapping
-        const wb = XLSX.utils.book_new();
-
-        // Feuille EMPLOYES avec les colonnes attendues
-        const employeHeaders = [
-            'nom', 'prenom', 'matricule', 'salaire_base', 'sursalaire',
-            'prime_transport', 'prime_logement', 'heures_sup_nb',
-            'jours_travailles', 'absences_jours',
-            'poste', 'categorie', 'date_embauche',
-            'nom_entreprise', 'id_employe'
-        ];
-        const exampleRow = {
-            nom: 'KONAN', prenom: 'Yao', matricule: 'EMP-001',
-            salaire_base: 350000, sursalaire: 0, prime_transport: 30000,
-            prime_logement: 50000, heures_sup_nb: 0,
-            jours_travailles: 26, absences_jours: 0,
-            poste: 'Comptable', categorie: 'Agent de maîtrise',
-            date_embauche: '2020-01-15',
-            nom_entreprise: 'MA SOCIETE SARL', id_employe: 1
-        };
-        const wsEmployes = XLSX.utils.json_to_sheet([exampleRow], { header: employeHeaders });
-        XLSX.utils.book_append_sheet(wb, wsEmployes, 'EMPLOYES');
-
-        // Feuille INFORMATIONS_ENTREPRISE
-        const entrepriseData = [{
-            nom_entreprise: 'MA SOCIETE SARL',
-            adresse: 'Abidjan, Cocody',
-            telephone: '+225 07 00 00 00',
-            cnps_employeur: 'CNPS-00000',
-            regime_fiscal: 'Réel simplifié'
-        }];
-        const wsEntreprise = XLSX.utils.json_to_sheet(entrepriseData);
-        XLSX.utils.book_append_sheet(wb, wsEntreprise, 'INFORMATIONS_ENTREPRISE');
-
+        // Un seul classeur pour tout importer : entreprise, salaries, contrats.
+        // La composition de la remuneration vit dans CONTRATS, pas dans EMPLOYES :
+        // deux endroits pour la meme donnee, c'est la garantie qu'ils divergeront.
+        const wb = construireClasseur(XLSX);
         const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-        res.setHeader('Content-Disposition', 'attachment; filename=modele_paie_ONDA.xlsx');
+        res.setHeader('Content-Disposition', 'attachment; filename=modele_import_ONDA.xlsx');
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         return res.send(buf);
     }
@@ -1956,11 +2232,35 @@ app.get('/api/rh/download/:filename', (req, res) => {
     if (fileName === 'modele-presence.xlsx') {
         // Modèle léger pour l'import "fiche de présence" (Saisie Mensuelle) : juste le matricule
         // et les champs variables du mois, sans réimporter toute la fiche employé.
+        //
+        // Heures sup réparties sur le barème légal ivoirien (CCI 20/07/1977) : les heures
+        // "ordinaires" saisies dans heures_sup_nb se répartissent automatiquement sur les
+        // deux premiers paliers (1.15 puis 1.5) côté moteur de calcul — l'utilisateur compte
+        // ses heures, pas le barème. Les trois autres colonnes couvrent les catégories qui
+        // ne peuvent pas être déduites automatiquement (nuit, dimanche/férié).
         const wb = XLSX.utils.book_new();
-        const headers = ['matricule', 'jours_travailles', 'heures_sup_nb', 'absences_jours'];
-        const exampleRow = { matricule: 'EMP-001', jours_travailles: 26, heures_sup_nb: 0, absences_jours: 0 };
+        const headers = ['matricule', 'jours_travailles', 'heures_sup_nb', 'heures_sup_nuit', 'heures_sup_ferie_jour', 'heures_sup_ferie_nuit', 'absences_jours'];
+        const exampleRow = {
+            matricule: 'EMP-001', jours_travailles: 26,
+            heures_sup_nb: 0, heures_sup_nuit: 0, heures_sup_ferie_jour: 0, heures_sup_ferie_nuit: 0,
+            absences_jours: 0
+        };
         const ws = XLSX.utils.json_to_sheet([exampleRow], { header: headers });
+        ws['!cols'] = headers.map(() => ({ wch: 20 }));
         XLSX.utils.book_append_sheet(wb, ws, 'PRESENCE');
+
+        const aide = XLSX.utils.aoa_to_sheet([
+            ['Comment remplir ce modèle'],
+            [''],
+            ['heures_sup_nb', 'Heures supplémentaires "ordinaires". Réparties automatiquement sur les paliers légaux (41e-46e heure à 1,15 ; au-delà à 1,50).'],
+            ['heures_sup_nuit', 'Heures supplémentaires effectuées de nuit (taux légal 1,75).'],
+            ['heures_sup_ferie_jour', 'Heures supplémentaires effectuées de jour un dimanche ou jour férié (taux légal 1,75).'],
+            ['heures_sup_ferie_nuit', 'Heures supplémentaires effectuées de nuit un dimanche ou jour férié (taux légal 2,00).'],
+            ['jours_travailles', 'Facultatif : nombre de jours réellement travaillés. Laissez vide pour un calcul automatique (26 - absences).'],
+            ['absences_jours', "Nombre de jours d'absence du mois."]
+        ]);
+        aide['!cols'] = [{ wch: 22 }, { wch: 90 }];
+        XLSX.utils.book_append_sheet(wb, aide, 'MODE_EMPLOI');
 
         const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
         res.setHeader('Content-Disposition', 'attachment; filename=modele_fiche_presence_ONDA.xlsx');
@@ -1991,14 +2291,30 @@ app.get('/api/rh/download/:filename', (req, res) => {
         return res.send(buf);
     }
 
-    const safeFileName = path.basename(fileName);
-    const filePath = path.join(__dirname, 'uploads', safeFileName);
+    // Tout le reste — notamment les ZIP de bulletins générés, qui contiennent
+    // des données personnelles réelles (salaires, N° CNPS, RIB) — exige d'être
+    // connecté et, quand le nom du fichier le permet, d'être le propriétaire
+    // du lot. Sans ce garde-fou, n'importe qui pouvait télécharger les
+    // bulletins de n'importe quelle entreprise en devinant/énumérant un nom
+    // de fichier.
+    return authMiddleware(req, res, async () => {
+        const safeFileName = path.basename(fileName);
+        const filePath = path.join(__dirname, 'uploads', safeFileName);
 
-    if (fs.existsSync(filePath)) {
-        res.download(filePath);
-    } else {
-        res.status(404).send("Fichier introuvable");
-    }
+        const correspondance = safeFileName.match(/^bulletins_(\d+)_[0-9a-f]+\.zip$/);
+        if (correspondance) {
+            const payrollReq = await PayrollRequest.findByPk(correspondance[1]);
+            if (!payrollReq || payrollReq.UserId !== req.user.id) {
+                return res.status(403).json({ error: "Vous n'avez pas accès à ce fichier." });
+            }
+        }
+
+        if (fs.existsSync(filePath)) {
+            res.download(filePath);
+        } else {
+            res.status(404).send("Fichier introuvable");
+        }
+    });
 });
 
 // ═══════════════════════════════════════════════════════
@@ -2182,18 +2498,63 @@ app.get('/api/billing/plans', async (req, res) => {
 // ═══════════════════════════════════════════════════════
 
 // --- Employés ---
+// Le modèle Sequelize Employee est en camelCase (dateEmbauche, numeroCnps...)
+// mais EmployeeDirectory.vue — et le classeur d'import — parlent en snake_case
+// (date_embauche, numero_cnps...), comme le reste du moteur de paie. Sans
+// cette table de correspondance, `Employee.create({ ...req.body })` ignorait
+// silencieusement toute clé snake_case qu'il ne reconnaissait pas : la
+// situation matrimoniale, le nombre d'enfants, le n° CNPS, la date d'embauche
+// et le salaire net saisis dans la fiche n'étaient JAMAIS enregistrés, sans
+// aucune erreur pour le signaler. Cette table sert dans les deux sens.
+const CHAMPS_EMPLOYE_SNAKE_VERS_CAMEL = {
+    date_embauche: 'dateEmbauche',
+    date_naissance: 'dateNaissance',
+    numero_cnps: 'numeroCnps',
+    situation_matrimoniale: 'situationMatrimoniale',
+    nombre_enfants: 'nombreEnfants',
+    salaire_net: 'salaireNet',
+    salaire_base: 'salaireBase',
+    statut_salarie: 'statutSalarie',
+    categorie_professionnelle: 'categorieProfessionnelle'
+};
+const CHAMPS_EMPLOYE_CAMEL_VERS_SNAKE = Object.fromEntries(
+    Object.entries(CHAMPS_EMPLOYE_SNAKE_VERS_CAMEL).map(([snake, camel]) => [camel, snake])
+);
+function employeVersModele(corps) {
+    const sortie = {};
+    for (const [cle, valeur] of Object.entries(corps || {})) {
+        sortie[CHAMPS_EMPLOYE_SNAKE_VERS_CAMEL[cle] || cle] = valeur;
+    }
+    return sortie;
+}
+const CHAMPS_EMPLOYE_DATE = new Set(['date_embauche', 'date_naissance']);
+function employeVersClient(emp) {
+    const source = emp.toJSON ? emp.toJSON() : emp;
+    const sortie = { ...source };
+    for (const [camel, snake] of Object.entries(CHAMPS_EMPLOYE_CAMEL_VERS_SNAKE)) {
+        if (source[camel] === undefined) continue;
+        let valeur = source[camel];
+        // Sequelize renvoie un objet Date pour une colonne DATE (sérialisé en
+        // ISO complet, ex. "2026-03-01T00:00:00.000Z") — <input type="date">
+        // n'accepte que "AAAA-MM-JJ", sinon le champ s'affichait vide à l'édition.
+        if (CHAMPS_EMPLOYE_DATE.has(snake) && valeur instanceof Date) valeur = valeur.toISOString().slice(0, 10);
+        sortie[snake] = valeur;
+    }
+    return sortie;
+}
+
 app.get('/api/hr/employees', authMiddleware, async (req, res) => {
     try {
         const employees = await Employee.findAll({ where: { userId: req.user.id } });
-        res.json({ employees });
+        res.json({ employees: employees.map(employeVersClient) });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 app.post('/api/hr/employees', authMiddleware, async (req, res) => {
     try {
-        const emp = await Employee.create({ ...req.body, userId: req.user.id });
-        res.json({ employee: emp });
+        const emp = await Employee.create({ ...employeVersModele(req.body), userId: req.user.id });
+        res.json({ employee: employeVersClient(emp) });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -2202,8 +2563,8 @@ app.put('/api/hr/employees/:id', authMiddleware, async (req, res) => {
     try {
         const emp = await Employee.findOne({ where: { id: req.params.id, userId: req.user.id } });
         if (!emp) return res.status(404).json({ error: 'Employé introuvable' });
-        await emp.update(req.body);
-        res.json({ employee: emp });
+        await emp.update(employeVersModele(req.body));
+        res.json({ employee: employeVersClient(emp) });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -2219,19 +2580,73 @@ app.delete('/api/hr/employees/:id', authMiddleware, async (req, res) => {
     }
 });
 
+// --- Modèles de documents ---
+// L'id est fourni par le client (créé côté frontend avant le premier
+// enregistrement) : on cherche donc la ligne existante avant de choisir entre
+// mise à jour et création, plutôt que d'exposer un POST/PUT séparés.
+app.get('/api/hr/templates', authMiddleware, async (req, res) => {
+    try {
+        const lignes = await Template.findAll({ where: { userId: req.user.id } });
+        const templates = lignes.map(l => JSON.parse(l.payload));
+        res.json({ templates });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.post('/api/hr/templates', authMiddleware, async (req, res) => {
+    try {
+        const templateId = req.body.id ? String(req.body.id) : ('tpl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
+        const template = { ...req.body, id: templateId };
+        const payload = JSON.stringify(template);
+        const existante = await Template.findOne({ where: { templateId, userId: req.user.id } });
+        if (existante) {
+            existante.payload = payload;
+            await existante.save();
+        } else {
+            await Template.create({ templateId, userId: req.user.id, payload });
+        }
+        res.json({ template });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.delete('/api/hr/templates/:id', authMiddleware, async (req, res) => {
+    try {
+        await Template.destroy({ where: { templateId: req.params.id, userId: req.user.id } });
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // --- Absences / Congés ---
+// Le modèle Absence n'a pas de colonne `employeNom` — le nom vient de
+// l'employé lié (`include: [Employee]`), jamais dupliqué en stockage pour ne
+// pas diverger si la fiche est renommée. Sans cet aplatissement, le calendrier
+// (CongesManager.vue) recevait `employeNom: undefined` et plantait sur
+// `.split(' ')` dès que l'absence provenait du serveur plutôt que du repli
+// localStorage.
+function absenceVersClient(abs) {
+    const source = abs.toJSON ? abs.toJSON() : abs;
+    const emp = source.Employee;
+    const nomComplet = emp ? `${emp.prenom || ''} ${emp.nom || ''}`.trim() : '';
+    return { ...source, employeNom: nomComplet || 'Inconnu' };
+}
+
 app.get('/api/hr/absences', authMiddleware, async (req, res) => {
     try {
         const absences = await Absence.findAll({ where: { userId: req.user.id }, include: [Employee] });
-        res.json({ absences });
+        res.json({ absences: absences.map(absenceVersClient) });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 app.post('/api/hr/absences', authMiddleware, async (req, res) => {
     try {
-        const abs = await Absence.create({ ...req.body, userId: req.user.id });
-        res.json({ absence: abs });
+        const { employeNom, ...corps } = req.body; // ignoré : recalculé depuis l'employé lié
+        const created = await Absence.create({ ...corps, userId: req.user.id });
+        const abs = await Absence.findByPk(created.id, { include: [Employee] });
+        res.json({ absence: absenceVersClient(abs) });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -2240,8 +2655,10 @@ app.put('/api/hr/absences/:id', authMiddleware, async (req, res) => {
     try {
         const abs = await Absence.findOne({ where: { id: req.params.id, userId: req.user.id } });
         if (!abs) return res.status(404).json({ error: 'Absence introuvable' });
-        await abs.update(req.body);
-        res.json({ absence: abs });
+        const { employeNom, ...corps } = req.body;
+        await abs.update(corps);
+        const misAJour = await Absence.findByPk(abs.id, { include: [Employee] });
+        res.json({ absence: absenceVersClient(misAJour) });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -2337,11 +2754,41 @@ app.delete('/api/hr/evaluations/:id', authMiddleware, async (req, res) => {
 // ROUTES IA - OpenRouter
 // ═══════════════════════════════════════════════════════
 
+// Ces deux routes sont volontairement publiques (simulateur fiscal, sans
+// compte à créer) — donc jamais protégées par des crédits. Sans aucun
+// garde-fou, elles restaient un robinet à appels IA totalement ouvert à
+// quiconque sur Internet. Limiteur mémoire minimal (par IP), suffisant pour
+// écarter le scraping/abus automatisé sans exiger de connexion.
+const aiRateLimitHits = new Map();
+const AI_RATE_LIMIT_MAX = 10;
+const AI_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 heure
+function limiterIaPublique(req, res, next) {
+    const ip = req.ip || req.connection?.remoteAddress || 'inconnu';
+    const now = Date.now();
+    const entry = aiRateLimitHits.get(ip);
+    if (!entry || now - entry.debut > AI_RATE_LIMIT_WINDOW_MS) {
+        aiRateLimitHits.set(ip, { debut: now, count: 1 });
+        return next();
+    }
+    if (entry.count >= AI_RATE_LIMIT_MAX) {
+        return res.status(429).json({ error: 'Trop de requêtes. Réessayez dans quelques minutes.' });
+    }
+    entry.count++;
+    next();
+}
+// Purge périodique pour ne pas laisser grossir la map indéfiniment.
+setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of aiRateLimitHits) {
+        if (now - entry.debut > AI_RATE_LIMIT_WINDOW_MS) aiRateLimitHits.delete(ip);
+    }
+}, AI_RATE_LIMIT_WINDOW_MS).unref();
+
 /**
  * POST /api/ai/analyse
  * Analyse complète de la situation financière d'une entreprise
  */
-app.post('/api/ai/analyse', async (req, res) => {
+app.post('/api/ai/analyse', limiterIaPublique, async (req, res) => {
     try {
         const { entreprise, resultats, projections } = req.body;
         if (!entreprise || !entreprise.ca) {
@@ -2359,7 +2806,7 @@ app.post('/api/ai/analyse', async (req, res) => {
  * POST /api/ai/chat
  * Réponse à une question spécifique du chef d'entreprise
  */
-app.post('/api/ai/chat', async (req, res) => {
+app.post('/api/ai/chat', limiterIaPublique, async (req, res) => {
     try {
         const { question, contexte } = req.body;
         if (!question) {
@@ -2391,35 +2838,461 @@ app.get('/api/ai/models', (req, res) => {
 
 /**
  * POST /api/rh/analyze-pdf-template
- * Analyse OCR Vision du PDF pour l'auto-mapping HTML-to-PDF
- * Inclus sans coût supplémentaire pour tout utilisateur connecté.
+ * Reconstruit le modèle uploadé par le client en gabarit HTML.
+ *
+ * Deux voies, dans cet ordre :
+ *
+ *  1. DÉTERMINISTE (docengine) — quand le PDF a une couche texte. On lit la
+ *     géométrie réelle du fichier : runs de texte, filets, cadres, aplats. Le
+ *     résultat est exact, reproductible, instantané et gratuit. L'IA n'intervient
+ *     que pour nommer les variables que le lexique métier n'a pas tranchées.
+ *
+ *  2. VISION IA — repli pour les documents scannés, qui n'ont aucune couche
+ *     exploitable. Le modèle lit l'image et reconstruit la mise en page, puis
+ *     vérifie son propre rendu.
+ *
+ * Les deux voies peuvent appeler un modèle IA (nommage de variable, contrôle
+ * de conformité, ou reconstruction complète en vision) : un abonnement payant
+ * actif donne un accès illimité, sinon chaque appel consomme un crédit.
  */
 app.post('/api/rh/analyze-pdf-template', authMiddleware, async (req, res) => {
     try {
-        const { imageBase64 } = req.body;
+        if (!(await gateAiAccess(req, res))) return;
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+    const { imageBase64, textItems, pageSize, refinePasses, docType, fileBase64, engine: forced } = req.body;
+
+    // ── Voie 1 : extraction déterministe ──
+    if (fileBase64 && forced !== 'ai') {
+        try {
+            const buffer = decodeDataUrl(fileBase64);
+            const result = await docEngine.buildTemplate(buffer, {
+                filename: req.body.filename || 'modele.pdf',
+                nature: natureFor(docType),
+                minConfidence: 0.6,
+                // Bulletin : aucune IA dans la détection des variables, même bornée à
+                // un catalogue fermé — demande explicite. Ce qui n'est pas reconnu
+                // par le lexique déterministe reste du texte fixe du modèle importé.
+                useAi: docType !== 'payslip'
+            });
+
+            if (result.ok) {
+                // Contrôle de conformité : on remet le gabarit produit face au
+                // document d'origine et le modèle relève les écarts. Il constate,
+                // il ne corrige pas — le gabarit reste le produit d'une chaîne
+                // déterministe, on y ajoute seulement un regard.
+                let conformity = null;
+                if (imageBase64 && req.body.checkConformity !== false) {
+                    conformity = await checkConformity({
+                        renderPng: (html) => templateEngine.renderTemplateToPng(html),
+                        askModel: (prompt, images) => aiService.callOpenRouter([{
+                            role: 'user',
+                            content: [
+                                { type: 'text', text: prompt },
+                                ...images.map(url => ({ type: 'image_url', image_url: { url } }))
+                            ]
+                        }], { maxTokens: 1200, temperature: 0 })
+                    }, {
+                        html: result.html,
+                        originalImage: imageBase64,
+                        variables: result.variables,
+                        unmapped: result.unmapped
+                    });
+                }
+
+                return res.json({
+                    success: true,
+                    engine: 'deterministic',
+                    conformity,
+                    engineVersion: result.engineVersion,
+                    htmlTemplate: result.html,
+                    nature: result.nature,
+                    variables: result.variables,
+                    // Emplacements repérés mais non rattachés au modèle de
+                    // données : l'interface peut proposer à l'utilisateur de leur
+                    // associer une donnée, plutôt que de les laisser vides.
+                    unmapped: result.unmapped,
+                    stats: result.stats,
+                    diagnostics: result.diagnostics
+                });
+            }
+            console.log(`Moteur déterministe indisponible (${result.reason}) : repli sur la vision IA.`);
+        } catch (e) {
+            // Un PDF exotique ne doit pas faire échouer la requête : on bascule.
+            console.warn('Extraction déterministe impossible, repli sur la vision IA :', e.message);
+        }
+    }
+
+    // ── Voie 2 : vision IA ──
+    try {
         if (!imageBase64) return res.status(400).json({ error: 'Image manquante' });
 
-        const htmlTemplate = await aiService.rebuildPayslipTemplate(imageBase64);
+        let htmlTemplate = await aiService.rebuildDocumentTemplate(imageBase64, textItems, pageSize, docType);
 
-        res.json({ success: true, htmlTemplate });
+        // Boucle de vérification : on rend le HTML produit, on le remontre au modèle
+        // à côté de l'original, et il corrige ses propres écarts. C'est ce qui fait
+        // la différence entre "ressemblant" et "identique".
+        const requested = parseInt(refinePasses, 10);
+        const passes = Math.min(Number.isNaN(requested) ? 1 : Math.max(requested, 0), 3);
+        for (let i = 0; i < passes; i++) {
+            try {
+                const renderedImage = await templateEngine.renderTemplateToPng(htmlTemplate);
+                htmlTemplate = await aiService.refineDocumentTemplate(imageBase64, renderedImage, htmlTemplate, docType);
+            } catch (refineErr) {
+                // Le raffinage est un bonus : s'il échoue (Chrome absent, quota IA),
+                // on livre la première passe plutôt que de perdre tout le travail.
+                console.warn('Passe de raffinage ignorée:', refineErr.message);
+                break;
+            }
+        }
+
+        res.json({ success: true, engine: 'ai-vision', engineVersion: 0, htmlTemplate });
     } catch (e) {
         console.error('Erreur IA Auto-Mapping:', e.message);
         res.status(500).json({ error: e.message });
     }
 });
 
-// SPA Fallback : Rediriger toutes les requêtes non-API vers l'index.html de Vue
-app.get('*', (req, res) => {
-    if (!req.path.startsWith('/api')) {
-        const indexPath = path.join(__dirname, '../dist/index.html');
-        if (fs.existsSync(indexPath)) {
-            res.sendFile(indexPath);
-        } else {
-            res.status(404).send('Frontend non trouvé. Veuillez exécuter "npm run build".');
+/** Data URL ou base64 nu → Buffer */
+function decodeDataUrl(value) {
+    const comma = value.indexOf(',');
+    const payload = value.startsWith('data:') && comma > 0 ? value.slice(comma + 1) : value;
+    return Buffer.from(payload, 'base64');
+}
+
+/** Le type de document de l'interface donne la stratégie de mise en page. */
+function natureFor(docType) {
+    if (docType === 'hr_document') return 'prose';
+    if (docType === 'payslip' || docType === 'form') return 'grid';
+    return 'auto';
+}
+
+/**
+ * POST /api/rh/upload-template
+ * Uploads a document (Word/Excel) and returns it as base64 so the frontend can save it to its LocalDb.
+ */
+app.post('/api/rh/upload-template', authMiddleware, upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'Fichier manquant' });
+        
+        const fs = require('fs');
+        const buffer = fs.readFileSync(req.file.path);
+        
+        res.json({
+            success: true,
+            fileBase64: buffer.toString('base64'),
+            replacements: []
+        });
+    } catch (e) {
+        console.error('Erreur upload-template:', e);
+        res.status(500).json({ error: e.message });
+    } finally {
+        if (req.file && require('fs').existsSync(req.file.path)) {
+            require('fs').unlinkSync(req.file.path);
         }
-    } else {
-        res.status(404).json({ error: 'Route API introuvable' });
     }
+});
+
+/**
+ * POST /api/rh/fill-docx
+ * Reçoit le base64 d'un modèle Word et les données à injecter.
+ * Retourne le document final en base64.
+ */
+app.post('/api/rh/fill-docx', authMiddleware, async (req, res) => {
+    try {
+        const { fileBase64, docData } = req.body;
+        if (!fileBase64 || !docData) {
+            return res.status(400).json({ error: 'Données manquantes (fileBase64 ou docData)' });
+        }
+
+        const PizZip = require('pizzip');
+        const Docxtemplater = require('docxtemplater');
+
+        // Décoder le base64
+        const content = decodeDataUrl(fileBase64);
+        const zip = new PizZip(content);
+
+        // Configurer docxtemplater
+        const doc = new Docxtemplater(zip, {
+            paragraphLoop: true,
+            linebreaks: true,
+            nullGetter() {
+                // Si une variable n'existe pas, on laisse vide plutôt qu'un "undefined" moche.
+                return "";
+            }
+        });
+
+        // Rendre le document
+        doc.render(docData);
+
+        const buf = doc.getZip().generate({
+            type: 'nodebuffer',
+            compression: 'DEFLATE',
+        });
+
+        res.json({
+            success: true,
+            fileBase64: buf.toString('base64'),
+            filename: `document_genere_${Date.now()}.docx`
+        });
+    } catch (e) {
+        console.error('Erreur remplissage DOCX:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * POST /api/rh/generate-payroll-docx
+ * Reçoit un modèle Word et un tableau de données employés.
+ * Génère un bulletin Word pour chaque employé et renvoie un fichier ZIP contenant tous les bulletins.
+ */
+app.post('/api/rh/generate-payroll-docx', authMiddleware, async (req, res) => {
+    try {
+        const { fileBase64, employeesData } = req.body;
+        if (!fileBase64 || !Array.isArray(employeesData) || employeesData.length === 0) {
+            return res.status(400).json({ error: 'Données manquantes (fileBase64 ou employeesData vide)' });
+        }
+
+        const PizZip = require('pizzip');
+        const Docxtemplater = require('docxtemplater');
+
+        // Créer un nouveau ZIP maître qui contiendra tous les bulletins DOCX
+        const masterZip = new PizZip();
+
+        // Décoder le modèle DOCX (qui est lui-même un zip)
+        const templateContent = decodeDataUrl(fileBase64);
+
+        employeesData.forEach((empData, index) => {
+            // À chaque itération, recréer l'instance PizZip à partir du modèle vierge
+            const zip = new PizZip(templateContent);
+            
+            const doc = new Docxtemplater(zip, {
+                paragraphLoop: true,
+                linebreaks: true,
+                nullGetter() { return ""; }
+            });
+
+            // Rendre le document avec les données de cet employé
+            doc.render(empData);
+
+            // Obtenir le buffer DOCX généré
+            const buf = doc.getZip().generate({
+                type: 'nodebuffer',
+                compression: 'DEFLATE',
+            });
+
+            // Déterminer le nom du fichier
+            const filename = empData._filename || `Bulletin_${empData.nomComplet || index}.docx`;
+            
+            // Ajouter le fichier DOCX généré dans le ZIP maître
+            masterZip.file(filename, buf);
+        });
+
+        // Générer le fichier ZIP maître
+        const masterZipBuffer = masterZip.generate({
+            type: 'nodebuffer',
+            compression: 'DEFLATE',
+        });
+
+        res.json({
+            success: true,
+            zipBase64: masterZipBuffer.toString('base64'),
+            filename: `Bulletins_de_Paie_${new Date().toISOString().slice(0, 7)}.zip`
+        });
+
+    } catch (e) {
+        console.error('Erreur génération ZIP DOCX:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+/**
+ * ═══════════════════════════════════════════════════════
+ * MODÈLES WORD ET EXCEL
+ *
+ * Trois routes, correspondant aux trois temps de la boucle de validation :
+ *
+ *   1. types      — la liste des types de documents, pour le sélecteur
+ *   2. analyser   — le moteur PROPOSE les emplacements, sans rien modifier
+ *   3. gabarit    — l'utilisateur ayant validé, on pose les variables
+ *
+ * Rien n'est appliqué au fichier du client tant qu'il n'a pas validé. Tant
+ * qu'il n'a pas cliqué, son modèle est intact et il peut faire réanalyser.
+ * ═══════════════════════════════════════════════════════
+ */
+
+app.get('/api/rh/office/types', authMiddleware, (req, res) => {
+    res.json({ success: true, types: listerTypesDocuments() });
+});
+
+app.post('/api/rh/office/analyser', authMiddleware, async (req, res) => {
+    try {
+        if (!(await gateAiAccess(req, res))) return;
+        const { fileBase64, filename, docType } = req.body;
+        if (!fileBase64) return res.status(400).json({ error: 'Aucun fichier fourni.' });
+
+        const buffer = decodeDataUrl(fileBase64);
+        const extrait = extraireOffice(buffer, filename || '');
+        const analyse = analyserModele(extrait, docType || 'autre');
+
+        res.json({
+            success: true,
+            format: extrait.kind,
+            nature: analyse.nature,
+            typeDocument: analyse.typeDocument,
+            emplacements: analyse.emplacements,
+            variables: analyse.variables,
+            completude: analyse.completude,
+            resume: analyse.resume,
+            // Aperçu du document tel qu'il deviendra, variables apparentes :
+            // c'est ce que l'utilisateur regarde pour valider ou faire réanalyser.
+            apercu: construireApercu(extrait, analyse.emplacements)
+        });
+    } catch (e) {
+        console.error('Analyse du modèle Office :', e.message);
+        res.status(400).json({ error: e.message });
+    }
+});
+
+app.post('/api/rh/office/gabarit', authMiddleware, async (req, res) => {
+    try {
+        const { fileBase64, filename, emplacements } = req.body;
+        if (!fileBase64) return res.status(400).json({ error: 'Aucun fichier fourni.' });
+        if (!Array.isArray(emplacements) || !emplacements.length) {
+            return res.status(400).json({ error: 'Aucun emplacement validé.' });
+        }
+
+        const buffer = decodeDataUrl(fileBase64);
+        const format = /\.xlsx$/i.test(filename || '') ? 'xlsx' : 'docx';
+        const resultat = poserVariables(buffer, emplacements, format);
+
+        res.json({
+            success: true,
+            format,
+            gabaritBase64: resultat.buffer.toString('base64'),
+            remplaces: resultat.remplaces ?? emplacements.length,
+            introuvables: resultat.introuvables || []
+        });
+    } catch (e) {
+        console.error('Génération du gabarit Office :', e.message);
+        res.status(400).json({ error: e.message });
+    }
+});
+
+/**
+ * POST /api/rh/office/remplir
+ *
+ * Generation depuis un gabarit valide : les {variables} recoivent les donnees
+ * du salarie. Le fichier d'origine n'est pas reconstruit, donc la mise en page
+ * du client est rendue a l'identique : c'est tout l'interet de cette voie.
+ */
+app.post('/api/rh/office/remplir', authMiddleware, async (req, res) => {
+    try {
+        const { gabaritBase64, format, donnees } = req.body;
+        if (!gabaritBase64) return res.status(400).json({ error: 'Aucun gabarit fourni.' });
+        if (!donnees || typeof donnees !== 'object') {
+            return res.status(400).json({ error: 'Aucune donnee a injecter.' });
+        }
+
+        const buffer = decodeDataUrl(gabaritBase64);
+        const type = format === 'xlsx' ? 'xlsx' : 'docx';
+        const resultat = remplirOffice(buffer, donnees, type);
+
+        res.json({
+            success: true,
+            format: type,
+            fileBase64: resultat.buffer.toString('base64'),
+            // Les variables sans donnee sont laissees vides et signalees : sur un
+            // document officiel, un blanc vaut mieux qu'un montant invente.
+            nonResolues: resultat.nonResolues || []
+        });
+    } catch (e) {
+        console.error('Remplissage du gabarit Office :', e.message);
+        res.status(400).json({ error: e.message });
+    }
+});
+
+/**
+ * Aperçu textuel du document avec les variables en place.
+ *
+ * On ne rend pas le fichier — il n'a pas changé, et le rendre demanderait un
+ * convertisseur. On montre son CONTENU tel qu'il sera, ce qui suffit pour juger
+ * si les variables sont aux bons endroits.
+ */
+function construireApercu(extrait, emplacements) {
+    const parTexte = new Map();
+    for (const e of emplacements || []) {
+        if (e && e.original && e.variable) parTexte.set(e.original, e.variable);
+    }
+    const marquer = (texte) => {
+        const t = String(texte || '').trim();
+        const variable = parTexte.get(t);
+        return variable ? { texte: `{${variable}}`, variable } : { texte: t, variable: null };
+    };
+
+    const lignes = [];
+    for (const element of extrait.elements || []) {
+        if (element.type === 'paragraphe') {
+            let texte = element.texte;
+            for (const [original, variable] of parTexte) {
+                if (texte.includes(original)) texte = texte.split(original).join(`{${variable}}`);
+            }
+            lignes.push({ type: 'paragraphe', gras: !!element.gras, texte });
+        } else if (element.type === 'tableau') {
+            const parLigne = new Map();
+            for (const cell of element.cells) {
+                if (!parLigne.has(cell.r)) parLigne.set(cell.r, []);
+                parLigne.get(cell.r).push(cell);
+            }
+            const rangs = [...parLigne.keys()].sort((a, b) => a - b).map(r =>
+                parLigne.get(r).sort((a, b) => a.c - b.c).map(cell => {
+                    const m = marquer(cell.texte);
+                    return { ...m, colSpan: cell.colSpan || 1, gras: !!cell.gras };
+                }));
+            lignes.push({ type: 'tableau', feuille: element.feuille || null, rangs });
+        }
+    }
+    return lignes;
+}
+
+// SPA Fallback : Rediriger toutes les requêtes non-API vers l'index.html de Vue
+app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    const indexPath = path.join(__dirname, '../dist/index.html');
+    if (fs.existsSync(indexPath)) return res.sendFile(indexPath);
+    res.status(404).send('Frontend non trouvé. Veuillez exécuter "npm run build".');
+});
+
+/**
+ * Route API inconnue — TOUTES MÉTHODES CONFONDUES.
+ *
+ * Le repli précédent ne couvrait que les GET : un POST vers une route
+ * inexistante tombait sur le gestionnaire par défaut d'Express, qui répond en
+ * HTML. Côté navigateur, le .json() échouait alors sur une page d'erreur, et le
+ * message affiché ne disait rien de la vraie cause. Une API doit répondre en
+ * JSON même quand elle n'a rien à répondre.
+ */
+app.all('/api/*', (req, res) => {
+    res.status(404).json({
+        error: `Route API introuvable : ${req.method} ${req.path}`,
+        indice: "Si cette route vient d'être ajoutée, redémarrez le serveur."
+    });
+});
+
+/**
+ * Dernier filet : toute erreur non rattrapée par une route devient une réponse
+ * JSON. Sans lui, Express renvoie une page HTML — ou rien du tout — et le
+ * navigateur affiche « Unexpected end of JSON input », qui ne désigne pas la
+ * cause. Mieux vaut un message exact qu'un symptôme.
+ */
+app.use((err, req, res, next) => {
+    console.error(`Erreur non rattrapée sur ${req.method} ${req.path} :`, err.message);
+    if (res.headersSent) return next(err);
+    const statut = err.status || err.statusCode || 500;
+    res.status(statut).json({
+        error: err.message || 'Erreur interne du serveur',
+        route: `${req.method} ${req.path}`
+    });
 });
 
 // Gestion globale des erreurs non capturées

@@ -1,10 +1,9 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted } from 'vue'
 defineEmits(['login'])
 
-const API_URL = import.meta.env.VITE_API_URL || '/api'
 const MAIN_APP_URL = import.meta.env.VITE_MAIN_APP_URL || 'https://rh.eonda.online/'
-const WHATSAPP_URL = 'https://wa.me/225151144337'
+const WHATSAPP_URL = 'https://wa.me/2250151144337'
 
 const features = [
   {
@@ -58,23 +57,6 @@ const features = [
 ]
 
 const deferredPrompt = ref(null)
-const plans = ref([])
-const plansLoading = ref(true)
-
-const priceFree = computed(() => {
-  const p = plans.value.find(x => x.code === 'free' || x.code === 'starter')
-  return p ? p.price.toLocaleString('fr-FR') : '0'
-})
-
-const pricePro = computed(() => {
-  const p = plans.value.find(x => x.code === 'pro')
-  return p ? p.price.toLocaleString('fr-FR') : '35 000'
-})
-
-const priceEnterprise = computed(() => {
-  const p = plans.value.find(x => x.code.toLowerCase() === 'entreprise' || x.code === 'enterprise')
-  return p ? p.price.toLocaleString('fr-FR') : '300 000'
-})
 
 onMounted(async () => {
   // PWA Prompt
@@ -82,19 +64,6 @@ onMounted(async () => {
     e.preventDefault()
     deferredPrompt.value = e
   })
-
-  // Chargement des tarifs
-  try {
-    const res = await fetch(`${API_URL}/billing/plans`)
-    if (res.ok) {
-      const data = await res.json()
-      plans.value = data.plans || []
-    }
-  } catch (err) {
-    console.error('Erreur chargement des tarifs:', err)
-  } finally {
-    plansLoading.value = false
-  }
 })
 
 const handleInstallPWA = async () => {
@@ -175,95 +144,40 @@ const handleInstallPWA = async () => {
       </div>
     </section>
 
-    <!-- PRICING SECTION -->
+    <!-- PRICING SECTION — délibérément sans tarifs : on mène avec le gratuit,
+         l'offre Pro existe mais ne montre pas de montant tant qu'on n'est pas
+         entré dans l'app (voir BillingModal.vue pour la tarification réelle). -->
     <section class="ent-pricing-section">
       <div class="pricing-header">
-        <h2>Commencez gratuitement, évoluez quand vous êtes prêt</h2>
-        <p>Pas de carte bancaire requise pour démarrer. Passez au Pro en quelques secondes.</p>
+        <h2>Commencez gratuitement, sans carte bancaire</h2>
+        <p>Tous les outils essentiels pour gérer votre paie, dès aujourd'hui — sans engagement.</p>
       </div>
 
-      <div class="pricing-cards">
-        <!-- FREE -->
-        <div class="pricing-card pricing-free">
-          <div class="pricing-card-top">
-            <div class="pricing-plan-name">Gratuit</div>
-            <div class="pricing-amount">
-              <span class="pricing-price">{{ priceFree }}</span>
-              <span class="pricing-currency">FCFA / mois</span>
-            </div>
-            <p class="pricing-desc">Les outils essentiels pour simuler et comprendre la paie, sans engagement.</p>
-            <button @click="$emit('login')" class="pricing-cta pricing-cta-free" style="border:none; cursor:pointer; width:100%;">Commencer gratuitement →</button>
-          </div>
-          <ul class="pricing-features">
-            <li><span class="feat-icon feat-ok">✓</span> Simulateur de bulletin de paie</li>
-            <li><span class="feat-icon feat-ok">✓</span> Calcul de congés payés</li>
-            <li><span class="feat-icon feat-ok">✓</span> Solde de tout compte</li>
-            <li><span class="feat-icon feat-ok">✓</span> Paramètres & modèles PDF</li>
-            <li><span class="feat-icon feat-ok">✓</span> CI, Bénin, Togo</li>
-            <li class="feat-disabled"><span class="feat-icon feat-no">✗</span> Annuaire illimité</li>
-            <li class="feat-disabled"><span class="feat-icon feat-no">✗</span> Historique bulletins</li>
-            <li class="feat-disabled"><span class="feat-icon feat-no">✗</span> Import Excel en masse</li>
-            <li class="feat-disabled"><span class="feat-icon feat-no">✗</span> Alertes contrats CDD</li>
-            <li class="feat-disabled"><span class="feat-icon feat-no">✗</span> Générateur de documents</li>
-          </ul>
-        </div>
-
-        <!-- PRO -->
-        <div class="pricing-card pricing-pro">
-          <div class="pricing-popular-badge">⭐ Le plus populaire</div>
-          <div class="pricing-card-top">
-            <div class="pricing-plan-name">Pro (Cloud)</div>
-            <div class="pricing-amount">
-              <span class="pricing-price" v-if="!plansLoading">{{ pricePro }}</span>
-              <span class="pricing-price" v-else>...</span>
-              <span class="pricing-currency">FCFA / mois</span>
-            </div>
-            <p class="pricing-desc">La gestion RH complète pour les PME et cabinets comptables hébergée sur nos serveurs sécurisés.</p>
-            <button @click="$emit('login')" class="pricing-cta pricing-cta-pro" style="border:none; cursor:pointer; width:100%;">Démarrer l'essai gratuit →</button>
-          </div>
-          <ul class="pricing-features">
-            <li><span class="feat-icon feat-ok">✓</span> <strong>Tout le plan Gratuit</strong></li>
-            <li><span class="feat-icon feat-ok">✓</span> Annuaire employés illimité</li>
-            <li><span class="feat-icon feat-ok">✓</span> Historique complet des bulletins</li>
-            <li><span class="feat-icon feat-ok">✓</span> Import Excel → bulletins en masse</li>
-            <li><span class="feat-icon feat-ok">✓</span> Alertes contrats CDD (J-30, J-15, J-7)</li>
-            <li><span class="feat-icon feat-ok">✓</span> Rappels par e-mail automatiques</li>
-            <li><span class="feat-icon feat-ok">✓</span> Générateur de documents RH</li>
-            <li><span class="feat-icon feat-ok">✓</span> Dashboards & analytique masse salariale</li>
-            <li><span class="feat-icon feat-ok">✓</span> Gestion absences & congés (calendrier)</li>
-            <li><span class="feat-icon feat-ok">✓</span> Support prioritaire WhatsApp</li>
-          </ul>
-        </div>
-
-        <!-- ENTREPRISE (LICENCE) -->
-        <div class="pricing-card pricing-enterprise">
-          <div class="pricing-card-top">
-            <div class="pricing-plan-name">Entreprise (Licence)</div>
-            <div class="pricing-amount">
-              <span class="pricing-price" v-if="!plansLoading">{{ priceEnterprise }}</span>
-              <span class="pricing-price" v-else>...</span>
-              <span class="pricing-currency">FCFA / achat unique</span>
-            </div>
-            <p class="pricing-desc">Logiciel complet hors-ligne, installé une seule fois sur votre machine. Sans abonnement, ni frais cachés.</p>
-            <a :href="WHATSAPP_URL" target="_blank" class="pricing-cta pricing-cta-enterprise">Contacter les ventes →</a>
-          </div>
-          <ul class="pricing-features">
-            <li><span class="feat-icon feat-ok">✓</span> <strong>Fonctionnalités RH hors-ligne</strong></li>
-            <li><span class="feat-icon feat-ok">✓</span> Paiement unique (clé d'activation)</li>
-            <li><span class="feat-icon feat-ok">✓</span> Installation autonome via exécutable (.exe)</li>
-            <li><span class="feat-icon feat-ok">✓</span> Base de données locale (100% privé)</li>
-            <li><span class="feat-icon feat-warn">⚠</span> <em>Aucune mise à jour logicielle</em></li>
-            <li><span class="feat-icon feat-warn">⚠</span> <em>Aucune maintenance technique</em></li>
-            <li><span class="feat-icon feat-warn">⚠</span> <em>Pas d'accès aux futurs modules</em></li>
-            <li><span class="feat-icon feat-warn">⚠</span> <em>Pas d'accès à l'IA</em></li>
-          </ul>
-        </div>
+      <div class="ent-free-highlight">
+        <button @click="$emit('login')" class="pricing-cta ent-free-highlight-cta">Commencer gratuitement →</button>
+        <ul class="pricing-features ent-free-highlight-features">
+          <li><span class="feat-icon feat-ok">✓</span> Simulateur de bulletin de paie</li>
+          <li><span class="feat-icon feat-ok">✓</span> Calcul de congés payés</li>
+          <li><span class="feat-icon feat-ok">✓</span> Solde de tout compte</li>
+          <li><span class="feat-icon feat-ok">✓</span> Paramètres & modèles PDF</li>
+          <li><span class="feat-icon feat-ok">✓</span> Côte d'Ivoire, Bénin, Togo</li>
+        </ul>
+        <p class="ent-pro-teaser">
+          Votre équipe grandit ? Une offre Pro existe pour l'annuaire illimité, l'import en masse et les alertes automatiques.
+          <a href="#" @click.prevent="$emit('login')" class="ent-pro-teaser-link">En savoir plus →</a>
+        </p>
       </div>
 
-      <p class="pricing-mobile-money">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 6px; color: #10b981;"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg>
-        Paiement accepté via <strong>Mobile Money</strong> (Wave, Orange Money, MTN MoMo) et carte bancaire.
-      </p>
+      <div class="ent-custom-offer">
+        <div class="ent-custom-offer-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+        </div>
+        <div class="ent-custom-offer-text">
+          <h3>Besoin d'une offre sur mesure ?</h3>
+          <p>Version installable avec vos propres modèles de documents, personnalisés à votre guise.</p>
+        </div>
+        <a :href="WHATSAPP_URL" target="_blank" rel="noopener" class="pricing-cta ent-custom-offer-cta">Contactez-nous →</a>
+      </div>
     </section>
 
     <section class="ent-contact">
@@ -835,91 +749,8 @@ const handleInstallPWA = async () => {
   font-size: 1.05rem;
 }
 
-.pricing-cards {
-  max-width: 1100px;
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 2rem;
-  align-items: start;
-}
-
-.pricing-card {
-  background: #ffffff;
-  border-radius: 1.5rem;
-  border: 1px solid #e2e8f0;
-  overflow: hidden;
-  position: relative;
-  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.03);
-}
-
-.pricing-pro {
-  border: 2px solid #4f46e5;
-  box-shadow: 0 20px 40px -10px rgba(79, 70, 229, 0.2);
-  transform: scale(1.02);
-}
-
-.pricing-enterprise {
-  border: 2px solid #0f172a;
-}
-
-.pricing-popular-badge {
-  background: linear-gradient(135deg, #4f46e5 0%, #ec4899 100%);
-  color: white;
-  text-align: center;
-  font-size: 0.8rem;
-  font-weight: 700;
-  padding: 0.5rem;
-  letter-spacing: 0.02em;
-}
-
-.pricing-card-top {
-  padding: 2rem;
-  border-bottom: 1px solid #f1f5f9;
-}
-
-.pricing-plan-name {
-  font-size: 1rem;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #64748b;
-  margin-bottom: 1rem;
-}
-
-.pricing-pro .pricing-plan-name {
-  color: #4f46e5;
-}
-
-.pricing-amount {
-  display: flex;
-  align-items: baseline;
-  gap: 0.4rem;
-  margin-bottom: 0.75rem;
-}
-
-.pricing-price {
-  font-size: 2.75rem;
-  font-weight: 900;
-  color: #0f172a;
-  letter-spacing: -0.03em;
-}
-
-.pricing-currency {
-  font-size: 0.9rem;
-  color: #64748b;
-  font-weight: 600;
-}
-
-.pricing-desc {
-  color: #64748b;
-  font-size: 0.9rem;
-  line-height: 1.5;
-  margin: 0 0 1.5rem 0;
-}
-
 .pricing-cta {
-  display: block;
+  display: inline-block;
   text-align: center;
   padding: 0.85rem 1.5rem;
   border-radius: 99px;
@@ -927,44 +758,13 @@ const handleInstallPWA = async () => {
   font-size: 0.95rem;
   text-decoration: none;
   transition: all 0.2s;
-}
-
-.pricing-cta-free {
-  background: #f1f5f9;
-  color: #0f172a;
-  border: 1px solid #e2e8f0;
-}
-
-.pricing-cta-free:hover {
-  background: #e2e8f0;
-}
-
-.pricing-cta-enterprise {
-  background: #0f172a;
-  color: #ffffff;
-  border: 1px solid #0f172a;
-}
-
-.pricing-cta-enterprise:hover {
-  background: #1e293b;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.2);
-}
-
-.pricing-cta-pro {
-  background: linear-gradient(135deg, #4f46e5 0%, #ec4899 100%);
-  color: white;
-  box-shadow: 0 8px 20px -5px rgba(79, 70, 229, 0.4);
-}
-
-.pricing-cta-pro:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 25px -5px rgba(79, 70, 229, 0.5);
+  border: none;
+  cursor: pointer;
 }
 
 .pricing-features {
   list-style: none;
-  padding: 1.75rem 2rem;
+  padding: 0;
   margin: 0;
   display: flex;
   flex-direction: column;
@@ -977,10 +777,6 @@ const handleInstallPWA = async () => {
   gap: 0.6rem;
   font-size: 0.9rem;
   color: #334155;
-}
-
-.feat-disabled {
-  color: #94a3b8 !important;
 }
 
 .feat-icon {
@@ -1000,24 +796,129 @@ const handleInstallPWA = async () => {
   color: #059669;
 }
 
-.feat-no {
-  background: #f1f5f9;
-  color: #94a3b8;
+/* Vitrine unique du plan Gratuit : un CTA, la liste des fonctionnalités
+   incluses, et une mention discrète de l'offre Pro — sans jamais afficher de
+   montant. Le tarif réel ne se montre qu'une fois dans l'app (BillingModal). */
+.ent-free-highlight {
+  max-width: 560px;
+  margin: 0 auto;
+  background: #ffffff;
+  border-radius: 1.5rem;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 20px 40px -15px rgba(15, 23, 42, 0.12);
+  padding: 2.5rem;
+  text-align: center;
 }
 
-.pricing-mobile-money {
-  text-align: center;
+.ent-free-highlight-cta {
+  display: block;
+  width: 100%;
+  background: linear-gradient(135deg, #4f46e5 0%, #ec4899 100%);
+  color: white;
+  box-shadow: 0 8px 20px -5px rgba(79, 70, 229, 0.4);
+  margin-bottom: 2rem;
+}
+
+.ent-free-highlight-cta:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 25px -5px rgba(79, 70, 229, 0.5);
+}
+
+.ent-free-highlight-features {
+  text-align: left;
+  max-width: 320px;
+  margin: 0 auto;
+}
+
+.ent-pro-teaser {
+  margin: 2rem 0 0 0;
+  padding-top: 1.75rem;
+  border-top: 1px solid #f1f5f9;
   color: #64748b;
-  font-size: 0.9rem;
-  margin-top: 2.5rem;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.ent-pro-teaser-link {
+  display: inline-block;
+  margin-top: 0.35rem;
+  color: #4f46e5;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.ent-pro-teaser-link:hover {
+  text-decoration: underline;
+}
+
+/* Offre sur mesure (version installable, modèles personnalisés) : un cadre
+   à part, sous la carte Gratuit, pour rester bien visible sans pour autant
+   afficher de montant. */
+.ent-custom-offer {
+  max-width: 560px;
+  margin: 1.5rem auto 0 auto;
+  background: #0f172a;
+  border-radius: 1.25rem;
+  padding: 1.5rem 1.75rem;
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.ent-custom-offer-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ent-custom-offer-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.ent-custom-offer-text h3 {
+  margin: 0 0 0.25rem 0;
+  font-size: 1rem;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.ent-custom-offer-text p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.ent-custom-offer-cta {
+  flex-shrink: 0;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.ent-custom-offer-cta:hover {
+  background: #e2e8f0;
+}
+
+@media (max-width: 560px) {
+  .ent-custom-offer {
+    flex-direction: column;
+    text-align: center;
+  }
+  .ent-custom-offer-cta {
+    width: 100%;
+  }
 }
 
 @media (max-width: 720px) {
-  .pricing-cards {
-    grid-template-columns: 1fr;
-  }
-  .pricing-pro {
-    transform: none;
+  .ent-free-highlight {
+    padding: 1.75rem;
   }
 }
 </style>

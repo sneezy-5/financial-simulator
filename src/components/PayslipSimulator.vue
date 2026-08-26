@@ -1,28 +1,11 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { getCountryRules } from '../services/countryConfig.js'
 import { calculatePayslip } from '../services/calculators/index.js'
 import { user, fetchMe } from '../services/auth.js'
+import { prepareTemplateSource, requestTemplateReconstruction, fillTemplatePlaceholders, injectLogoSlot } from '../services/templateExtractor.js'
 
 const emit = defineEmits(['require-auth', 'require-billing'])
-
-// Formules d'abonnement (pour le pré-contrôle client du quota de bulletins)
-const subscriptionPlans = ref([])
-onMounted(async () => {
-  try {
-    const res = await fetch('/api/billing/plans')
-    if (res.ok) {
-      const data = await res.json()
-      subscriptionPlans.value = data.plans || []
-    }
-  } catch (e) {
-    console.warn('Erreur chargement des formules d\'abonnement:', e)
-  }
-})
-const currentBulletinLimit = computed(() => {
-  const plan = subscriptionPlans.value.find(p => p.code === user.value?.subscriptionTier)
-  return plan ? plan.bulletinLimit : 0
-})
 
 // Prop optionnel pour pré-sélectionner le type depuis le composant parent
 const props = defineProps({
@@ -93,8 +76,6 @@ const emp = ref({
   date_dernier_conge: '',
   taux_at: 0.02,
   ayants_droit_cmu: 0,
-  // Régime fiscal
-  regime: '2024',
   // Période
   annee: new Date().getFullYear(),
   mois: new Date().getMonth() + 1,
@@ -236,14 +217,18 @@ const availableEmployees = ref([])
 // Charger au montage
 import { localDb } from '../services/localDatabase.js'
 import EmployeeSelect from './hr/EmployeeSelect.vue'
+import { getContracts, findActiveContract, splitPrimes } from '../services/payrollInput.js'
+
+const contrats = ref([])
 
 onMounted(async () => {
   if (user.value) {
     emp.value.nom_entreprise = user.value.companyName || user.value.entreprise || ''
     emp.value.numero_contribuable = user.value.companyNumeroContribuable || ''
     emp.value.numero_cnps = user.value.companyNumeroCnps || ''
+    if (user.value.defaultBulletinStyle) builtinStyle.value = user.value.defaultBulletinStyle
   }
-  
+
   loadFromUrlData()
   try {
     const templates = await localDb.getTemplates()
@@ -258,40 +243,172 @@ onMounted(async () => {
   try {
     if (window.isHRApp || user.value?.subscriptionTier) {
       availableEmployees.value = await localDb.getEmployees()
+      contrats.value = getContracts()
     }
   } catch (e) {
     console.warn("Erreur chargement employés", e)
   }
 })
 
+// ═══ MODÈLE DE BULLETIN PERSONNALISÉ (aperçu avant/après) ═══
+// On uploade un PDF, on l'analyse, et le gabarit capturé remplace en direct
+// l'aperçu ci-contre — sans écraser le modèle par défaut du compte tant que
+// l'utilisateur n'a pas explicitement choisi de l'enregistrer.
+const pdfCanvas = ref(null)
+const customTemplateFile = ref(null)
+const templateSource = ref(null)
+const pdfReady = ref(false)
+const analyzingTemplate = ref(false)
+const templateAnalysisError = ref(null)
+const previewOverrideHtml = ref(null)
+const lastAnalysis = ref(null)
+const savingAsDefault = ref(false)
+const savedAsDefaultToast = ref(false)
+const showOriginalCompare = ref(false)
+// Choix entre les modèles ONDA intégrés (sans rapport avec un modèle PDF
+// personnalisé) : 'classique' (tableau Base/Taux, une seule fois par section)
+// ou 'grille' (rubriques numérotées 010, 020…, colonnes P.S/P.P séparées).
+const builtinStyle = ref('classique')
+const BUILTIN_STYLE_NOMS = {
+  grille: 'Grille numérotée', compact: 'Compact', ondaclassic: 'ONDACLASSIC',
+  bancaire: 'Reçu bancaire', moderne: 'Moderne',
+  lavandiere: 'Congés détaillés', adArchitecture: 'Cumuls annuels', tcmLogistic: 'Grille patronale détaillée',
+  scaso: 'SCASO', personnalise: 'Personnalisé (couleur)'
+  // surMesure (Sur-mesure avec l'IA) désactivé pour le moment, voir SettingsPanel.vue.
+}
+
+const handleCustomTemplateUpload = (e) => {
+  const f = e.target.files[0]
+  if (!f) return
+  customTemplateFile.value = f
+  templateSource.value = null
+  pdfReady.value = false
+  previewOverrideHtml.value = null
+  lastAnalysis.value = null
+  templateAnalysisError.value = null
+  nextTick(async () => {
+    try {
+      templateSource.value = await prepareTemplateSource(f, pdfCanvas.value)
+      pdfReady.value = true
+    } catch (err) {
+      templateAnalysisError.value = err.message || "Ce fichier n'a pas pu être lu."
+    }
+  })
+}
+
+const analyzeCustomTemplate = async () => {
+  if (!pdfReady.value || !templateSource.value) {
+    templateAnalysisError.value = 'Le modèle est encore en cours de lecture, patientez un instant.'
+    return
+  }
+  analyzingTemplate.value = true
+  templateAnalysisError.value = null
+  try {
+    const result = await requestTemplateReconstruction(templateSource.value, 'payslip', 1)
+    previewOverrideHtml.value = result.htmlTemplate
+    lastAnalysis.value = result
+  } catch (err) {
+    templateAnalysisError.value = err.message || "Erreur lors de l'analyse du modèle."
+  } finally {
+    analyzingTemplate.value = false
+  }
+}
+
+const clearCustomTemplate = () => {
+  customTemplateFile.value = null
+  templateSource.value = null
+  pdfReady.value = false
+  previewOverrideHtml.value = null
+  lastAnalysis.value = null
+  templateAnalysisError.value = null
+  showOriginalCompare.value = false
+}
+
+const saveCustomTemplateAsDefault = async () => {
+  if (!previewOverrideHtml.value) return
+  savingAsDefault.value = true
+  try {
+    const { localDb } = await import('../services/localDatabase.js')
+    // Un seul modèle par défaut à la fois : sans ça, `.find()` retombe sur
+    // n'importe lequel des « isDefault » selon l'ordre de retour du serveur.
+    await localDb.clearDefaultTemplates('payslip')
+    await localDb.saveTemplate({
+      type: 'payslip',
+      name: customTemplateFile.value?.name || 'Modèle personnalisé',
+      htmlTemplate: previewOverrideHtml.value,
+      isDefault: true
+    })
+    defaultTemplateHtml.value = previewOverrideHtml.value
+    previewOverrideHtml.value = null
+    savedAsDefaultToast.value = true
+    setTimeout(() => { savedAsDefaultToast.value = false }, 3000)
+  } catch (err) {
+    templateAnalysisError.value = err.message || "Erreur lors de l'enregistrement du modèle."
+  } finally {
+    savingAsDefault.value = false
+  }
+}
+
+// Ce que l'aperçu doit réellement montrer : le modèle tout juste analysé
+// prime tant qu'il n'a pas été écarté, sinon le modèle par défaut du compte
+// (ou, à défaut des deux, l'aperçu ONDA codé en dur ci-dessous).
+const activePreviewHtml = computed(() => previewOverrideHtml.value || defaultTemplateHtml.value)
+
 const selectEmployeeCustom = (e) => {
   if (!e) return
-  
+
   emp.value.nom = e.nom || ''
   emp.value.prenom = e.prenom || ''
   emp.value.matricule = e.matricule || ''
-  emp.value.poste = e.poste || ''
   emp.value.date_naissance = e.date_naissance || ''
-  emp.value.num_secu = e.num_secu || ''
+  // Un employé de l'annuaire porte son numéro CNPS/CNSS sous `numero_cnps` —
+  // pas `num_secu`, qui n'existe que dans le formulaire manuel de ce simulateur.
+  // Sans ce repli, sélectionner un employé réel effaçait silencieusement son
+  // numéro sur le bulletin généré.
+  emp.value.num_secu = e.num_secu || e.numero_cnps || ''
   emp.value.ville = e.ville || 'ABIDJAN'
   emp.value.categorie = e.categorie || ''
   emp.value.qualification = e.qualification || ''
-  emp.value.type_contrat = e.type_contrat || 'CDI'
   emp.value.situation_matrimoniale = e.situation_matrimoniale || 'celibataire'
   emp.value.nombre_enfants = e.nombre_enfants || 0
   emp.value.statut_salarie = e.statut_salarie || 'local'
-  emp.value.date_embauche = e.date_embauche || ''
-  emp.value.salaire_base = e.salaire_base || 0
-  emp.value.sursalaire = e.sursalaire || 0
-  emp.value.prime_transport = e.prime_transport !== undefined ? e.prime_transport : 30000
-  emp.value.prime_logement = e.prime_logement || 0
   emp.value.rib = e.rib || ''
+
+  // Le contrat fait foi sur la rémunération, le poste et les dates : c'est la
+  // pièce signée (voir payrollInput.js). La fiche employé ne sert que de
+  // repli quand aucun contrat actif n'est trouvé pour la période du bulletin.
+  const contrat = findActiveContract(e.id, contrats.value, { mois: emp.value.mois, annee: emp.value.annee })
+
+  emp.value.poste = contrat?.poste || e.poste || ''
+  emp.value.date_embauche = contrat?.dateDebut || e.date_embauche || ''
+  emp.value.type_contrat = (contrat?.type || e.type_contrat || 'CDI')
+  emp.value.salaire_base = contrat && contrat.salaireDeBase !== '' && contrat.salaireDeBase != null
+    ? (+contrat.salaireDeBase || 0)
+    : (e.salaire_base || 0)
+  emp.value.sursalaire = contrat ? (+contrat.sursalaire || 0) : (e.sursalaire || 0)
+
+  if (contrat) {
+    const { named, free } = splitPrimes(contrat.primes)
+    emp.value.prime_transport = named.prime_transport !== undefined ? named.prime_transport : (e.prime_transport !== undefined ? e.prime_transport : 30000)
+    emp.value.prime_logement = named.prime_logement !== undefined ? named.prime_logement : (e.prime_logement || 0)
+    if (free.length) {
+      emp.value.primes = free.map((p, i) => ({
+        id: i + 1,
+        label: p.libelle || `Prime ${i + 1}`,
+        montant: p.montant,
+        imposable: p.imposable
+      }))
+    }
+  } else {
+    emp.value.prime_transport = e.prime_transport !== undefined ? e.prime_transport : 30000
+    emp.value.prime_logement = e.prime_logement || 0
+  }
 }
 
 
 const livePreviewHtml = computed(() => {
-  if (!defaultTemplateHtml.value) return ''
-  
+  if (!activePreviewHtml.value) return ''
+
   const c = calc.value || {}
   const viewData = {
     ...emp.value,
@@ -300,28 +417,9 @@ const livePreviewHtml = computed(() => {
     nom_entreprise: (emp.value.nom_entreprise || 'ENTREPRISE').toUpperCase()
   }
 
-  let html = defaultTemplateHtml.value
-  const formatFCFA = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
-
-  for (const key of Object.keys(viewData)) {
-    const val = viewData[key]
-    // Flatten nested objects (like salarial, patronal) if necessary, but string replace is flat
-    // In payrollService we just do a flat replace of the top level keys
-    // Wait, calc.salarial.cnps exists. The backend does a flat Object.keys(viewData), so it doesn't handle nested tags unless they are flattened!
-    // Actually the backend just does ...calculs, which has nested objects. We need to flatten them here for the frontend live preview!
-    if (typeof val === 'object' && val !== null) {
-        for (const subKey of Object.keys(val)) {
-            const subVal = val[subKey]
-            const strVal = typeof subVal === 'number' ? formatFCFA(subVal) : (subVal || '')
-            const regex = new RegExp(`{${key}.${subKey}}`, 'g')
-            html = html.replace(regex, strVal)
-        }
-    }
-    const strVal = typeof val === 'number' ? formatFCFA(val) : (val || '')
-    const regex = new RegExp(`{${key}}`, 'g')
-    html = html.replace(regex, strVal)
-  }
-  html = html.replace(/{[^}]+}/g, '0')
+  // fillTemplatePlaceholders gère aussi bien les {cle} simples que les
+  // {objet.champ} imbriqués (salarial.cnps, patronal.total…).
+  let html = injectLogoSlot(fillTemplatePlaceholders(activePreviewHtml.value, viewData), user.value?.companyLogo || null)
 
   const fullHtml = `
     <!DOCTYPE html>
@@ -535,49 +633,28 @@ const calculerBrutDepuisNet = () => {
     }
     parts = Math.min(parts, 5.0)
 
-    if (emp.value.regime !== 'ancien') {
-      const salImposable = Math.max(0, brutTest - cnpsSal - cmuSal)
-      const tranches = [
-        { plafond: 75000, taux: 0.00 },
-        { plafond: 240000, taux: 0.16 },
-        { plafond: 800000, taux: 0.21 },
-        { plafond: 2400000, taux: 0.24 },
-        { plafond: 8000000, taux: 0.28 },
-        { plafond: Infinity, taux: 0.32 }
-      ]
-      
-      let impotBrut = 0
-      let prec = 0
-      for (const { plafond, taux } of tranches) {
-        if (salImposable <= prec) break
-        impotBrut += (Math.min(salImposable, plafond) - prec) * taux
-        prec = plafond
-      }
+    // ITS (impôt unique sur salaires, réforme fiscale 2024) — seul régime calculé.
+    const salImposable = Math.max(0, brutTest - cnpsSal - cmuSal)
+    const tranches = [
+      { plafond: 75000, taux: 0.00 },
+      { plafond: 240000, taux: 0.16 },
+      { plafond: 800000, taux: 0.21 },
+      { plafond: 2400000, taux: 0.24 },
+      { plafond: 8000000, taux: 0.28 },
+      { plafond: Infinity, taux: 0.32 }
+    ]
 
-      const itsBrut = Math.round(impotBrut)
-      let ricf = Math.max(0, (parts - 1) * 11000)
-      impots = Math.max(0, itsBrut - ricf)
-    } else {
-      const isTest = Math.round(brutTest * 0.012)
-      let cnTest = 0
-      if (brutTest > 50000) {
-        if (brutTest <= 130000) cnTest = Math.round((brutTest - 50000) * 0.015)
-        else if (brutTest <= 200000) cnTest = 1200 + Math.round((brutTest - 130000) * 0.05)
-        else cnTest = 4700 + Math.round((brutTest - 200000) * 0.10)
-      }
-      const baseIGR = (brutTest - isTest - cnTest - cnpsSal) * 0.85
-      const qf = baseIGR / parts
-      let igrParPart = 0
-      if (qf > 25000) {
-        if (qf <= 45583) igrParPart = (qf - 25000) * 0.10
-        else if (qf <= 81666) igrParPart = (qf * 0.15) - 2292
-        else if (qf <= 126666) igrParPart = (qf * 0.20) - 6375
-        else if (qf <= 220833) igrParPart = (qf * 0.25) - 12708
-        else if (qf <= 389166) igrParPart = (qf * 0.35) - 34792
-        else igrParPart = (qf * 0.45) - 73708
-      }
-      impots = isTest + cnTest + Math.max(0, Math.round(igrParPart * parts))
+    let impotBrut = 0
+    let prec = 0
+    for (const { plafond, taux } of tranches) {
+      if (salImposable <= prec) break
+      impotBrut += (Math.min(salImposable, plafond) - prec) * taux
+      prec = plafond
     }
+
+    const itsBrut = Math.round(impotBrut)
+    let ricf = Math.max(0, (parts - 1) * 11000)
+    impots = Math.max(0, itsBrut - ricf)
 
     const netTest = brutTest - (cnpsSal + impots + cmuSal) + emp.value.prime_transport + emp.value.primes_non_imposables - emp.value.autres_retenues
 
@@ -615,28 +692,14 @@ const generatePDF = async () => {
     return
   }
 
+  // Le bulletin individuel (habituel comme congé) reste sans limite, y compris
+  // pour un compte gratuit — seule la connexion est exigée. La génération
+  // groupée (import Excel) et les fonctionnalités IA restent, elles, comptées
+  // dans l'allocation mensuelle (voir billingService.js côté serveur).
   const token = localStorage.getItem('auth_token')
   if (!token) {
     errorMsg.value = "Vous devez être connecté pour générer un bulletin de paie."
     emit('require-auth')
-    return
-  }
-
-  if (user.value && !user.value.subscriptionTier) {
-    errorMsg.value = "Vous n'avez pas d'abonnement actif. Choisissez une formule pour générer des bulletins."
-    emit('require-billing')
-    return
-  }
-
-  if (user.value && user.value.subscriptionExpiresAt && new Date(user.value.subscriptionExpiresAt) <= new Date()) {
-    errorMsg.value = "Votre abonnement a expiré. Renouvelez pour continuer."
-    emit('require-billing')
-    return
-  }
-
-  if (user.value && (currentBulletinLimit.value - (user.value.bulletinsUsed || 0)) < 1) {
-    errorMsg.value = `Quota mensuel atteint (${user.value.bulletinsUsed || 0}/${currentBulletinLimit.value} bulletins). Passez à un forfait supérieur.`
-    emit('require-billing')
     return
   }
 
@@ -646,25 +709,20 @@ const generatePDF = async () => {
   downloadUrl.value = null
 
   try {
-    let htmlTemplate = null
-    try {
-      const { localDb } = await import('../services/localDatabase.js')
-      const templates = await localDb.getTemplates()
-      const defTpl = templates.find(t => t.isDefault && (!t.type || t.type === 'payslip'))
-      if (defTpl && defTpl.htmlTemplate) {
-        htmlTemplate = defTpl.htmlTemplate
-      }
-    } catch(e) {
-      console.warn('Erreur lecture modèle par défaut', e)
-    }
+    // Ce qui est affiché à l'écran est ce qui est téléchargé : un modèle tout
+    // juste analysé (pas encore enregistré comme défaut) s'applique quand même
+    // au PDF généré, sinon l'aperçu mentirait sur ce que produit le bouton.
+    const htmlTemplate = activePreviewHtml.value || null
 
     const response = await fetch('/api/rh/generate-single-payslip', {
       method: 'POST',
-      headers: { 
+      headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ employee: emp.value, htmlTemplate })
+      // templateStyle ne s'applique qu'au modèle ONDA intégré (aucun effet dès
+      // qu'un modèle personnalisé — htmlTemplate — est actif).
+      body: JSON.stringify({ employee: emp.value, htmlTemplate, templateStyle: htmlTemplate ? null : builtinStyle.value })
     })
 
     if (!response.ok) {
@@ -937,16 +995,6 @@ const tabs = [
             <div class="bloc-title"><span class="bloc-num">1</span> Salaire de Base & Fiscalité</div>
             <div class="field-row">
               <div class="field-group">
-                <label>Régime Fiscal</label>
-                <select v-model="emp.regime">
-                  <option value="2024">Nouveau Régime ({{ countryRules.libelleImpotSalarial.split(' ')[0] }})</option>
-                  <option value="ancien">Ancien Régime</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="field-row">
-              <div class="field-group">
                 <label>
                   Salaire Catégoriel (FCFA) <span class="required">*</span>
                   <span class="field-hint">Rémunération pour 173.33 h/mois.</span>
@@ -1151,7 +1199,86 @@ const tabs = [
 
       <!-- COLONNE DROITE: Prévisualisation Premium LOGIPAIE -->
       <div class="paysim-preview">
-        <div v-if="defaultTemplateHtml" class="preview-container" style="padding: 0; background: transparent; border: none;">
+
+        <!-- Modèle utilisé pour cet aperçu : ONDA par défaut, ou votre PDF attaché -->
+        <div class="tpl-picker">
+          <div class="tpl-picker-row">
+            <div class="tpl-picker-status">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <span v-if="previewOverrideHtml">Aperçu : <strong>{{ customTemplateFile?.name }}</strong> <em>(pas encore enregistré)</em></span>
+              <span v-else-if="defaultTemplateHtml">Aperçu : <strong>votre modèle par défaut</strong></span>
+              <span v-else>Aperçu : <strong>modèle ONDA par défaut</strong></span>
+            </div>
+            <label class="tpl-picker-upload">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Attacher mon bulletin (PDF)
+              <input type="file" accept=".pdf" @change="handleCustomTemplateUpload" />
+            </label>
+          </div>
+
+          <div v-if="!previewOverrideHtml && !defaultTemplateHtml" class="tpl-picker-row" style="margin-top: 6px;">
+            <label style="font-size: 0.8rem; color: #64748b;">Style du modèle ONDA :</label>
+            <select v-model="builtinStyle" class="tpl-style-select">
+              <option value="classique">Classique (Base / Taux)</option>
+              <option value="grille">Grille numérotée (010, 020… — P.S / P.P)</option>
+              <option value="compact">Compact (une seule colonne)</option>
+              <option value="ondaclassic">ondaclassic (charges patronales séparées)</option>
+              <option value="bancaire">Reçu bancaire (gains / retenues côte à côte)</option>
+              <option value="moderne">Moderne (cartes colorées)</option>
+              <option value="lavandiere">Congés détaillés (Acquis/Reste/Pris)</option>
+              <option value="adArchitecture">Cumuls annuels (billetage espèces)</option>
+              <option value="tcmLogistic">Grille patronale détaillée (Retenue +/-)</option>
+              <option value="scaso">SCASO (noir et blanc, cachet et signature)</option>
+              <option value="personnalise">Personnalisé (votre couleur — Paramètres)</option>
+            </select>
+          </div>
+
+          <div v-if="customTemplateFile" class="tpl-picker-row tpl-picker-actions">
+            <span class="tpl-picker-filename">{{ customTemplateFile.name }}</span>
+            <button v-if="!previewOverrideHtml" class="tpl-btn tpl-btn-primary" @click="analyzeCustomTemplate" :disabled="analyzingTemplate || !pdfReady">
+              {{ analyzingTemplate ? 'Analyse en cours…' : 'Analyser et voir le changement' }}
+            </button>
+            <template v-else>
+              <button class="tpl-btn tpl-btn-primary" @click="saveCustomTemplateAsDefault" :disabled="savingAsDefault">
+                {{ savingAsDefault ? 'Enregistrement…' : 'Enregistrer comme modèle par défaut' }}
+              </button>
+              <button class="tpl-btn" @click="analyzeCustomTemplate" :disabled="analyzingTemplate">Réanalyser</button>
+              <button v-if="templateSource?.imageBase64" class="tpl-btn" @click="showOriginalCompare = !showOriginalCompare">
+                {{ showOriginalCompare ? 'Masquer l\'original' : 'Comparer à l\'original' }}
+              </button>
+            </template>
+            <button class="tpl-btn tpl-btn-ghost" @click="clearCustomTemplate">Retirer</button>
+          </div>
+
+          <p v-if="templateAnalysisError" class="tpl-picker-error">{{ templateAnalysisError }}</p>
+          <p v-if="savedAsDefaultToast" class="tpl-picker-success">Modèle enregistré comme défaut — il sera utilisé pour tous vos prochains bulletins.</p>
+          <p v-if="lastAnalysis && previewOverrideHtml" class="tpl-picker-info">
+            <span v-if="lastAnalysis.engine === 'ai-vision'">Reconstruction approximative (aucune couche texte exploitable dans ce PDF — probablement un scan)</span>
+            <span v-else>Mise en page reproduite à l'identique</span>{{ lastAnalysis.variables?.length ? ` — ${lastAnalysis.variables.length} champ(s) reconnu(s)` : '' }}.
+            <span v-if="lastAnalysis.unmapped?.length">{{ lastAnalysis.unmapped.length }} champ(s) sans donnée resteront vides.</span>
+          </p>
+          <p v-if="previewOverrideHtml && !previewOverrideHtml.trim()" class="tpl-picker-error">
+            L'analyse n'a produit aucun contenu exploitable pour ce PDF — réessayez, ou contactez le support avec ce fichier.
+          </p>
+          <p v-if="previewOverrideHtml?.includes('data-onda-logo') && !user?.companyLogo" class="tpl-picker-warning">
+            Un emplacement de logo a été repéré dans ce PDF, mais aucun logo n'est configuré sur votre compte : il restera vide. Importez-en un dans Paramètres → Profil Entreprise pour qu'il apparaisse ici.
+          </p>
+        </div>
+        <canvas ref="pdfCanvas" style="display: none;"></canvas>
+
+        <div v-if="activePreviewHtml && showOriginalCompare && templateSource?.imageBase64" class="compare-grid">
+          <div class="compare-col">
+            <div class="compare-label">VOTRE PDF (ORIGINAL)</div>
+            <div class="compare-frame"><img :src="templateSource.imageBase64" alt="PDF original" /></div>
+          </div>
+          <div class="compare-col">
+            <div class="compare-label">REPRODUCTION (VOS DONNÉES SAISIES)</div>
+            <div class="compare-frame">
+              <iframe :srcdoc="livePreviewHtml" style="width: 100%; height: 100%; border: none;" scrolling="yes"></iframe>
+            </div>
+          </div>
+        </div>
+        <div v-else-if="activePreviewHtml" class="preview-container" style="padding: 0; background: transparent; border: none;">
           <iframe
             ref="templateIframeRef"
             :srcdoc="livePreviewHtml"
@@ -1159,8 +1286,13 @@ const tabs = [
             scrolling="no"
           ></iframe>
         </div>
+        <div v-else-if="builtinStyle !== 'classique'" class="preview-container" style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 10px; min-height: 300px; color: #64748b;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>
+          <strong style="color: #334155;">Modèle « {{ BUILTIN_STYLE_NOMS[builtinStyle] || builtinStyle }} »</strong>
+          <p style="max-width: 320px; font-size: 0.85rem; margin: 0;">Cette mise en page est générée directement en PDF ; il n'y a pas d'aperçu en direct sur cette page. Cliquez sur « Générer PDF » pour la voir.</p>
+        </div>
         <div v-else class="preview-container">
-          
+
           <!-- Header Bulletin Neutre -->
           <div class="preview-header">
             <div class="header-left">
@@ -1582,29 +1714,22 @@ const tabs = [
                 </tr>
 
                 <!-- Fiscalité -->
-                <template v-if="emp.regime !== 'ancien'">
-                  <tr>
-                    <td class="code">405</td>
-                    <td class="label">{{ countryRules.libelleImpotSalarial }}</td>
-                    <td class="val">{{ fcfa(calc.brutImposable) }}</td>
-                    <td></td><td></td>
-                    <td class="retenue">{{ fcfa((calc.salarial.its || 0) + (calc.salarial.ricf || 0)) }}</td>
-                    <td></td><td></td>
-                  </tr>
-                  <tr v-if="calc.salarial.ricf > 0" class="sub-row">
-                    <td class="code">406</td>
-                    <td class="label">&nbsp;&nbsp;dont RED. FAMILIALE (RICF) [{{ calc.parts?.toFixed(2) }} parts]</td>
-                    <td></td><td></td>
-                    <td class="sub-gain">( -{{ fcfa(calc.salarial.ricf) }} )</td>
-                    <td></td><td></td><td></td>
-                  </tr>
-                </template>
-                <template v-else>
-                  <tr><td class="code">405</td><td class="label">IMPOT SUR SALAIRE (I.S.)</td><td class="val">{{ fcfa(calc.brutImposable) }}</td><td class="val">1.2%</td><td></td><td class="retenue">{{ fcfa(calc.salarial.is) }}</td><td></td><td></td></tr>
-                  <tr><td class="code">410</td><td class="label">CONTRIBUTION NAT. (C.N.)</td><td class="val">{{ fcfa(calc.brutImposable) }}</td><td></td><td></td><td class="retenue">{{ fcfa(calc.salarial.cn) }}</td><td></td><td></td></tr>
-                  <tr><td class="code">415</td><td class="label">I.G.R.</td><td></td><td></td><td></td><td class="retenue">{{ fcfa(calc.salarial.igr) }}</td><td></td><td></td></tr>
-                </template>
-                
+                <tr>
+                  <td class="code">405</td>
+                  <td class="label">{{ countryRules.libelleImpotSalarial }}</td>
+                  <td class="val">{{ fcfa(calc.brutImposable) }}</td>
+                  <td></td><td></td>
+                  <td class="retenue">{{ fcfa((calc.salarial.its || 0) + (calc.salarial.ricf || 0)) }}</td>
+                  <td></td><td></td>
+                </tr>
+                <tr v-if="calc.salarial.ricf > 0" class="sub-row">
+                  <td class="code">406</td>
+                  <td class="label">&nbsp;&nbsp;dont RED. FAMILIALE (RICF) [{{ calc.parts?.toFixed(2) }} parts]</td>
+                  <td></td><td></td>
+                  <td class="sub-gain">( -{{ fcfa(calc.salarial.ricf) }} )</td>
+                  <td></td><td></td><td></td>
+                </tr>
+
                 <!-- Autres Taxes Salariales (ex: ORTB Bénin) -->
                 <tr v-for="taxe in calc.salarial.autresTaxes" :key="taxe.code">
                   <td class="code">{{ taxe.code }}</td>
@@ -2404,9 +2529,100 @@ const tabs = [
   overflow-y: auto;
   background: #f1f5f9;
   display: flex;
-  justify-content: center;
-  align-items: flex-start;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
 }
+
+.tpl-picker {
+  width: 100%;
+  max-width: 1050px;
+  box-sizing: border-box;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+}
+.tpl-picker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.tpl-picker-status {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #475569;
+}
+.tpl-picker-status svg { flex-shrink: 0; color: #2563eb; }
+.tpl-picker-status em { color: #b45309; font-style: normal; }
+.tpl-picker-upload {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tpl-picker-upload:hover { background: #dbeafe; }
+.tpl-picker-upload input { display: none; }
+.tpl-style-select {
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8rem;
+  color: #334155;
+  background: white;
+}
+.tpl-picker-actions { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px dashed #e2e8f0; }
+.tpl-picker-filename { color: #64748b; margin-right: auto; }
+.tpl-btn {
+  border: 1px solid #e2e8f0;
+  background: white;
+  color: #334155;
+  border-radius: 6px;
+  padding: 0.4rem 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+.tpl-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.tpl-btn-primary { background: #2563eb; color: white; border-color: #2563eb; }
+.tpl-btn-ghost { border-color: transparent; color: #94a3b8; }
+.tpl-picker-error { color: #dc2626; margin: 0.5rem 0 0; }
+.tpl-picker-warning { color: #b45309; background: #fffbeb; border: 1px solid #fde68a; padding: 8px 12px; border-radius: 6px; margin: 0.5rem 0 0; }
+.tpl-picker-success { color: #059669; margin: 0.5rem 0 0; font-weight: 600; }
+.tpl-picker-info { color: #64748b; margin: 0.5rem 0 0; }
+
+.compare-grid {
+  width: 100%;
+  max-width: 1050px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 800px) {
+  .compare-grid { grid-template-columns: 1fr; }
+}
+.compare-label { font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px; text-align: center; font-weight: 700; letter-spacing: 0.02em; }
+.compare-frame {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: auto;
+  height: 600px;
+  background: white;
+  box-shadow: 0 1px 8px rgba(0,0,0,0.08);
+}
+.compare-frame img { width: 100%; display: block; }
 
 @media (min-width: 640px) {
   .paysim-preview {

@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch } from 'vue'
+import { isCountryActive, INACTIVE_LABEL } from '../services/countryConfig.js'
 
 const props = defineProps({
   country: {
@@ -23,6 +24,9 @@ const countries = [
 const emit = defineEmits(['change-country'])
 
 const select = (code) => {
+  // Un pays non éprouvé ne doit pas pouvoir être choisi : ses calculs
+  // s'appliqueraient à des bulletins officiels sans avoir été validés.
+  if (!isCountryActive(code)) return
   selectedCountry.value = code
   emit('change-country', code)
 }
@@ -38,7 +42,9 @@ const select = (code) => {
       <button 
         v-for="c in countries" 
         :key="c.code"
-        :class="{ active: selectedCountry === c.code }"
+        :class="{ active: selectedCountry === c.code, inactive: !isCountryActive(c.code) }"
+        :disabled="!isCountryActive(c.code)"
+        :title="isCountryActive(c.code) ? c.name : `${c.name} — ${INACTIVE_LABEL}`"
         @click="select(c.code)"
         class="country-pill-btn"
       >
@@ -50,6 +56,13 @@ const select = (code) => {
 </template>
 
 <style scoped>
+.country-pill-btn.inactive {
+  opacity: 0.4;
+  filter: grayscale(1);
+  cursor: not-allowed;
+}
+.country-pill-btn.inactive:hover { background: inherit; transform: none; }
+
 .country-selector-wrap {
   display: flex;
   align-items: center;

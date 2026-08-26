@@ -562,6 +562,15 @@ const fetchUsers = async () => {
     }
 }
 
+// Nom lisible d'un palier ('starter', 'pro', un code de pack personnalisé...) —
+// cherché dans les formules réellement configurées (Tab 3) plutôt que codé en
+// dur, sinon un nouveau pack créé là-bas restait affiché sous son code brut ici.
+const planLabel = (tier) => {
+    if (!tier) return 'Aucun'
+    const plan = subscriptionPlans.value.find(p => p.tier === tier || p.code === tier)
+    return plan ? plan.name : tier
+}
+
 // Octroi/prolongation manuelle d'un abonnement (ex : paiement Mobile Money hors Paystack)
 const grantUserSubscription = async (userObj, tier) => {
     try {
@@ -578,7 +587,7 @@ const grantUserSubscription = async (userObj, tier) => {
         userObj.subscriptionTier = data.user.subscriptionTier
         userObj.subscriptionExpiresAt = data.user.subscriptionExpiresAt
         userObj.bulletinsUsed = data.user.bulletinsUsed
-        showToast(tier ? `Abonnement ${tier === 'pro' ? 'Pro' : 'Starter'} activé pour ${userObj.email}.` : `Abonnement désactivé pour ${userObj.email}.`, 'success')
+        showToast(tier ? `Abonnement ${planLabel(tier)} activé pour ${userObj.email}.` : `Abonnement désactivé pour ${userObj.email}.`, 'success')
     } catch (e) {
         showToast("Erreur : " + e.message, 'error')
     }
@@ -998,12 +1007,18 @@ onMounted(async () => {
                   <td>
                     <div class="credits-adjuster">
                       <button @click="grantUserSubscription(u, null)" class="btn-credit-min" title="Désactiver l'abonnement">Aucun</button>
-                      <button @click="grantUserSubscription(u, 'starter')" class="btn-credit-plus" title="Activer Starter pour 30 jours">Starter</button>
-                      <button @click="grantUserSubscription(u, 'pro')" class="btn-credit-plus-big" title="Activer Pro pour 30 jours">Pro</button>
+                      <button
+                        v-for="p in subscriptionPlans.filter(p => p.active)"
+                        :key="p.id"
+                        @click="grantUserSubscription(u, p.tier || p.code)"
+                        class="btn-credit-plan"
+                        :class="{ 'btn-credit-plan-active': u.subscriptionTier === (p.tier || p.code) }"
+                        :title="`Activer ${p.name} pour 30 jours`"
+                      >{{ p.name }}</button>
                     </div>
                     <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.3rem;">
                       <template v-if="u.subscriptionTier">
-                        <span class="credits-amount" style="padding: 0.15rem 0.5rem; font-size: 0.7rem;">{{ u.subscriptionTier === 'pro' ? 'Pro' : 'Starter' }}</span>
+                        <span class="credits-amount" style="padding: 0.15rem 0.5rem; font-size: 0.7rem;">{{ planLabel(u.subscriptionTier) }}</span>
                         {{ u.bulletinsUsed || 0 }} bulletins · expire {{ formatDate(u.subscriptionExpiresAt) }}
                       </template>
                       <template v-else>Aucun abonnement</template>
@@ -2073,7 +2088,31 @@ tr:last-child td {
 .credits-adjuster {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.4rem;
+}
+
+.btn-credit-plan {
+  background: #dbeafe;
+  color: #1e40af;
+  border: 1px solid #93c5fd;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-credit-plan:hover {
+  background: #3b82f6;
+  color: #ffffff;
+}
+
+.btn-credit-plan-active {
+  background: #1e40af;
+  color: #ffffff;
+  border-color: #1e40af;
 }
 
 .credits-amount {
@@ -2107,40 +2146,6 @@ tr:last-child td {
 
 .btn-credit-min:hover {
   background: #ef4444;
-  color: #ffffff;
-}
-
-.btn-credit-plus {
-  background: #dcfce7;
-  color: #15803d;
-  border: 1px solid #86efac;
-  padding: 0.25rem 0.5rem;
-  border-radius: 6px;
-  font-size: 0.75rem;
-  font-weight: 800;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.btn-credit-plus:hover {
-  background: #22c55e;
-  color: #ffffff;
-}
-
-.btn-credit-plus-big {
-  background: #dbeafe;
-  color: #1e40af;
-  border: 1px solid #93c5fd;
-  padding: 0.25rem 0.5rem;
-  border-radius: 6px;
-  font-size: 0.75rem;
-  font-weight: 800;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.btn-credit-plus-big:hover {
-  background: #3b82f6;
   color: #ffffff;
 }
 

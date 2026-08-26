@@ -62,9 +62,12 @@ const User = sequelize.define('User', {
         type: DataTypes.STRING,
         allowNull: false
     },
+    // Crédits ACHETÉS (packs) uniquement désormais — ils ne périment jamais et
+    // ne se rechargent pas tout seuls. L'allocation gratuite mensuelle (5/mois)
+    // vit séparément dans freeMonthlyUsed/freeMonthlyResetAt, voir plus bas.
     credits: {
         type: DataTypes.INTEGER,
-        defaultValue: 5 // Crédits gratuits à l'inscription
+        defaultValue: 0
     },
     role: {
         type: DataTypes.STRING,
@@ -133,12 +136,93 @@ const User = sequelize.define('User', {
         type: DataTypes.STRING,
         allowNull: true // Numéro contribuable / NIF employeur
     },
+    companyLogo: {
+        type: DataTypes.TEXT,
+        allowNull: true // Logo (data URI base64) affiché sur les bulletins générés — absent, on l'ignore simplement.
+    },
+    // Complètent companyName/companyNumeroCnps/companyNumeroContribuable : les
+    // mêmes champs que la feuille ENTREPRISE du classeur d'import, pour que le
+    // profil renseigné une fois dans Paramètres serve d'en-tête à tous les
+    // documents générés (bulletins, contrats, attestations...).
+    companyAdresse: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    companyTelephone: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    companyEmail: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    companyVille: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    companySignataireNom: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    companySignataireFonction: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    // Lequel des modèles de bulletin ONDA intégrés (voir payrollService.js :
+    // generatePdfDefinition / generatePdfDefinitionGrilleNumerotee) utiliser par
+    // défaut. Absent (null), on retombe sur le modèle classique.
+    defaultBulletinStyle: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    // Codes de rubrique (le « N° » devant chaque ligne d'un bulletin), en JSON
+    // — {salaireBase: '10', its: '820', ...}. Il n'existe pas de numérotation
+    // universelle entre logiciels de paie ivoiriens (chacun a la sienne) : un
+    // compte peut redéfinir les siens pour retrouver ceux de son ancien
+    // logiciel. Absent, payrollService.js applique ses valeurs par défaut.
+    rubriqueCodes: {
+        type: DataTypes.TEXT,
+        allowNull: true
+    },
+    // Couleur d'accent (hex, ex. "#1e3a8a") du modèle de bulletin « Personnalisé »
+    // (voir generatePdfDefinitionPersonnalise) — le seul modèle ONDA dont la
+    // couleur n'est pas fixée dans le code mais choisie par le compte, comme un
+    // calque de couleur sur un gabarit neutre plutôt qu'un bulletin figé de plus.
+    bulletinCouleur: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    // Mise en page du modèle « Sur-mesure » (éditeur visuel type Canva), en
+    // JSON — un tableau de blocs {id, type, x, y, w, h, ...styles} en points
+    // PDF (1pt = 1/72 pouce, mêmes unités que pdfmake) : ce que l'éditeur
+    // dessine à l'écran et ce que payrollService.js imprime via
+    // absolutePosition sont donc littéralement les mêmes nombres, sans
+    // conversion qui pourrait diverger entre l'aperçu et le PDF réel.
+    bulletinCanvasLayout: {
+        type: DataTypes.TEXT,
+        allowNull: true
+    },
     subscriptionIsTrial: {
         type: DataTypes.BOOLEAN,
-        defaultValue: false // true tant que l'abonnement en cours est l'essai gratuit de 14 jours
+        defaultValue: false // true tant que l'abonnement en cours est l'essai gratuit d'un mois (Pro)
+    },
+    plan_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+    },
+    // Allocation gratuite mensuelle (bulletins groupés + fonctionnalités IA,
+    // pool commun) — se réinitialise à 5 toutes les 30 jours glissants pour
+    // qui n'a ni abonnement payant actif ni crédit acheté. Voir
+    // billingService.checkQuota / checkAiAccess.
+    freeMonthlyUsed: {
+        type: DataTypes.INTEGER,
+        defaultValue: 0
+    },
+    freeMonthlyResetAt: {
+        type: DataTypes.DATE,
+        allowNull: true
     }
 });
-
 // Modèle DEMANDE DE PAIE (Historique RH)
 const PayrollRequest = sequelize.define('PayrollRequest', {
     filename: {
@@ -228,7 +312,18 @@ const Employee = sequelize.define('Employee', {
     nombreEnfants: { type: DataTypes.INTEGER, defaultValue: 0 },
     genre: { type: DataTypes.STRING, allowNull: true },
     email: { type: DataTypes.STRING, allowNull: true },
-    telephone: { type: DataTypes.STRING, allowNull: true }
+    telephone: { type: DataTypes.STRING, allowNull: true },
+    // Salaire NET de référence déclaré sur la fiche — distinct de salaireBase,
+    // qui appartient au contrat (voir server/import/classeurModele.js).
+    salaireNet: { type: DataTypes.FLOAT, allowNull: true },
+    // 'local' ou 'expatrie' — l'employeur ivoirien paie un T.A.S.P bien plus
+    // élevé sur un salarié expatrié (voir tauxImpotEmployeurExpat côté
+    // src/services/countryConfig.js) : cette distinction n'était nulle part
+    // dans la fiche employé jusqu'ici.
+    statutSalarie: { type: DataTypes.STRING, allowNull: true, defaultValue: 'local' },
+    // 'cadre' ou 'employe' — alimente la répartition Cadres/Employés des
+    // indicateurs RH (inspiré de la feuille LOGIPAIE « INDICATEURS RH »).
+    categorieProfessionnelle: { type: DataTypes.STRING, allowNull: true }
 });
 
 const Absence = sequelize.define('Absence', {
@@ -254,6 +349,28 @@ const Evaluation = sequelize.define('Evaluation', {
     note: { type: DataTypes.FLOAT, allowNull: true }, // sur 5 ou 10
     objectifsAtteints: { type: DataTypes.BOOLEAN, defaultValue: false },
     commentaire: { type: DataTypes.TEXT, allowNull: true }
+});
+
+// Modèles de documents (bulletins, contrats, attestations...) uploadés ou
+// composés par l'utilisateur. `templateId` est fourni par le client (généré
+// côté frontend avant le premier enregistrement, ex. « custom_1699999999999 »)
+// et sert de clé pour les mises à jour — mais reste distinct de la clé
+// primaire interne, unique seulement par utilisateur : deux utilisateurs
+// peuvent sans risque générer le même templateId sans se marcher dessus.
+// Le contenu (HTML, base64 Office, variables...) est très variable d'un
+// modèle à l'autre : on le garde tel quel dans `payload` plutôt que de figer
+// des colonnes qui ne collent qu'à un seul type de modèle.
+const Template = sequelize.define('Template', {
+    templateId: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    payload: {
+        type: DataTypes.TEXT,
+        allowNull: false
+    }
+}, {
+    indexes: [{ unique: true, fields: ['templateId', 'userId'] }]
 });
 
 // Paramètres Locaux (pour la licence Desktop)
@@ -286,6 +403,9 @@ Employee.hasMany(Evaluation, { foreignKey: 'employeeId', onDelete: 'CASCADE' });
 Evaluation.belongsTo(Employee, { foreignKey: 'employeeId' });
 User.hasMany(Evaluation, { foreignKey: 'userId', onDelete: 'CASCADE' });
 Evaluation.belongsTo(User, { foreignKey: 'userId' });
+
+User.hasMany(Template, { foreignKey: 'userId', onDelete: 'CASCADE' });
+Template.belongsTo(User, { foreignKey: 'userId' });
 
 User.hasMany(PayrollPeriod, { foreignKey: 'userId', onDelete: 'CASCADE' });
 PayrollPeriod.belongsTo(User, { foreignKey: 'userId' });
@@ -551,8 +671,55 @@ const isSqlite = sequelize.getDialect() === 'sqlite';
     .then(() => sequelize.sync({ alter: false }))
     .finally(() => (isSqlite ? sequelize.query('PRAGMA foreign_keys = ON') : Promise.resolve()))
     .then(async () => {
+        // `sync({ alter: false })` ne crée que les tables absentes — une colonne
+        // ajoutée à un modèle déjà déployé (ex. companyLogo) n'apparaît jamais
+        // toute seule sur une base existante. Ajout ciblé, idempotent : simple
+        // ADD COLUMN nullable, sans le risque de reconstruction complète que
+        // `changeColumn`/`alter: true` pose sur SQLite (voir commentaire ci-dessus).
+        try {
+            const colonnesUsers = await sequelize.getQueryInterface().describeTable('Users');
+            if (!colonnesUsers.companyLogo) {
+                await sequelize.getQueryInterface().addColumn('Users', 'companyLogo', { type: DataTypes.TEXT, allowNull: true });
+                console.log('🛠️  Colonne Users.companyLogo ajoutée.');
+            }
+            for (const colonne of ['companyAdresse', 'companyTelephone', 'companyEmail', 'companyVille', 'companySignataireNom', 'companySignataireFonction', 'defaultBulletinStyle', 'rubriqueCodes', 'bulletinCouleur', 'bulletinCanvasLayout']) {
+                if (!colonnesUsers[colonne]) {
+                    await sequelize.getQueryInterface().addColumn('Users', colonne, { type: DataTypes.STRING, allowNull: true });
+                    console.log(`🛠️  Colonne Users.${colonne} ajoutée.`);
+                }
+            }
+            if (!colonnesUsers.freeMonthlyUsed) {
+                await sequelize.getQueryInterface().addColumn('Users', 'freeMonthlyUsed', { type: DataTypes.INTEGER, defaultValue: 0 });
+                console.log('🛠️  Colonne Users.freeMonthlyUsed ajoutée.');
+            }
+            if (!colonnesUsers.freeMonthlyResetAt) {
+                await sequelize.getQueryInterface().addColumn('Users', 'freeMonthlyResetAt', { type: DataTypes.DATE, allowNull: true });
+                console.log('🛠️  Colonne Users.freeMonthlyResetAt ajoutée.');
+            }
+        } catch (e) {
+            console.warn('Migration Users.companyLogo :', e.message);
+        }
+
+        try {
+            const colonnesEmployees = await sequelize.getQueryInterface().describeTable('Employees');
+            if (!colonnesEmployees.salaireNet) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'salaireNet', { type: DataTypes.FLOAT, allowNull: true });
+                console.log('🛠️  Colonne Employees.salaireNet ajoutée.');
+            }
+            if (!colonnesEmployees.statutSalarie) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'statutSalarie', { type: DataTypes.STRING, allowNull: true, defaultValue: 'local' });
+                console.log('🛠️  Colonne Employees.statutSalarie ajoutée.');
+            }
+            if (!colonnesEmployees.categorieProfessionnelle) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'categorieProfessionnelle', { type: DataTypes.STRING, allowNull: true });
+                console.log('🛠️  Colonne Employees.categorieProfessionnelle ajoutée.');
+            }
+        } catch (e) {
+            console.warn('Migration Employees.statutSalarie :', e.message);
+        }
+
         console.log('✅ Base de données synchronisée avec succès (alter: true).');
-        
+
         // Auto-seeding d'un administrateur par défaut si aucun n'existe
         try {
             const adminCount = await AdminUser.count();
@@ -758,7 +925,7 @@ const isSqlite = sequelize.getDialect() === 'sqlite';
         console.error('❌ Erreur de synchronisation de la base de données:', err);
     });
 
-module.exports = { sequelize, Visit, PayrollRequest, User, AdminUser, CreditPack, SubscriptionPlan, BankLoan, Transaction, Invoice, License, PayrollPeriod, PayslipRecord, Employee, Absence, Formation, Evaluation, LocalSettings };
+module.exports = { sequelize, Visit, PayrollRequest, User, AdminUser, CreditPack, SubscriptionPlan, BankLoan, Transaction, Invoice, License, PayrollPeriod, PayslipRecord, Employee, Absence, Formation, Evaluation, Template, LocalSettings };
 
 
 

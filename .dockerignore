@@ -1,0 +1,32 @@
+node_modules
+server/node_modules
+enterprise-site
+
+# Jamais dans l'image : les secrets prod sont injectés par le stack Docker
+# (variables d'environnement / secrets), pas copiés depuis le poste de dev.
+.env
+server/.env
+.env.*
+server/.env.*
+
+# Données locales / builds précédents
+dist
+dist-ssr
+dist_electron
+server/database.sqlite
+server/*.sqlite
+server/uploads
+uploads
+
+# Fichiers de scratch / debug jamais destinés au déploiement
+server/__test_*.js
+server/__dump_sheet.js
+server/__pdf_to_png.js
+
+# Divers
+.git
+.vscode
+.idea
+*.log
+tests
+node.exe

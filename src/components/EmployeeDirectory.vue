@@ -37,11 +37,12 @@ onMounted(() => {
 const filteredEmployees = computed(() => {
   if (!searchQuery.value) return employees.value
   const q = searchQuery.value.toLowerCase()
-  return employees.value.filter(e => 
-    (e.nom || '').toLowerCase().includes(q) || 
-    (e.prenom || '').toLowerCase().includes(q) || 
+  return employees.value.filter(e =>
+    (e.nom || '').toLowerCase().includes(q) ||
+    (e.prenom || '').toLowerCase().includes(q) ||
     (e.matricule || '').toLowerCase().includes(q) ||
-    (e.poste || '').toLowerCase().includes(q)
+    (e.poste || '').toLowerCase().includes(q) ||
+    (e.telephone || '').toLowerCase().includes(q)
   )
 })
 
@@ -78,7 +79,9 @@ const deleteEmployee = async (id) => {
 }
 
 const editEmployee = (emp) => {
-  selectedEmployee.value = JSON.parse(JSON.stringify(emp)) // Clone
+  const clone = JSON.parse(JSON.stringify(emp)) // Clone
+  if (!clone.statut_salarie) clone.statut_salarie = 'local'
+  selectedEmployee.value = clone
 }
 
 const saveEmployee = async () => {
@@ -86,8 +89,12 @@ const saveEmployee = async () => {
     showToast("Le nom complet est obligatoire", 'error')
     return
   }
-  if (!selectedEmployee.value.salaire_base || parseFloat(selectedEmployee.value.salaire_base) <= 0) {
-    showToast("Le salaire de base est obligatoire et doit être supérieur à 0", 'error')
+  // La composition de la rémunération appartient au contrat, pas à la fiche :
+  // la même donnée à deux endroits finit toujours par diverger. On ne demande
+  // ici que le net de référence, et il reste facultatif.
+  if (selectedEmployee.value.salaire_net !== undefined && selectedEmployee.value.salaire_net !== ''
+      && parseFloat(selectedEmployee.value.salaire_net) < 0) {
+    showToast("Le salaire net ne peut pas être négatif", 'error')
     return
   }
   if (!selectedEmployee.value.date_embauche) {
@@ -110,94 +117,97 @@ const triggerImport = () => {
   if (fileInput.value) fileInput.value.click()
 }
 
+/**
+ * Import du classeur unique : ENTREPRISE, EMPLOYES, CONTRATS.
+ *
+ * Le matricule fait le lien entre une fiche et son contrat. Un salarié sans
+ * matricule est apparié par nom et prénom — et à défaut créé, jamais fusionné
+ * au hasard avec un homonyme approximatif.
+ */
 const importExcel = async (e) => {
   const file = e.target.files[0]
   if (!file) return
   isImporting.value = true
   const formData = new FormData()
   formData.append('file', file)
-  
+
   try {
-    const res = await fetch('/api/rh/extract-data', { method: 'POST', body: formData })
-    const data = await res.json()
-    if (!data.success) throw new Error(data.error)
-    
-    if (data.data.length === 0) throw new Error("Fichier vide")
-    
-    // Auto-map headers
-    const headers = Object.keys(data.data[0])
-    const columnMap = {} 
-    
-    const fieldMappings = [
-      { key: 'nom', keywords: ['nom', 'name', 'salarie', 'salarié'] },
-      { key: 'prenom', keywords: ['prenom', 'prénom', 'first'] },
-      { key: 'matricule', keywords: ['matricule', 'id', 'numéro'] },
-      { key: 'salaire_base', keywords: ['salaire', 'base', 'brut', 'mensuel'] },
-      { key: 'sursalaire', keywords: ['sursalaire', 'sur salaire'] },
-      { key: 'prime_transport', keywords: ['transport', 'deplacement'] },
-      { key: 'prime_logement', keywords: ['logement', 'loyer'] },
-      { key: 'heures_sup_nb', keywords: ['heure', 'sup', 'hs'] },
-      { key: 'poste', keywords: ['poste', 'fonction', 'job'] },
-      { key: 'date_embauche', keywords: ['embauche', 'entree', 'entrée', 'recrutement'] }
-    ]
-    
-    const usedHeaders = new Set()
-    fieldMappings.forEach(field => {
-      const match = headers.find(h => {
-        if (usedHeaders.has(h)) return false
-        const hLow = h.toLowerCase()
-        return field.keywords.some(kw => hLow.includes(kw))
-      })
-      if (match) {
-        columnMap[match] = field.key
-        usedHeaders.add(match)
-      }
+    const token = localStorage.getItem('auth_token')
+    const res = await fetch('/api/rh/import/classeur', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData
     })
-    
-    // Fetch existing employees to prevent duplicates
-    const existingEmployees = await localDb.getEmployees()
-    
-    // Save all to localDb
-    let added = 0
-    let updated = 0
-    for (const rawEmp of data.data) {
-      const mappedEmp = {}
-      for (const [header, val] of Object.entries(rawEmp)) {
-        if (columnMap[header]) {
-          mappedEmp[columnMap[header]] = val
-        } else {
-          // Keep it with the original header name just in case
-          mappedEmp[header] = val
-        }
-      }
-      
-      // If we found a name, we save it
-      if (mappedEmp.nom) {
-        // Check for duplicate
-        const existing = existingEmployees.find(e => {
-          if (mappedEmp.matricule && e.matricule === mappedEmp.matricule) return true
-          return e.nom === mappedEmp.nom && (e.prenom || '') === (mappedEmp.prenom || '')
-        })
-        
-        if (existing) {
-          mappedEmp.id = existing.id
-          updated++
-        } else {
-          added++
-        }
-        await localDb.saveEmployee(mappedEmp)
-      }
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data.success) throw new Error(data.error || "Le classeur n'a pas pu être lu.")
+
+    const existants = await localDb.getEmployees()
+    const parMatricule = new Map()
+    let ajoutes = 0
+    let majs = 0
+
+    for (const ligne of data.employes || []) {
+      const existant = existants.find(x =>
+        (ligne.matricule && x.matricule === ligne.matricule) ||
+        (!ligne.matricule && x.nom === ligne.nom && (x.prenom || '') === (ligne.prenom || ''))
+      )
+      const fiche = { ...(existant || {}), ...ligne }
+      if (existant) { fiche.id = existant.id; majs++ } else { ajoutes++ }
+      const enregistre = await localDb.saveEmployee(fiche)
+      const id = (enregistre && enregistre.id) || fiche.id
+      if (ligne.matricule && id) parMatricule.set(ligne.matricule, id)
     }
-    
-    showToast(`${added} nouvel(s) employé(s) ajouté(s), ${updated} mis à jour avec succès !`, 'success')
+
+    // Les contrats sont rattachés par matricule à la fiche qui vient d'être
+    // enregistrée : c'est le contrat qui porte la rémunération.
+    let contratsRepris = 0
+    if (Array.isArray(data.contrats) && data.contrats.length) {
+      const dejaLa = JSON.parse(localStorage.getItem('onda_contrats') || '[]')
+      for (const c of data.contrats) {
+        const employeeId = parMatricule.get(c.matricule)
+        if (!employeeId) continue
+        const jumeau = dejaLa.find(x =>
+          String(x.employeeId) === String(employeeId) && (x.dateDebut || '') === (c.dateDebut || '')
+        )
+        const contrat = {
+          id: jumeau ? jumeau.id : Date.now() + Math.floor(Math.random() * 1000),
+          employeeId,
+          type: c.type, dateDebut: c.dateDebut, dateFin: c.dateFin, poste: c.poste,
+          salaireDeBase: c.salaireDeBase, sursalaire: c.sursalaire, primes: c.primes,
+          commentaire: jumeau ? jumeau.commentaire : ''
+        }
+        if (jumeau) Object.assign(jumeau, contrat)
+        else dejaLa.push(contrat)
+        contratsRepris++
+      }
+      localStorage.setItem('onda_contrats', JSON.stringify(dejaLa))
+    }
+
+    // Le volet entreprise sert d'en-tête à tous les documents générés.
+    if (data.entreprise && data.entreprise.raisonSociale) {
+      await localDb.saveSetting('entreprise', data.entreprise)
+    }
+
+    const parts = []
+    if (ajoutes) parts.push(`${ajoutes} salarié(s) ajouté(s)`)
+    if (majs) parts.push(`${majs} mis à jour`)
+    if (contratsRepris) parts.push(`${contratsRepris} contrat(s) repris`)
+    if (data.entreprise && data.entreprise.raisonSociale) parts.push('profil entreprise enregistré')
+    showToast(parts.length ? parts.join(', ') + '.' : 'Rien à importer dans ce classeur.', parts.length ? 'success' : 'info')
+
+    for (const avertissement of data.avertissements || []) {
+      showToast(avertissement, 'info')
+    }
     await loadEmployees()
   } catch (err) {
     showToast("Erreur lors de l'import : " + err.message, 'error')
   } finally {
     isImporting.value = false
-    e.target.value = null // reset
+    e.target.value = null
   }
 }
+
+
 </script>
 
 <template>
@@ -210,10 +220,14 @@ const importExcel = async (e) => {
           Annuaire des Employés
         </h2>
         <p>Gérez vos salariés de manière 100% confidentielle dans votre navigateur (IndexedDB).</p>
+        <p class="header-note">
+          La fiche décrit <strong>qui est le salarié</strong> ; son <strong>contrat</strong> décrit
+          ce qu'il perçoit. Le classeur d'import contient les deux, plus le profil de l'entreprise.
+        </p>
       </div>
       <a href="/api/rh/download/modele-paie.xlsx" download class="btn-download-model">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-        Modèle Excel Vierge
+        Modèle d'import (entreprise · employés · contrats)
       </a>
     </div>
 
@@ -222,7 +236,7 @@ const importExcel = async (e) => {
       <div class="controls-bar">
         <div class="search-input-wrapper">
           <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-          <input type="text" v-model="searchQuery" placeholder="Rechercher par nom, matricule, poste..." />
+          <input type="text" v-model="searchQuery" placeholder="Rechercher par nom, matricule, poste, téléphone..." />
         </div>
         
         <input type="file" ref="fileInput" accept=".xlsx, .xls" style="display: none" @change="importExcel" />
@@ -263,7 +277,7 @@ const importExcel = async (e) => {
                 <th>Employé</th>
                 <th>Matricule</th>
                 <th>Poste</th>
-                <th style="text-align: right;">Salaire de Base</th>
+                <th style="text-align: right;">Salaire net</th>
                 <th style="text-align: right;">Actions</th>
               </tr>
             </thead>
@@ -276,7 +290,8 @@ const importExcel = async (e) => {
                     </div>
                     <div>
                       <div class="emp-name">{{ emp.nom }} {{ emp.prenom }}</div>
-                      <div class="emp-date" v-if="emp.date_embauche">Recruté le {{ new Date(emp.date_embauche).toLocaleDateString('fr-FR') }}</div>
+                      <div class="emp-date" v-if="emp.telephone">{{ emp.telephone }}</div>
+                      <div class="emp-date" v-else-if="emp.date_embauche">Recruté le {{ new Date(emp.date_embauche).toLocaleDateString('fr-FR') }}</div>
                     </div>
                   </div>
                 </td>
@@ -287,7 +302,7 @@ const importExcel = async (e) => {
                   <span class="emp-poste-cell">{{ emp.poste || '—' }}</span>
                 </td>
                 <td style="text-align: right; font-weight: 700; color: #ffffff;">
-                  {{ fcfa(emp.salaire_base) }}
+                  {{ emp.salaire_net ? fcfa(emp.salaire_net) : String.fromCharCode(8212) }}
                 </td>
                 <td>
                   <div class="row-actions">
@@ -336,9 +351,13 @@ const importExcel = async (e) => {
                 <span class="mobile-detail-label">Poste :</span>
                 <span class="emp-poste-cell">{{ emp.poste || '—' }}</span>
               </div>
+              <div class="mobile-detail-row" v-if="emp.telephone">
+                <span class="mobile-detail-label">Téléphone :</span>
+                <span>{{ emp.telephone }}</span>
+              </div>
               <div class="mobile-detail-row">
-                <span class="mobile-detail-label">Salaire :</span>
-                <span class="mobile-salary-val" style="font-weight: 700; color: #ffffff;">{{ fcfa(emp.salaire_base) }}</span>
+                <span class="mobile-detail-label">Salaire net :</span>
+                <span class="mobile-salary-val" style="font-weight: 700; color: #ffffff;">{{ emp.salaire_net ? fcfa(emp.salaire_net) : String.fromCharCode(8212) }}</span>
               </div>
             </div>
           </div>
@@ -387,12 +406,16 @@ const importExcel = async (e) => {
           <input v-model="selectedEmployee.poste" type="text" placeholder="ex. Directeur des Opérations" />
         </div>
         <div class="form-group">
-          <label>Salaire de base mensuel ({{ getCountryRules(props.country).currency }}) <span class="req">*</span></label>
-          <input v-model="selectedEmployee.salaire_base" type="number" placeholder="ex. 500000" />
+          <label>Numéro de téléphone</label>
+          <input v-model="selectedEmployee.telephone" type="text" placeholder="ex. +225 07 00 00 00" />
         </div>
         <div class="form-group">
-          <label>Sursalaire ({{ getCountryRules(props.country).currency }})</label>
-          <input v-model="selectedEmployee.sursalaire" type="number" placeholder="ex. 100000" />
+          <label>Salaire net de référence ({{ getCountryRules(props.country).currency }})</label>
+          <input v-model="selectedEmployee.salaire_net" type="number" placeholder="ex. 385000" />
+          <small class="champ-aide">
+            Montant effectivement versé. Le salaire de base, le sursalaire et les primes
+            se déclarent dans le <strong>contrat</strong> : ce sont eux qui servent au calcul.
+          </small>
         </div>
         <div class="form-group">
           <label>Date d'embauche <span class="req">*</span></label>
@@ -401,6 +424,29 @@ const importExcel = async (e) => {
         <div class="form-group">
           <label>Numéro CNPS</label>
           <input v-model="selectedEmployee.numero_cnps" type="text" placeholder="ex. 123456-A" />
+        </div>
+        <div class="form-group">
+          <label>Sexe</label>
+          <select v-model="selectedEmployee.genre">
+            <option value="">-- Non renseigné --</option>
+            <option value="M">Homme</option>
+            <option value="F">Femme</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Date de naissance</label>
+          <input v-model="selectedEmployee.date_naissance" type="date" />
+        </div>
+        <div class="form-group">
+          <label>Catégorie professionnelle</label>
+          <select v-model="selectedEmployee.categorie_professionnelle">
+            <option value="">-- Non renseignée --</option>
+            <option value="cadre">Cadre</option>
+            <option value="employe">Employé</option>
+          </select>
+          <small class="champ-aide">
+            Alimente la répartition Cadres/Employés du tableau de bord RH.
+          </small>
         </div>
         <div class="form-group">
           <label>Situation matrimoniale</label>
@@ -416,6 +462,16 @@ const importExcel = async (e) => {
           <label>Nombre d'enfants (à charge)</label>
           <input v-model="selectedEmployee.nombre_enfants" type="number" min="0" placeholder="ex. 2" />
         </div>
+        <div class="form-group">
+          <label>Expatrié ?</label>
+          <select v-model="selectedEmployee.statut_salarie">
+            <option value="local">Non</option>
+            <option value="expatrie">Oui</option>
+          </select>
+          <small class="champ-aide">
+            L'employeur paie une T.A.S.P plus élevée sur un salarié expatrié : ce statut sert au calcul du bulletin.
+          </small>
+        </div>
       </div>
 
       <div class="editor-footer">
@@ -427,6 +483,13 @@ const importExcel = async (e) => {
 </template>
 
 <style scoped>
+.champ-aide {
+  display: block; margin-top: 6px; font-size: 0.74rem;
+  color: #64748b; line-height: 1.45;
+}
+.header-note {
+  margin-top: 4px; font-size: 0.78rem; color: #64748b; line-height: 1.5;
+}
 .directory-wrapper {
   max-width: 1200px;
   margin: 0 auto;

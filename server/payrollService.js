@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
+const templateEngine = require('./templateEngine');
+const { buildViewData } = require('./templateViewData');
 let PDFDocument, rgb;
 try {
     const pdfLib = require('pdf-lib');
@@ -12,13 +14,6 @@ try {
     rgb = pdfLib.rgb;
 } catch (e) {
     console.warn("pdf-lib n'est pas installé, la génération de PDF visuels échouera.");
-}
-
-let puppeteer;
-try {
-    puppeteer = require('puppeteer');
-} catch (e) {
-    console.warn("puppeteer n'est pas installé, la génération HTML-to-PDF échouera.");
 }
 
 // Définition des polices
@@ -33,60 +28,107 @@ const fonts = {
 const printer = new PdfPrinter(fonts);
 
 /**
+ * Heures supplémentaires — barème légal ivoirien (Code du Travail, CCI du
+ * 20/07/1977) : 41e à 46e heure de la semaine à 1,15 ; au-delà de la 46e à
+ * 1,50 ; heures de nuit à 1,75 ; heures de jour un dimanche ou jour férié à
+ * 1,75 ; heures de nuit un dimanche ou jour férié à 2,00.
+ *
+ * `heures_sup_nb` reste le point d'entrée simple : ces heures « ordinaires »
+ * sont réparties automatiquement sur les deux premiers paliers, comme
+ * l'exige le barème — l'utilisateur compte ses heures, pas le barème à sa
+ * place. Un coefficient explicitement différent du défaut (1.15) est traité
+ * comme une classification volontaire (« toutes ces heures sont de nuit »,
+ * via le sélecteur existant) et s'applique tel quel plutôt que d'être
+ * réparti. `heures_sup_nuit` / `heures_sup_ferie_jour` / `heures_sup_ferie_nuit`
+ * sont des champs dédiés pour qui veut aller plus loin que la case unique.
+ */
+const HS_SEUIL_PALIER1 = 6; // 41e à 46e heure de la semaine
+const HS_TAUX_PALIER1 = 1.15;
+const HS_TAUX_PALIER2 = 1.5;
+const HS_TAUX_NUIT = 1.75;
+const HS_TAUX_FERIE_JOUR = 1.75;
+const HS_TAUX_FERIE_NUIT = 2;
+
+function calculerHeuresSupplementaires(employee, tauxHoraire) {
+    const nbSimple = parseFloat(employee['heures_sup_nb'] || 0);
+    const nbNuit = parseFloat(employee['heures_sup_nuit'] || 0);
+    const nbFerieJour = parseFloat(employee['heures_sup_ferie_jour'] || 0);
+    const nbFerieNuit = parseFloat(employee['heures_sup_ferie_nuit'] || 0);
+    const coefBrut = employee['heures_sup_coef'];
+    const coefExplicite = (coefBrut !== undefined && coefBrut !== null && coefBrut !== '') ? parseFloat(coefBrut) : null;
+
+    const tranches = [];
+    let montant = 0;
+
+    if (coefExplicite !== null && coefExplicite !== HS_TAUX_PALIER1) {
+        if (nbSimple > 0) {
+            const m = Math.round(nbSimple * tauxHoraire * coefExplicite);
+            montant += m;
+            tranches.push({ label: `Heures supplémentaires (×${coefExplicite})`, heures: nbSimple, coef: coefExplicite, montant: m });
+        }
+    } else if (nbSimple > 0) {
+        const h1 = Math.min(nbSimple, HS_SEUIL_PALIER1);
+        const h2 = Math.max(0, nbSimple - HS_SEUIL_PALIER1);
+        if (h1 > 0) {
+            const m = Math.round(h1 * tauxHoraire * HS_TAUX_PALIER1);
+            montant += m;
+            tranches.push({ label: 'De la 41e à la 46e heure', heures: h1, coef: HS_TAUX_PALIER1, montant: m });
+        }
+        if (h2 > 0) {
+            const m = Math.round(h2 * tauxHoraire * HS_TAUX_PALIER2);
+            montant += m;
+            tranches.push({ label: 'Au-delà de la 46e heure', heures: h2, coef: HS_TAUX_PALIER2, montant: m });
+        }
+    }
+
+    if (nbNuit > 0) {
+        const m = Math.round(nbNuit * tauxHoraire * HS_TAUX_NUIT);
+        montant += m;
+        tranches.push({ label: 'Heures de nuit', heures: nbNuit, coef: HS_TAUX_NUIT, montant: m });
+    }
+    if (nbFerieJour > 0) {
+        const m = Math.round(nbFerieJour * tauxHoraire * HS_TAUX_FERIE_JOUR);
+        montant += m;
+        tranches.push({ label: 'Heures de jour, dimanche ou jour férié', heures: nbFerieJour, coef: HS_TAUX_FERIE_JOUR, montant: m });
+    }
+    if (nbFerieNuit > 0) {
+        const m = Math.round(nbFerieNuit * tauxHoraire * HS_TAUX_FERIE_NUIT);
+        montant += m;
+        tranches.push({ label: 'Heures de nuit, dimanche ou jour férié', heures: nbFerieNuit, coef: HS_TAUX_FERIE_NUIT, montant: m });
+    }
+
+    const nbHeuresSup = nbSimple + nbNuit + nbFerieJour + nbFerieNuit;
+    // coefHS : coefficient affiché sur le bulletin quand une seule tranche est
+    // active (cas courant, une ligne suffit) — sinon `tranches` fait foi.
+    const coefHS = tranches.length === 1 ? tranches[0].coef : (coefExplicite ?? HS_TAUX_PALIER1);
+
+    return { nbHeuresSup, coefHS, montantHeuresSup: montant, tranches };
+}
+
+/**
  * Calcul des règles de paie - COTE D'IVOIRE
  */
 function calculateSalaryRules(employee) {
     const salaireBaseMensuel = parseFloat(employee['salaire_base'] || 0);
+    // Jours calendaires : sert uniquement à l'allocation de congés, qui se
+    // compte en trentièmes (2,2 jours acquis par mois, plafonnés à 30).
     const joursDansLeMois = 30;
-    const JOURS_BASE_STANDARD = 26; // référence légale standard, dénominateur de proratisation des primes
+    // Jours ouvrables d'un mois complet : dénominateur de TOUTE proratisation
+    // liée au temps de travail (salaire de base, sursalaire, primes).
+    const JOURS_BASE_STANDARD = 26;
     const joursAbsences = parseFloat(employee['absences_jours'] || 0);
     const joursTravailleExplicite = (employee['jours_travailles'] !== undefined && employee['jours_travailles'] !== null && employee['jours_travailles'] !== '')
         ? parseFloat(employee['jours_travailles'])
         : null;
-    const autoConges = !!employee['auto_conges'];
-    let joursConges = parseFloat(employee['jours_conges_pris'] || 0);
-
-    if (autoConges) {
-        const dateRefStr = employee['date_dernier_conge'] || employee['date_embauche'];
-        if (dateRefStr) {
-            const dRef = new Date(dateRefStr);
-            const paieMois = parseInt(employee['mois'] || new Date().getMonth() + 1);
-            const paieAnnee = parseInt(employee['annee'] || new Date().getFullYear());
-            const dNow = new Date(paieAnnee, paieMois - 1, 1);
-            const diffMois = (dNow.getFullYear() - dRef.getFullYear()) * 12 + (dNow.getMonth() - dRef.getMonth());
-            if (diffMois > 0) {
-                joursConges = Math.min(30, Math.floor(diffMois * 2.2));
-            }
-        }
-    }
-
-    // Jours effectivement travaillés : si jours_travailles est fourni explicitement (ex: export d'un
-    // système de pointage externe qui donne directement le nombre de jours réellement travaillés), on
-    // l'utilise tel quel. Sinon, on part de la base légale standard et on retranche les absences saisies
-    // (évite de compter les absences deux fois si les deux champs sont renseignés en même temps).
-    const joursTrav = Math.max(0, (joursTravailleExplicite !== null ? joursTravailleExplicite : (JOURS_BASE_STANDARD - joursAbsences)) - joursConges);
-    const joursBasePaie = JOURS_BASE_STANDARD;
-    const joursCP = joursConges;
-
-    const salaireBase = Math.round((salaireBaseMensuel / joursDansLeMois) * joursTrav);
-    const sursalaireTotal = parseFloat(employee['sursalaire'] || 0);
-    const sursalaire = Math.round((sursalaireTotal / joursDansLeMois) * joursTrav);
-    const primeTransportMensuel = parseFloat(employee['prime_transport'] || 0);
-    const bulletinType = employee['bulletin_type'] || 'habituel';
-    const primeTransport = bulletinType === 'conges' ? 0 : Math.round((primeTransportMensuel / joursBasePaie) * joursTrav);
-    const primeLogement = parseFloat(employee['prime_logement'] || 0);
-
-    const nbHeuresSup = parseFloat(employee['heures_sup_nb'] || 0);
-    const coefHS = parseFloat(employee['heures_sup_coef'] || 1.15);
-    const tauxHoraire = salaireBaseMensuel > 0 ? Math.round(salaireBaseMensuel / 173.33) : 0;
-    const montantHeuresSup = Math.round(nbHeuresSup * tauxHoraire * coefHS);
-
+    // Ancienneté : calculée ici (avant les congés) car la majoration légale des
+    // congés payés en dépend — voir plus bas.
     const dateEmbaucheStr = employee['date_embauche'] || employee['Date Embauche'];
     const paieMois = parseInt(employee['mois'] || new Date().getMonth() + 1);
     const paieAnnee = parseInt(employee['annee'] || new Date().getFullYear());
 
     let primeAnciennete = 0;
     let ansAnciennete = 0;
+    let ancienneteAnneesExactes = 0;
     let ancienneteTxt = "0 ans 00 mois";
 
     if (dateEmbaucheStr) {
@@ -100,6 +142,7 @@ function calculateSalaryRules(employee) {
             diffMois += 12;
         }
         ansAnciennete = Math.max(0, diffAns);
+        ancienneteAnneesExactes = Math.max(0, (refDate - embauche) / (365 * 24 * 3600 * 1000));
         ancienneteTxt = `${ansAnciennete} ans ${String(Math.max(0, diffMois)).padStart(2, '0')} mois`;
 
         if (ansAnciennete >= 2) {
@@ -107,6 +150,56 @@ function calculateSalaryRules(employee) {
             primeAnciennete = Math.round(salaireBaseMensuel * (tauxAnc / 100));
         }
     }
+
+    const autoConges = !!employee['auto_conges'];
+    let joursConges = parseFloat(employee['jours_conges_pris'] || 0);
+
+    if (autoConges) {
+        const dateRefStr = employee['date_dernier_conge'] || employee['date_embauche'];
+        if (dateRefStr) {
+            const dRef = new Date(dateRefStr);
+            const dNow = new Date(paieAnnee, paieMois - 1, 1);
+            const diffMois = (dNow.getFullYear() - dRef.getFullYear()) * 12 + (dNow.getMonth() - dRef.getMonth());
+            if (diffMois > 0) {
+                // Barème légal (Code du Travail) : au delà de 5 ans d'ancienneté,
+                // la durée du congé est majorée d'un nombre de jours croissant
+                // par palier — jamais retranchée, jamais plafonnée par le calcul
+                // de base.
+                const majoration =
+                    (ancienneteAnneesExactes > 5 && ancienneteAnneesExactes <= 10 ? 1 : 0) +
+                    (ancienneteAnneesExactes > 10 && ancienneteAnneesExactes <= 15 ? 2 : 0) +
+                    (ancienneteAnneesExactes > 15 && ancienneteAnneesExactes <= 20 ? 3 : 0) +
+                    (ancienneteAnneesExactes > 20 && ancienneteAnneesExactes <= 25 ? 5 : 0) +
+                    (ancienneteAnneesExactes > 25 ? 7 : 0);
+                joursConges = Math.floor(diffMois * 2.2) + majoration;
+            }
+        }
+    }
+
+    // Jours effectivement travaillés : si jours_travailles est fourni explicitement (ex: export d'un
+    // système de pointage externe qui donne directement le nombre de jours réellement travaillés), on
+    // l'utilise tel quel. Sinon, on part de la base légale standard et on retranche les absences saisies
+    // (évite de compter les absences deux fois si les deux champs sont renseignés en même temps).
+    const joursTrav = Math.max(0, (joursTravailleExplicite !== null ? joursTravailleExplicite : (JOURS_BASE_STANDARD - joursAbsences)) - joursConges);
+    const joursBasePaie = JOURS_BASE_STANDARD;
+    const joursCP = joursConges;
+
+    // Diviseur : joursBasePaie (26), la MÊME échelle que joursTrav.
+    // joursTrav vaut 26 pour un mois complet ; diviser par 30 amputait donc
+    // le salaire de 13,3 % alors même que le salarié n'avait pas été absent.
+    // Les primes divisaient déjà correctement par 26 : le bulletin était
+    // incohérent avec lui-même.
+    const salaireBase = Math.round((salaireBaseMensuel / joursBasePaie) * joursTrav);
+    const sursalaireTotal = parseFloat(employee['sursalaire'] || 0);
+    const sursalaire = Math.round((sursalaireTotal / joursBasePaie) * joursTrav);
+    const primeTransportMensuel = parseFloat(employee['prime_transport'] || 0);
+    const bulletinType = employee['bulletin_type'] || 'habituel';
+    const primeTransport = bulletinType === 'conges' ? 0 : Math.round((primeTransportMensuel / joursBasePaie) * joursTrav);
+    const primeLogement = parseFloat(employee['prime_logement'] || 0);
+
+    const tauxHoraire = salaireBaseMensuel > 0 ? Math.round(salaireBaseMensuel / 173.33) : 0;
+    const heuresSup = calculerHeuresSupplementaires(employee, tauxHoraire);
+    const { nbHeuresSup, coefHS, montantHeuresSup } = heuresSup;
 
     let allocationConges = 0;
     if (joursCP > 0) {
@@ -159,9 +252,6 @@ function calculateSalaryRules(employee) {
 
     const cnpsSal = Math.round(baseCNPS * 0.063);
 
-    let itsFinal = 0, ricf = 0;
-    let is = 0, cn = 0, igr = 0;
-
     let n = Math.min(parseFloat(employee['nombre_enfants'] || 0), 4);
     let parts = 1;
     const situation = String(employee['situation_matrimoniale'] || '').toLowerCase();
@@ -171,57 +261,36 @@ function calculateSalaryRules(employee) {
     else parts = (n > 0) ? (1.5 + (n * 0.5)) : 1;
     parts = Math.min(parts, 5.0);
 
-    const regime = employee['regime'] || '2024';
-
-    if (regime !== 'ancien') {
-        const tranches = [
-            { plafond: 75000, taux: 0.00 }, { plafond: 240000, taux: 0.16 },
-            { plafond: 800000, taux: 0.21 }, { plafond: 2400000, taux: 0.24 },
-            { plafond: 8000000, taux: 0.28 }, { plafond: Infinity, taux: 0.32 }
-        ];
-        let impotBrut = 0;
-        let prec = 0;
-        for (const { plafond, taux } of tranches) {
-            if (brutImposable <= prec) break;
-            impotBrut += (Math.min(brutImposable, plafond) - prec) * taux;
-            prec = plafond;
-        }
-        ricf = Math.max(0, (parts - 1) * 11000);
-        itsFinal = Math.max(0, Math.round(impotBrut) - ricf);
-    } else {
-        is = Math.round(brutImposable * 0.012);
-        if (brutImposable > 50000) {
-            if (brutImposable <= 130000) cn = Math.round((brutImposable - 50000) * 0.015);
-            else if (brutImposable <= 200000) cn = 1200 + Math.round((brutImposable - 130000) * 0.05);
-            else cn = 4700 + Math.round((brutImposable - 200000) * 0.10);
-        }
-        const baseIGR = (brutImposable - is - cn - cnpsSal) * 0.85;
-        const qF = baseIGR / parts;
-        let igrParPart = 0;
-        if (qF > 25000) {
-            if (qF <= 45583) igrParPart = (qF - 25000) * 0.10;
-            else if (qF <= 81666) igrParPart = (qF * 0.15) - 2292;
-            else if (qF <= 126666) igrParPart = (qF * 0.20) - 6375;
-            else if (qF <= 220833) igrParPart = (qF * 0.25) - 12708;
-            else if (qF <= 389166) igrParPart = (qF * 0.35) - 34792;
-            else igrParPart = (qF * 0.45) - 73708;
-        }
-        igr = Math.max(0, Math.round(igrParPart * parts));
+    // ITS (impôt unique sur salaires, réforme fiscale 2024) — l'ancien régime
+    // (I.S./C.N./I.G.R., remplacé par cette réforme) n'est plus calculé.
+    const tranches = [
+        { plafond: 75000, taux: 0.00 }, { plafond: 240000, taux: 0.16 },
+        { plafond: 800000, taux: 0.21 }, { plafond: 2400000, taux: 0.24 },
+        { plafond: 8000000, taux: 0.28 }, { plafond: Infinity, taux: 0.32 }
+    ];
+    let impotBrut = 0;
+    let prec = 0;
+    for (const { plafond, taux } of tranches) {
+        if (brutImposable <= prec) break;
+        impotBrut += (Math.min(brutImposable, plafond) - prec) * taux;
+        prec = plafond;
     }
+    const ricf = Math.max(0, (parts - 1) * 11000);
+    const itsFinal = Math.max(0, Math.round(impotBrut) - ricf);
 
     const acompte = parseFloat(employee['acompte'] || 0);
     const avance = parseFloat(employee['avance'] || 0);
     const opposition = parseFloat(employee['opposition'] || 0);
     const autres = parseFloat(employee['autres_retenues'] || 0);
 
-    const impots = regime !== 'ancien' ? itsFinal : (is + cn + igr);
-    const totalRetenues = impots + cnpsSal + cmuSal + acompte + avance + opposition + autres;
+    const totalRetenues = itsFinal + cnpsSal + cmuSal + acompte + avance + opposition + autres;
 
     return {
         brut: salaireBrut, salaireBase, salaireBaseMensuel, sursalaire,
         primeAnciennete, ansAnciennete, ancienneteTxt, allocationConges, joursCP,
         gratification, preavisVal, indemLicenciement, indemTransac, fraisFuneraires,
         primesImposables, primesNonImposablesRub, montantHeuresSup, nbHeuresSup, coefHS, tauxHoraire,
+        heuresSupTranches: heuresSup.tranches,
         primeTransport, primeLogement,
         brutImposable, gainsTotaux, baseCNPS, baseCNPS_PfAtAm, parts, totalPersonnesCMU, joursTrav,
         patronal: {
@@ -230,8 +299,8 @@ function calculateSalaryRules(employee) {
             totalSocial: totalSocialEmployeur, grandTotal: totalPatronal
         },
         salarial: {
-            its: itsFinal, ricf, is, cn, igr, cnps: cnpsSal, cmu: cmuSal,
-            acompte, avance, opposition, autres, total: totalRetenues, regime
+            its: itsFinal, ricf, cnps: cnpsSal, cmu: cmuSal,
+            acompte, avance, opposition, autres, total: totalRetenues
         },
         netAPayer: gainsTotaux - totalRetenues
     };
@@ -269,13 +338,24 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
         cnps: companyInfo.numero_cnps || employee.numero_cnps || '____',
         contribuable: companyInfo.numero_contribuable || employee.numero_contribuable || '____',
         cc: companyInfo.numero_cc || employee.numero_cc || '____',
-        num_employeur: companyInfo.numero_employeur || employee.numero_employeur || '____'
+        num_employeur: companyInfo.numero_employeur || employee.numero_employeur || '____',
+        // Facultatif : le compte n'en a pas forcément configuré un (Paramètres >
+        // Profil Entreprise). Absent, l'en-tête se rend exactement comme avant.
+        logo: companyInfo.logo || null
     };
 
     const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
     const annee = parseInt(employee.annee || new Date().getFullYear());
     const dernierJour = new Date(annee, moisNum, 0).getDate();
     const periodeStr = `01/${String(moisNum).padStart(2, '0')}/${annee} au ${dernierJour}/${String(moisNum).padStart(2, '0')}/${annee}`;
+
+    // En-tête : logo optionnel en première colonne, jamais un bloc vide à sa place.
+    const headerColumns = [];
+    if (company.logo) {
+        headerColumns.push({ image: company.logo, fit: [50, 50], margin: [0, 0, 10, 0] });
+    }
+    headerColumns.push({ stack: [{ text: company.nom, fontSize: 13, bold: true, color: BLUE_DOC }, { text: company.adresse, fontSize: 8 }, { text: `N° RCCM : ${company.contribuable} — N° CC : ${company.cc}`, fontSize: 7, color: '#666' }, { text: `N° CNPS : ${company.cnps}`, fontSize: 7, color: '#666' }], width: '*' });
+    headerColumns.push({ text: employee.isLeavePayslip ? 'BULLETIN D\'ALLOCATION\nCONGÉ' : 'BULLETIN DE PAIE\nOFFICIEL', alignment: 'right', fontSize: 10, color: BLUE_DOC, bold: true, width: 100 });
 
     const cell = (text, opts = {}) => ({
         text: text?.toString() || '',
@@ -284,7 +364,11 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
         alignment: opts.align || 'left',
         fillColor: opts.fill || null,
         border: opts.border || [true, true, true, true],
-        margin: opts.margin || [2, 3, 2, 3],
+        // Un bulletin chargé (heures sup détaillées, plusieurs primes, prime
+        // d'ancienneté...) peut dépasser une trentaine de lignes — la marge
+        // verticale d'origine (3pt) suffisait à elle seule à pousser tout ce
+        // qui suit sur une deuxième page rien qu'à cause du nombre de lignes.
+        margin: opts.margin || [2, 1.5, 2, 1.5],
         color: opts.color || 'black',
         colSpan: opts.colSpan || null,
         rowSpan: opts.rowSpan || null,
@@ -293,8 +377,14 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
 
     const headerCell = (text, opts = {}) => cell(text, { fill: '#334155', color: 'white', bold: true, align: 'center', fontSize: 7, ...opts });
 
-    // Colonnes: DESIGNATION | BASE | TAUX(S) | GAINS(S) | RET(S) | TAUX(P) | RET(P)
-    const row = (label, base, tS, gS, rS, tP, rP, opts = {}) => [
+    // Mêmes codes de rubrique que les autres modèles ONDA (voir CODE_RUBRIQUE /
+    // Paramètres > Modèles de bulletin) : personnaliser un numéro s'applique
+    // ici aussi, pas seulement aux modèles construits sur construireRubriques.
+    const codes = resolveCodesRubrique(companyInfo.rubriqueCodes);
+
+    // Colonnes: N° | DESIGNATION | BASE | TAUX(S) | GAINS(S) | RET(S) | TAUX(P) | RET(P)
+    const row = (code, label, base, tS, gS, rS, tP, rP, opts = {}) => [
+        cell(code || '', { align: 'center', fontSize: 6 }),
         cell(label, { align: 'left', bold: opts.bold }),
         cell(base ? fcfa(base) : '', { align: 'right' }),
         cell(tS || '', { align: 'center' }),
@@ -306,6 +396,7 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
 
     const body = [
         [
+            headerCell('N°', { rowSpan: 2 }),
             headerCell('DESIGNATION', { rowSpan: 2 }),
             headerCell('BASE', { rowSpan: 2 }),
             headerCell('PART SALARIALE', { colSpan: 3 }),
@@ -314,7 +405,7 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
             {}
         ],
         [
-            {}, {},
+            {}, {}, {},
             headerCell('Taux'), headerCell('Gains'), headerCell('Retenues'),
             headerCell('Taux'), headerCell('Retenues')
         ]
@@ -322,52 +413,46 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
 
     const joursTrav = Math.max(0, (employee.jours_travailles || 26) - (employee.absences_jours || 0));
 
-    body.push(row('SALAIRE CATEGORIEL', calc.salaireBaseMensuel, joursTrav + '/30', calc.salaireBase, null, null, null));
-    if (calc.sursalaire > 0) body.push(row('SURSALAIRE', employee.sursalaire, joursTrav + '/30', calc.sursalaire, null, null, null));
-    if (calc.primeAnciennete > 0) body.push(row(`PRIME D'ANCIENNETE (${calc.ansAnciennete} ans)`, calc.salaireBase + (calc.sursalaire || 0), null, calc.primeAnciennete, null, null, null));
-    if (calc.allocationConges > 0) body.push(row(`ALLOCATION CONGES (${calc.joursCP} jrs)`, null, null, calc.allocationConges, null, null, null));
+    body.push(row(codes.salaireBase, 'SALAIRE CATEGORIEL', calc.salaireBaseMensuel, joursTrav + '/30', calc.salaireBase, null, null, null));
+    if (calc.sursalaire > 0) body.push(row(codes.sursalaire, 'SURSALAIRE', employee.sursalaire, joursTrav + '/30', calc.sursalaire, null, null, null));
+    if (calc.primeAnciennete > 0) body.push(row(codes.primeAnciennete, `PRIME D'ANCIENNETE (${calc.ansAnciennete} ans)`, calc.salaireBase + (calc.sursalaire || 0), null, calc.primeAnciennete, null, null, null));
+    if (calc.allocationConges > 0) body.push(row(codes.allocationConges, `ALLOCATION CONGES (${calc.joursCP} jrs)`, null, null, calc.allocationConges, null, null, null));
 
     if (Array.isArray(employee.primes)) {
-        employee.primes.forEach(p => { if (p.montant > 0) body.push(row((p.label || 'PRIME').toUpperCase(), null, null, p.montant, null, null, null)); });
+        employee.primes.forEach(p => { if (p.montant > 0) body.push(row(codes.prime, (p.label || 'PRIME').toUpperCase(), null, null, p.montant, null, null, null)); });
     }
-    if (calc.montantHeuresSup > 0) body.push(row(`HEURES SUPPLEMENTAIRES (${calc.nbHeuresSup}h)`, calc.tauxHoraire, `×${calc.coefHS}`, calc.montantHeuresSup, null, null, null));
-    if (calc.primeTransport > 0) body.push(row('PRIME DE TRANSPORT (EXO)', null, null, calc.primeTransport, null, null, null));
-    if (calc.primeLogement > 0) body.push(row('PRIME DE LOGEMENT (EXO)', null, null, calc.primeLogement, null, null, null));
+    // Une ligne par palier légal réellement utilisé (41e-46e heure, au-delà,
+    // nuit, dimanche/férié...) plutôt qu'une ligne unique au coefficient moyen :
+    // c'est ce détail que réclame un bulletin conforme.
+    (calc.heuresSupTranches || []).forEach(t => {
+        body.push(row(codes.heuresSup, `HEURES SUPPLEMENTAIRES — ${t.label.toUpperCase()} (${t.heures}h)`, calc.tauxHoraire, `×${t.coef}`, t.montant, null, null, null));
+    });
+    if (calc.primeTransport > 0) body.push(row(codes.primeTransport, 'PRIME DE TRANSPORT (EXO)', null, null, calc.primeTransport, null, null, null));
+    if (calc.primeLogement > 0) body.push(row(codes.primeLogement, 'PRIME DE LOGEMENT (EXO)', null, null, calc.primeLogement, null, null, null));
 
-    body.push(row('BRUT IMPOSABLE', null, null, calc.brut, null, null, null, { bold: true }));
+    body.push(row('', 'BRUT IMPOSABLE', null, null, calc.brut, null, null, null, { bold: true }));
 
-    body.push(row('CNPS - RETRAITE', calc.baseCNPS, '6.3%', null, calc.salarial.cnps, '7.7%', calc.patronal.cnpsRetraite));
-    body.push(row('CNPS - PRESTATIONS FAMILIALES', calc.baseCNPS_PfAtAm, null, null, null, '5.0%', calc.patronal.cnpsPF));
-    body.push(row('CNPS - ACCIDENT DU TRAVAIL', calc.baseCNPS_PfAtAm, null, null, null, (employee.taux_at || 2) + '%', calc.patronal.cnpsAT));
-    body.push(row('CNPS - ASSURANCE MATERNITE', calc.baseCNPS_PfAtAm, null, null, null, '0.75%', calc.patronal.cnpsAM));
+    body.push(row(codes.cnpsSalariale, 'CNPS - RETRAITE', calc.baseCNPS, '6.3%', null, calc.salarial.cnps, '7.7%', calc.patronal.cnpsRetraite));
+    body.push(row(codes.cnpsPF, 'CNPS - PRESTATIONS FAMILIALES', calc.baseCNPS_PfAtAm, null, null, null, '5.0%', calc.patronal.cnpsPF));
+    body.push(row(codes.cnpsAT, 'CNPS - ACCIDENT DU TRAVAIL', calc.baseCNPS_PfAtAm, null, null, null, (employee.taux_at || 2) + '%', calc.patronal.cnpsAT));
+    body.push(row(codes.cnpsAM, 'CNPS - ASSURANCE MATERNITE', calc.baseCNPS_PfAtAm, null, null, null, '0.75%', calc.patronal.cnpsAM));
 
-    if (calc.salarial.regime !== 'ancien') {
-        body.push(row('ITS (IMPOT UNIQUE 2024)', calc.brutImposable, null, null, calc.salarial.its + calc.salarial.ricf, null, null));
-        if (calc.salarial.ricf > 0) body.push(row('   dont R.I.C.F', null, null, calc.salarial.ricf, null, null, null));
-    } else {
-        body.push(row('IMPOT SUR SALAIRE (I.S)', calc.brutImposable, '1.2%', null, calc.salarial.is, null, null));
-        body.push(row('CONTRIBUTION NATIONALE (C.N)', calc.brutImposable, null, null, calc.salarial.cn, null, null));
-        body.push(row('I.G.R', null, null, null, calc.salarial.igr, null, null));
-    }
+    body.push(row(codes.its, 'ITS (IMPOT UNIQUE 2024)', calc.brutImposable, null, null, calc.salarial.its + calc.salarial.ricf, null, null));
+    if (calc.salarial.ricf > 0) body.push(row(codes.ricf, '   dont R.I.C.F', null, null, calc.salarial.ricf, null, null, null));
 
-    body.push(row('T.A.S.P (IMPOT EMPLOYEUR)', calc.brutImposable, null, null, null, '1.2%', calc.patronal.impotEmployeur));
-    body.push(row('FDFP - TAXE APPRENTISSAGE', calc.brutImposable, null, null, null, '0.4%', calc.patronal.fdfpTA));
-    body.push(row('FDFP - FORMATION CONTINUE', calc.brutImposable, null, null, null, '0.6%', calc.patronal.fdfpFPC));
-    body.push(row(`CMU (ASSURANCE MALADIE) [${calc.totalPersonnesCMU} pers.]`, calc.totalPersonnesCMU * 1000, null, null, calc.salarial.cmu, null, calc.patronal.cmu));
-    if (calc.salarial.acompte > 0) body.push(row('ACOMPTE / AVANCES', null, null, null, calc.salarial.acompte, null, null));
+    body.push(row(codes.impotEmployeur, 'T.A.S.P (IMPOT EMPLOYEUR)', calc.brutImposable, null, null, null, '1.2%', calc.patronal.impotEmployeur));
+    body.push(row(codes.fdfpTA, 'FDFP - TAXE APPRENTISSAGE', calc.brutImposable, null, null, null, '0.4%', calc.patronal.fdfpTA));
+    body.push(row(codes.fdfpFPC, 'FDFP - FORMATION CONTINUE', calc.brutImposable, null, null, null, '0.6%', calc.patronal.fdfpFPC));
+    body.push(row(codes.cmuSalariale, `CMU (ASSURANCE MALADIE) [${calc.totalPersonnesCMU} pers.]`, calc.totalPersonnesCMU * 1000, null, null, calc.salarial.cmu, null, calc.patronal.cmu));
+    if (calc.salarial.acompte > 0) body.push(row(codes.acompte, 'ACOMPTE / AVANCES', null, null, null, calc.salarial.acompte, null, null));
 
 
     return {
-        pageSize: 'A4', pageMargins: [40, 40, 40, 40],
+        pageSize: 'A4', pageMargins: [40, 30, 40, 30],
         content: [
-            {
-                columns: [
-                    { stack: [{ text: company.nom, fontSize: 13, bold: true, color: BLUE_DOC }, { text: company.adresse, fontSize: 8 }, { text: `N° RCCM : ${company.contribuable} — N° CC : ${company.cc}`, fontSize: 7, color: '#666' }, { text: `N° CNPS : ${company.cnps}`, fontSize: 7, color: '#666' }], width: '*' },
-                    { text: employee.isLeavePayslip ? 'BULLETIN D\'ALLOCATION\nCONGÉ' : 'BULLETIN DE PAIE\nOFFICIEL', alignment: 'right', fontSize: 10, color: BLUE_DOC, bold: true, width: 100 }
-                ]
-            },
+            { columns: headerColumns },
             { canvas: [{ type: 'line', x1: 0, y1: 5, x2: 515, y2: 5, lineWidth: 1, strokeColor: GRAY_BORDER }] },
-            { text: '', margin: [0, 10] },
+            { text: '', margin: [0, 6] },
             {
                 table: {
                     widths: ['35%', '25%', '40%'],
@@ -397,6 +482,8 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
                                             body: [
                                                 [{ text: 'Nom :', fontSize: 7, margin: [0, 2] }, { text: (employee.nom || '').toUpperCase(), fontSize: 7, bold: true }],
                                                 [{ text: 'Prénom(s) :', fontSize: 7, margin: [0, 2] }, { text: employee.prenom || '', fontSize: 7, bold: true }],
+                                                [{ text: 'Direction :', fontSize: 7, margin: [0, 2] }, { text: employee.direction || '____', fontSize: 7 }],
+                                                [{ text: 'Service :', fontSize: 7, margin: [0, 2] }, { text: employee.service || '____', fontSize: 7 }],
                                                 [{ text: 'Emploi :', fontSize: 7, margin: [0, 2] }, { text: employee.poste || '', fontSize: 7 }],
                                                 [{ text: 'Qualification :', fontSize: 7, margin: [0, 2] }, { text: employee.qualification || '____', fontSize: 7 }],
                                                 [{ text: 'Catégorie :', fontSize: 7, margin: [0, 2] }, { text: employee.categorie || '', fontSize: 7 }]
@@ -416,9 +503,10 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
                                             widths: ['50%', '50%'],
                                             body: [
                                                 [{ text: 'N° Matricule', fontSize: 7 }, { text: employee.matricule || '____', fontSize: 7, bold: true }],
-                                                [{ text: 'N° CNPS', fontSize: 7 }, { text: employee.num_secu || '____', fontSize: 7, bold: true }],
+                                                [{ text: 'N° CNPS', fontSize: 7 }, { text: employee.num_secu || employee.numero_cnps || '____', fontSize: 7, bold: true }],
                                                 [{ text: 'Parts IGR', fontSize: 7 }, { text: calc.parts.toFixed(1), fontSize: 7, bold: true }],
                                                 [{ text: 'Type Contrat', fontSize: 7 }, { text: employee.type_contrat || 'CDI', fontSize: 7 }],
+                                                [{ text: 'Date entrée', fontSize: 7 }, { text: employee.date_embauche ? new Date(employee.date_embauche).toLocaleDateString('fr-FR') : '____', fontSize: 7 }],
                                                 [{ text: 'Ancienneté', fontSize: 7 }, { text: calc.ancienneteTxt || '____', fontSize: 7 }]
                                             ]
                                         },
@@ -435,12 +523,12 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
                     ]
                 },
                 layout: 'noBorders',
-                margin: [0, 5, 0, 15]
+                margin: [0, 5, 0, 8]
             },
             {
                 table: {
                     headerRows: 2,
-                    widths: ['34%', '11%', '9%', '11%', '11%', '9%', '15%'],
+                    widths: ['6%', '29%', '10%', '9%', '11%', '11%', '9%', '15%'],
                     body: body
                 },
                 layout: {
@@ -450,7 +538,7 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
                     vLineColor: () => GRAY_BORDER
                 }
             },
-            { text: '', margin: [0, 15] },
+            { text: '', margin: [0, 8] },
             {
                 columns: [
                     {
@@ -517,17 +605,1820 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
                     }
                 ]
             },
-            { text: '', margin: [0, 20] },
+            { text: `Période : du ${periodeStr}   —   Mode de paie : ${employee.virement ? 'Virement' : 'Espèces'}`, fontSize: 6.5, color: '#64748b', margin: [0, 6, 0, 0] },
+            // Le bloc signatures + mention légale ne doit jamais se couper : un
+            // bulletin d'une ligne de plus que la page laissait la mention seule
+            // sur une seconde page. `unbreakable` le fait basculer en entier
+            // plutôt que de l'écarteler, et les marges resserrées lui donnent
+            // la place de tenir sur la première dans l'immense majorité des cas.
             {
-                columns: [
-                    { stack: [{ text: 'L\'Employeur', bold: true, alignment: 'center', margin: [0, 0, 0, 30] }, { text: company.nom, fontSize: 7, alignment: 'center', margin: [0, 2] }, { canvas: [{ type: 'line', x1: 50, y1: 0, x2: 150, y2: 0, lineWidth: 0.5 }] }, { text: 'Cachet & Signature', fontSize: 6, alignment: 'center', margin: [0, 5] }] },
-                    { stack: [{ text: 'Le Salarié', bold: true, alignment: 'center', margin: [0, 0, 0, 30] }, { text: `${(employee.nom || '').toUpperCase()} ${employee.prenom || ''}`, fontSize: 7, alignment: 'center', margin: [0, 2] }, { canvas: [{ type: 'line', x1: 50, y1: 0, x2: 150, y2: 0, lineWidth: 0.5 }] }, { text: 'Lu et approuvé', fontSize: 6, alignment: 'center', margin: [0, 5] }] }
+                unbreakable: true,
+                stack: [
+                    { text: '', margin: [0, 8] },
+                    {
+                        columns: [
+                            { stack: [{ text: 'L\'Employeur', bold: true, alignment: 'center', margin: [0, 0, 0, 20] }, { text: company.nom, fontSize: 7, alignment: 'center', margin: [0, 2] }, { canvas: [{ type: 'line', x1: 50, y1: 0, x2: 150, y2: 0, lineWidth: 0.5 }] }, { text: 'Cachet & Signature', fontSize: 6, alignment: 'center', margin: [0, 5] }] },
+                            { stack: [{ text: 'Le Salarié', bold: true, alignment: 'center', margin: [0, 0, 0, 20] }, { text: `${(employee.nom || '').toUpperCase()} ${employee.prenom || ''}`, fontSize: 7, alignment: 'center', margin: [0, 2] }, { canvas: [{ type: 'line', x1: 50, y1: 0, x2: 150, y2: 0, lineWidth: 0.5 }] }, { text: 'Lu et approuvé', fontSize: 6, alignment: 'center', margin: [0, 5] }] }
+                        ]
+                    },
+                    { text: '', margin: [0, 8] },
+                    // Mention légale LOGIPAIE : le bulletin de paie ivoirien n'a pas de délai
+                    // de conservation — la mention le rappelle explicitement à l'employé.
+                    { text: 'Pour vous aider à faire valoir vos droits, conservez ce bulletin de paie sans limitation de durée.', fontSize: 6.5, italics: true, color: '#64748b', alignment: 'center' }
                 ]
             }
         ],
         defaultStyle: { font: 'Roboto', fontSize: 8 }
     };
 }
+
+/**
+ * Second modèle par défaut, format « grille numérotée » (rubriques 010, 020…,
+ * colonnes Base/Taux/Gains/Retenues séparées P.S. et P.P.) — une mise en page
+ * alternative à generatePdfDefinition, proposée au même titre qu'elle.
+ *
+ * Le cumul annuel affiché reste celui du mois en cours : aucun historique de
+ * paie n'est encore conservé (voir le suivi cumul LOGIPAIE, chantier à part).
+ * C'est exact pour un premier bulletin de l'année, approximatif ensuite.
+ */
+function generatePdfDefinitionGrilleNumerotee(employee, calc, companyInfo = {}) {
+    const BLUE = '#1e3a8a';
+    const BORDER = '#cbd5e1';
+    const BAND = '#e2e8f0';
+    const DARK_BAND = '#334155';
+    const YELLOW = '#FFFF00';
+
+    const company = {
+        nom: companyInfo.nom_entreprise || employee.nom_entreprise || 'VOTRE ENTREPRISE',
+        adresse: companyInfo.adresse || employee.adresse || '',
+        siege: companyInfo.siege_social || employee.siege_social || companyInfo.adresse || '',
+        ville: companyInfo.ville || employee.ville || '',
+        cnps: companyInfo.numero_cnps || employee.numero_cnps || '____',
+        ncc: companyInfo.numero_contribuable || employee.numero_contribuable || '____',
+        email: companyInfo.email || employee.email_entreprise || '',
+        telephone: companyInfo.telephone || employee.tel_entreprise || '',
+        logo: companyInfo.logo || null
+    };
+
+    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+    const annee = parseInt(employee.annee || new Date().getFullYear());
+    const dernierJour = new Date(annee, moisNum, 0).getDate();
+    const periodeDebut = `01/${String(moisNum).padStart(2, '0')}/${annee}`;
+    const periodeFin = `${dernierJour}/${String(moisNum).padStart(2, '0')}/${annee}`;
+
+    const SITUATIONS = { celibataire: 'Célibataire', marie: 'Marié(e)', divorce: 'Divorcé(e)', veuf: 'Veuf/Veuve' };
+
+    const headerColumns = [];
+    headerColumns.push(company.logo
+        ? { image: company.logo, fit: [70, 42], width: 90 }
+        : { text: company.nom, fontSize: 12, bold: true, color: BLUE, width: '*' });
+    headerColumns.push({ width: '*', text: '' });
+    headerColumns.push({
+        width: 220,
+        stack: [
+            { text: employee.isLeavePayslip ? "BULLETIN D'ALLOCATION CONGÉ" : 'BULLETIN DE PAIE', fontSize: 12, bold: true, alignment: 'right', color: BLUE },
+            { text: `Du ${periodeDebut} au ${periodeFin}`, fontSize: 7.5, alignment: 'right', color: '#475569' }
+        ]
+    });
+
+    const infoRow = (label, value) => [
+        { text: label, fontSize: 7, color: '#475569', margin: [0, 1.5, 0, 1.5] },
+        { text: (value || '').toString(), fontSize: 7, bold: true, margin: [0, 1.5, 0, 1.5] }
+    ];
+
+    const infoBlock = {
+        columns: [
+            {
+                width: '50%',
+                table: {
+                    widths: ['40%', '60%'],
+                    body: [
+                        infoRow('Adresse', company.adresse),
+                        infoRow('Siège social', company.siege),
+                        infoRow('Ville', company.ville),
+                        infoRow('Matricule CNPS', company.cnps),
+                        infoRow('NCC', company.ncc),
+                        infoRow('E-mail', company.email),
+                        infoRow('Fixe', company.telephone)
+                    ]
+                },
+                layout: 'noBorders'
+            },
+            {
+                width: '50%',
+                table: {
+                    widths: ['46%', '54%'],
+                    body: [
+                        infoRow('Nom', (employee.nom || '').toUpperCase()),
+                        infoRow('Prénoms', employee.prenom),
+                        infoRow('Emploi', employee.poste),
+                        infoRow('Matricule', employee.matricule),
+                        infoRow('Catégorie', employee.categorie),
+                        infoRow('Nombre de part', calc.parts !== undefined ? calc.parts.toFixed(1) : '1.0'),
+                        infoRow("Date d'embauche", employee.date_embauche ? formatDate(employee.date_embauche) : ''),
+                        infoRow('Ancienneté', calc.ancienneteTxt),
+                        infoRow('N° CNPS', employee.num_secu || employee.numero_cnps),
+                        infoRow('Situation matrimoniale', SITUATIONS[employee.situation_matrimoniale] || employee.situation_matrimoniale)
+                    ]
+                },
+                layout: 'noBorders'
+            }
+        ],
+        columnGap: 16
+    };
+
+    const cell = (text, opts = {}) => ({
+        text: (text === null || text === undefined) ? '' : text.toString(),
+        fontSize: opts.fontSize || 6.8,
+        bold: opts.bold || false,
+        alignment: opts.align || 'left',
+        fillColor: opts.fill || null,
+        color: opts.color || 'black',
+        colSpan: opts.colSpan || null,
+        margin: opts.margin || [2, 2, 2, 2]
+    });
+    const headerCell = (text) => cell(text, { fill: DARK_BAND, color: 'white', bold: true, align: 'center', fontSize: 6.8 });
+    // Sans numéro (un sous-total n'est pas une rubrique), sauf « SALAIRE BRUT »
+    // qui en porte un dans le modèle d'origine.
+    const bandRow = (label, gains, retenuesPS, retenuesPP, numero) => [
+        cell(numero || '', { align: 'center', fontSize: 6.3, bold: true, fill: BAND }), cell(label, { bold: true, fill: BAND }),
+        cell('', { fill: BAND }), cell('', { fill: BAND }),
+        cell(gains !== undefined ? fcfa(gains) : '', { align: 'right', bold: true, fill: BAND }),
+        cell(retenuesPS !== undefined ? fcfa(retenuesPS) : '', { align: 'right', bold: true, fill: BAND }),
+        cell('', { fill: BAND }),
+        cell(retenuesPP !== undefined ? fcfa(retenuesPP) : '', { align: 'right', bold: true, fill: BAND })
+    ];
+
+    // Mêmes codes de rubrique que les autres modèles (voir construireRubriques
+    // / CODE_RUBRIQUE) : un compte qui personnalise ses numéros dans Paramètres
+    // les retrouve à l'identique ici, pas une numérotation propre à ce modèle.
+    const codes = resolveCodesRubrique(companyInfo.rubriqueCodes);
+    const ligne = (label, base, tauxS, gains, retenuesPS, tauxP, retenuesPP, code) => [
+        cell(code || '', { align: 'center', fontSize: 6.3 }),
+        cell(label),
+        cell(base !== undefined && base !== null ? fcfa(base) : '', { align: 'right' }),
+        cell(tauxS || '', { align: 'center' }),
+        cell(gains !== undefined && gains !== null ? fcfa(gains) : '', { align: 'right' }),
+        cell(retenuesPS !== undefined && retenuesPS !== null ? fcfa(retenuesPS) : '', { align: 'right' }),
+        cell(tauxP || '', { align: 'center' }),
+        cell(retenuesPP !== undefined && retenuesPP !== null ? fcfa(retenuesPP) : '', { align: 'right' })
+    ];
+
+    const body = [[
+        headerCell('N°'), headerCell('LIBELLÉ'), headerCell('BASE'), headerCell('TAUX'),
+        headerCell('GAINS'), headerCell('RETENUE\n(P.S)'), headerCell('TAUX'), headerCell('RETENUE\n(P.P)')
+    ]];
+
+    body.push(ligne('Salaire de base', calc.salaireBaseMensuel, '100%', calc.salaireBase, undefined, undefined, undefined, codes.salaireBase));
+    if (calc.sursalaire > 0) body.push(ligne('Sursalaire', employee.sursalaire, '100%', calc.sursalaire, undefined, undefined, undefined, codes.sursalaire));
+    if (calc.primeAnciennete > 0) body.push(ligne(`Prime d'ancienneté (${calc.ansAnciennete} ans)`, null, null, calc.primeAnciennete, undefined, undefined, undefined, codes.primeAnciennete));
+    (employee.primes || []).forEach(p => { if (p.montant > 0) body.push(ligne(p.libelle || p.label || 'Prime', null, null, p.montant, undefined, undefined, undefined, codes.prime)); });
+    if (calc.allocationConges > 0) body.push(ligne(`Allocation congés (${calc.joursCP} j)`, null, null, calc.allocationConges, undefined, undefined, undefined, codes.allocationConges));
+    (calc.heuresSupTranches || []).forEach(t => body.push(ligne(`Heures supplémentaires — ${t.label}`, calc.tauxHoraire, `×${t.coef}`, t.montant, undefined, undefined, undefined, codes.heuresSup)));
+    if (calc.primeTransport > 0) body.push(ligne('Prime de transport non imposable', null, null, calc.primeTransport, undefined, undefined, undefined, codes.primeTransport));
+    if (calc.primeLogement > 0) body.push(ligne('Prime de logement', null, null, calc.primeLogement, undefined, undefined, undefined, codes.primeLogement));
+
+    body.push(bandRow('SALAIRE BRUT', calc.gainsTotaux));
+
+    body.push(ligne('Impôt sur les Traitements et Salaires (ITS)', calc.brutImposable, null, null, calc.salarial.its, null, null, codes.its));
+    body.push(ligne('Caisse de Retraite (CR)', calc.baseCNPS, '6.3%', null, calc.salarial.cnps, null, null, codes.cnpsSalariale));
+    if (calc.salarial.ricf > 0) body.push(ligne('Réduction Impôt Charge de Famille (RICF)', null, null, null, calc.salarial.ricf, null, null, codes.ricf));
+
+    body.push(bandRow('TOTAL RETENUES SALARIALES', undefined, calc.salarial.total));
+
+    body.push(ligne("Taxe d'Apprentissage (TA)", calc.brutImposable, null, null, null, '0.4%', calc.patronal.fdfpTA, codes.fdfpTA));
+    body.push(ligne('Taxe à la Formation Professionnelle Continue (TFPC)', calc.brutImposable, null, null, null, '0.6%', calc.patronal.fdfpFPC, codes.fdfpFPC));
+    body.push(bandRow('Total charges fiscales employeurs', undefined, undefined, (calc.patronal.fdfpTA || 0) + (calc.patronal.fdfpFPC || 0)));
+
+    body.push(ligne('CNPS / Caisse de Retraite', calc.baseCNPS, null, null, null, '7.7%', calc.patronal.cnpsRetraite, codes.cnpsPatronale));
+    body.push(ligne('CNPS / Prestation Familiale', calc.baseCNPS_PfAtAm, null, null, null, '5.0%', calc.patronal.cnpsPF, codes.cnpsPF));
+    body.push(ligne('CNPS / Accident de Travail', calc.baseCNPS_PfAtAm, null, null, null, `${employee.taux_at || 2}%`, calc.patronal.cnpsAT, codes.cnpsAT));
+    body.push(ligne('CNAM / Assurance maladie', calc.totalPersonnesCMU * 1000, null, null, null, null, calc.patronal.cmu, codes.cmuPatronale));
+    const totalChargesSociales = (calc.patronal.cnpsRetraite || 0) + (calc.patronal.cnpsPF || 0) + (calc.patronal.cnpsAT || 0) + (calc.patronal.cmu || 0);
+    body.push(bandRow('Total charges sociales employeurs', undefined, undefined, totalChargesSociales));
+
+    const totalChargesPatronales = ((calc.patronal.fdfpTA || 0) + (calc.patronal.fdfpFPC || 0) + totalChargesSociales);
+    body.push([
+        cell('TOTAL CHARGES PATRONALES', { colSpan: 5, fill: DARK_BAND, color: 'white', bold: true, fontSize: 6.8 }), {}, {}, {}, {},
+        cell(`Gains: ${fcfa(calc.gainsTotaux)}`, { fill: DARK_BAND, color: 'white', bold: true, align: 'right', fontSize: 6.3 }),
+        cell('', { fill: DARK_BAND }),
+        cell(`Retenues: ${fcfa(calc.salarial.total)}`, { fill: DARK_BAND, color: 'white', bold: true, align: 'right', fontSize: 6.3 })
+    ]);
+    void totalChargesPatronales; // conservé pour un futur pied de page « coût employeur total »
+
+    return {
+        pageSize: 'A4', pageMargins: [35, 35, 35, 35],
+        content: [
+            { columns: headerColumns },
+            { canvas: [{ type: 'line', x1: 0, y1: 5, x2: 525, y2: 5, lineWidth: 1, strokeColor: BORDER }] },
+            { text: '', margin: [0, 5] },
+            infoBlock,
+            { text: '', margin: [0, 6] },
+            {
+                table: { headerRows: 1, widths: ['7%', '29%', '11%', '8%', '11%', '11%', '8%', '15%'], body },
+                layout: {
+                    hLineWidth: (i, node) => (i === 0 || i === 1 || i === node.table.body.length) ? 1.2 : 0.4,
+                    vLineWidth: () => 0.4,
+                    hLineColor: () => BORDER,
+                    vLineColor: () => BORDER
+                }
+            },
+            { text: '', margin: [0, 6] },
+            {
+                columns: [
+                    { width: '*', text: 'CUMUL DE PAIE', fontSize: 8, bold: true, color: '#475569', margin: [0, 8, 0, 0] },
+                    {
+                        width: 180,
+                        table: {
+                            widths: ['*'],
+                            body: [
+                                [{ text: 'NET À PAYER', fontSize: 9, bold: true, alignment: 'center', margin: [0, 2] }],
+                                [{ text: fcfa(calc.netAPayer) + ' F', fontSize: 16, bold: true, alignment: 'center', fillColor: YELLOW, margin: [0, 4] }]
+                            ]
+                        },
+                        layout: { hLineWidth: () => 1.5, vLineWidth: () => 1.5, hLineColor: () => '#000', vLineColor: () => '#000' }
+                    }
+                ]
+            },
+            { text: `Mode de règlement : ${employee.virement ? `Virement bancaire${employee.rib ? ` — compte n° ${employee.rib}` : ''}` : 'Espèces'}`, fontSize: 7, alignment: 'center', margin: [0, 6, 0, 2] },
+            { text: '', margin: [0, 4] },
+            { text: `CUMUL SUR L'ANNÉE ${annee} (${moisNum} mois)`, fontSize: 7.5, bold: true, fillColor: '#f1f5f9', margin: [3, 3] },
+            {
+                margin: [0, 4, 0, 0],
+                table: {
+                    widths: ['16%', '13%', '16%', '13%', '16%', '13%', '13%'],
+                    body: [
+                        [
+                            cell('Jours travaillés', { fontSize: 6.3, color: '#475569' }), cell(calc.joursTrav, { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('I.T.S', { fontSize: 6.3, color: '#475569' }), cell(fcfa(calc.salarial.its), { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('Caisse de Retraite', { fontSize: 6.3, color: '#475569' }), cell(fcfa(calc.salarial.cnps), { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('', { fontSize: 6.3 })
+                        ],
+                        [
+                            cell('Brut', { fontSize: 6.3, color: '#475569' }), cell(fcfa(calc.gainsTotaux), { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('Brut imposable', { fontSize: 6.3, color: '#475569' }), cell(fcfa(calc.brutImposable), { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('R.I.C.F', { fontSize: 6.3, color: '#475569' }), cell(fcfa(calc.salarial.ricf), { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('', { fontSize: 6.3 })
+                        ]
+                    ]
+                },
+                layout: 'lightHorizontalLines'
+            },
+            { text: '', margin: [0, 4] },
+            { text: 'P.S : Part Salariale     P.P : Part Patronale', fontSize: 6.3, italics: true, color: '#64748b' },
+            { text: '', margin: [0, 6] },
+            {
+                columns: [
+                    { stack: [{ text: "L'Employeur", bold: true, alignment: 'center', margin: [0, 0, 0, 18] }, { text: company.nom, fontSize: 7, alignment: 'center' }, { canvas: [{ type: 'line', x1: 50, y1: 6, x2: 150, y2: 6, lineWidth: 0.5 }] }, { text: 'Cachet & Signature', fontSize: 6, alignment: 'center', margin: [0, 3] }] },
+                    { stack: [{ text: 'Le Salarié', bold: true, alignment: 'center', margin: [0, 0, 0, 18] }, { text: `${(employee.nom || '').toUpperCase()} ${employee.prenom || ''}`, fontSize: 7, alignment: 'center' }, { canvas: [{ type: 'line', x1: 50, y1: 6, x2: 150, y2: 6, lineWidth: 0.5 }] }, { text: 'Lu et approuvé', fontSize: 6, alignment: 'center', margin: [0, 3] }] }
+                ]
+            },
+            { text: '', margin: [0, 6] },
+            { text: 'Pour vous aider à faire valoir vos droits, conservez ce bulletin de paie sans limitation de durée.', fontSize: 6.5, italics: true, color: '#64748b', alignment: 'center' }
+        ],
+        defaultStyle: { font: 'Roboto', fontSize: 8 }
+    };
+}
+
+/** Identité employeur commune aux modèles ci-dessous — un seul endroit à corriger. */
+function resolveCompanyInfo(employee, companyInfo = {}) {
+    return {
+        nom: companyInfo.nom_entreprise || employee.nom_entreprise || 'VOTRE ENTREPRISE',
+        adresse: companyInfo.adresse || employee.adresse || '',
+        siege: companyInfo.siege_social || employee.siege_social || companyInfo.adresse || '',
+        ville: companyInfo.ville || employee.ville || '',
+        cnps: companyInfo.numero_cnps || employee.numero_cnps || '____',
+        contribuable: companyInfo.numero_contribuable || employee.numero_contribuable || '____',
+        email: companyInfo.email || employee.email_entreprise || '',
+        telephone: companyInfo.telephone || employee.tel_entreprise || '',
+        logo: companyInfo.logo || null
+    };
+}
+
+/** Rubriques de gains/retenues communes, sous une forme neutre exploitable par
+ * n'importe quelle mise en page ci-dessous (une ligne = un libellé + un montant,
+ * classé gain/retenue salariale/charge patronale). Construit une seule fois,
+ * pour ne pas retrouver un calcul différent d'un modèle à l'autre. */
+// Numérotation de rubrique commune à tous les modèles ONDA, alignée sur un
+// bulletin réel (LA LAVANDIERE) : 10/11/60/655 et 450/452/502/503/520/530 y
+// sont directement visibles. L'impôt sur salaire principal y garde le
+// numéro 430 : c'est celui de l'ITS (impôt unique, réforme fiscale 2024),
+// seul régime que ce moteur calcule désormais.
+const CODE_RUBRIQUE = {
+    salaireBase: '10', sursalaire: '11', primeAnciennete: '12', prime: '13',
+    allocationConges: '14', heuresSup: '15', gratification: '60',
+    primeTransport: '655', primeLogement: '656',
+    its: '430', cnpsSalariale: '502', cmuSalariale: '504', ricf: '432', acompte: '460',
+    cnpsPatronale: '503', cnpsPF: '450', cnpsAT: '452', cnpsAM: '451', cmuPatronale: '505',
+    impotEmployeur: '431', fdfpTA: '520', fdfpFPC: '530'
+};
+
+/**
+ * Fusionne les codes de rubrique du compte (Paramètres) avec les valeurs par
+ * défaut ONDA : un compte qui n'a jamais rien configuré obtient les codes par
+ * défaut ; un compte qui n'a redéfini que « its » garde le reste tel quel.
+ */
+function resolveCodesRubrique(codesCompte) {
+    if (!codesCompte) return CODE_RUBRIQUE;
+    return { ...CODE_RUBRIQUE, ...codesCompte };
+}
+
+function construireRubriques(employee, calc, codesCompte) {
+    const c = resolveCodesRubrique(codesCompte);
+    const gains = [];
+    gains.push({ code: c.salaireBase, label: 'Salaire de base', base: calc.salaireBaseMensuel, taux: '100%', montant: calc.salaireBase });
+    if (calc.sursalaire > 0) gains.push({ code: c.sursalaire, label: 'Sursalaire', base: employee.sursalaire, taux: '100%', montant: calc.sursalaire });
+    if (calc.primeAnciennete > 0) gains.push({ code: c.primeAnciennete, label: `Prime d'ancienneté (${calc.ansAnciennete} ans)`, montant: calc.primeAnciennete });
+    (employee.primes || []).forEach(p => { if (p.montant > 0) gains.push({ code: c.prime, label: p.libelle || p.label || 'Prime', montant: p.montant }); });
+    if (calc.allocationConges > 0) gains.push({ code: c.allocationConges, label: `Allocation congés (${calc.joursCP} j)`, montant: calc.allocationConges });
+    (calc.heuresSupTranches || []).forEach(t => gains.push({ code: c.heuresSup, label: `Heures sup. — ${t.label} (${t.heures}h)`, base: calc.tauxHoraire, taux: `×${t.coef}`, montant: t.montant }));
+    if (calc.primeTransport > 0) gains.push({ code: c.primeTransport, label: 'Indemnité de transport', montant: calc.primeTransport, exonere: true });
+    if (calc.primeLogement > 0) gains.push({ code: c.primeLogement, label: 'Prime de logement', montant: calc.primeLogement, exonere: true });
+
+    const retenues = [];
+    retenues.push({ code: c.its, label: 'Impôt sur les Traitements et Salaires (ITS)', base: calc.brutImposable, montant: calc.salarial.its });
+    retenues.push({ code: c.cnpsSalariale, label: 'CNPS — Retraite (part salariale)', base: calc.baseCNPS, taux: '6.3%', montant: calc.salarial.cnps });
+    retenues.push({ code: c.cmuSalariale, label: 'CMU — Assurance maladie', base: calc.totalPersonnesCMU * 1000, montant: calc.salarial.cmu });
+    // Toujours en grandeur positive comme les autres lignes : c'est une
+    // information (déjà déduite de l'ITS ci-dessus), pas une retenue
+    // supplémentaire — chaque modèle décide comment la présenter via `info`.
+    if (calc.salarial.ricf > 0) retenues.push({ code: c.ricf, label: 'dont Réduction Impôt Charge de Famille (RICF)', montant: calc.salarial.ricf, info: true });
+    if (calc.salarial.acompte > 0) retenues.push({ code: c.acompte, label: 'Acompte / avance', montant: calc.salarial.acompte });
+
+    const patronal = [];
+    patronal.push({ code: c.cnpsPatronale, label: 'CNPS — Retraite (part patronale)', base: calc.baseCNPS, taux: '7.7%', montant: calc.patronal.cnpsRetraite });
+    patronal.push({ code: c.cnpsPF, label: 'CNPS — Prestations familiales', base: calc.baseCNPS_PfAtAm, taux: '5.0%', montant: calc.patronal.cnpsPF });
+    patronal.push({ code: c.cnpsAT, label: 'CNPS — Accident du travail', base: calc.baseCNPS_PfAtAm, taux: `${employee.taux_at || 2}%`, montant: calc.patronal.cnpsAT });
+    patronal.push({ code: c.cmuPatronale, label: 'CMU — part patronale', montant: calc.patronal.cmu });
+    patronal.push({ code: c.impotEmployeur, label: 'T.A.S.P (impôt employeur)', base: calc.brutImposable, taux: '1.2%', montant: calc.patronal.impotEmployeur });
+    patronal.push({ code: c.fdfpTA, label: 'FDFP — Taxe apprentissage', base: calc.brutImposable, taux: '0.4%', montant: calc.patronal.fdfpTA });
+    patronal.push({ code: c.fdfpFPC, label: 'FDFP — Formation continue', base: calc.brutImposable, taux: '0.6%', montant: calc.patronal.fdfpFPC });
+
+    return { gains, retenues, patronal };
+}
+
+/**
+ * Troisième modèle par défaut, format « compact » (inspiré des bulletins Sage
+ * Paie / petites structures) : une seule colonne de montants, gains et
+ * retenues à la suite plutôt que côte à côte — le plus dense des modèles
+ * proposés, pensé pour tenir sur une demi-page.
+ */
+function generatePdfDefinitionCompact(employee, calc, companyInfo = {}) {
+    const BLUE = '#1e3a8a', BORDER = '#e2e8f0', BAND = '#f1f5f9';
+    const company = resolveCompanyInfo(employee, companyInfo);
+    const { gains, retenues, patronal } = construireRubriques(employee, calc, companyInfo.rubriqueCodes);
+
+    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+    const annee = parseInt(employee.annee || new Date().getFullYear());
+    const periode = `${['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'][moisNum] || ''} ${annee}`;
+
+    const headerCols = [];
+    if (company.logo) headerCols.push({ image: company.logo, fit: [45, 30], width: 55 });
+    headerCols.push({ width: '*', stack: [{ text: company.nom, fontSize: 11, bold: true, color: BLUE }, { text: [company.adresse, company.ville].filter(Boolean).join(' — '), fontSize: 7, color: '#64748b' }] });
+    headerCols.push({ width: 140, stack: [{ text: 'BULLETIN DE PAIE', fontSize: 10, bold: true, alignment: 'right' }, { text: periode, fontSize: 8, alignment: 'right', color: '#64748b' }] });
+
+    const infoLine = `${(employee.nom || '').toUpperCase()} ${employee.prenom || ''}  ·  ${employee.poste || ''}  ·  Matricule ${employee.matricule || '____'}  ·  N° CNPS ${employee.num_secu || employee.numero_cnps || '____'}`;
+
+    const cell = (text, opts = {}) => ({ text: (text === null || text === undefined) ? '' : text.toString(), fontSize: opts.fontSize || 7.2, bold: opts.bold || false, alignment: opts.align || 'left', fillColor: opts.fill || null, color: opts.color || 'black', margin: opts.margin || [3, 2, 3, 2] });
+    const ligneSection = (titre) => [cell('', { fill: BAND }), cell(titre, { bold: true, fill: BAND, colSpan: 4 }), {}, {}, {}];
+    const ligneMontant = (r, signe = 1) => {
+        // Une ligne « info » (ex. RICF) est une précision, pas une retenue en
+        // plus : elle s'affiche toujours en positif, quel que soit le signe
+        // demandé pour le reste de la section.
+        const s = r.info ? 1 : signe;
+        return [
+            cell(r.code || '', { align: 'center', color: r.info ? '#94a3b8' : '#64748b' }),
+            cell((r.info ? '   ' : '') + r.label + (r.exonere ? ' (exonérée)' : ''), { color: r.info ? '#64748b' : 'black', italics: !!r.info }),
+            cell(r.base !== undefined ? fcfa(r.base) : '', { align: 'right', color: '#94a3b8' }),
+            cell(r.taux || '', { align: 'center', color: '#94a3b8' }),
+            cell(fcfa(r.montant * s), { align: 'right', color: r.info ? '#64748b' : (s < 0 ? '#dc2626' : '#0f172a') })
+        ];
+    };
+
+    const body = [
+        [cell('N°', { bold: true, align: 'center' }), cell('LIBELLÉ', { bold: true }), cell('BASE', { bold: true, align: 'right' }), cell('TAUX', { bold: true, align: 'center' }), cell('MONTANT', { bold: true, align: 'right' })],
+        ligneSection('GAINS'),
+        ...gains.map(r => ligneMontant(r)),
+        [cell('', { fill: BAND }), cell('Total brut', { bold: true, fill: BAND }), cell('', { fill: BAND }), cell('', { fill: BAND }), cell(fcfa(calc.gainsTotaux), { align: 'right', bold: true, fill: BAND })],
+        ligneSection('RETENUES SALARIALES'),
+        ...retenues.map(r => ligneMontant(r, -1)),
+        [cell('', { fill: BAND }), cell('Total retenues', { bold: true, fill: BAND }), cell('', { fill: BAND }), cell('', { fill: BAND }), cell(fcfa(-calc.salarial.total), { align: 'right', bold: true, color: '#dc2626', fill: BAND })],
+        ligneSection('CHARGES PATRONALES (pour information)'),
+        ...patronal.map(r => ligneMontant(r)),
+        [cell('', { fill: BAND }), cell('Total charges patronales', { bold: true, fill: BAND }), cell('', { fill: BAND }), cell('', { fill: BAND }), cell(fcfa(calc.patronal.grandTotal), { align: 'right', bold: true, fill: BAND })]
+    ];
+
+    return {
+        pageSize: 'A4', pageMargins: [32, 32, 32, 32],
+        content: [
+            { columns: headerCols },
+            { canvas: [{ type: 'line', x1: 0, y1: 6, x2: 531, y2: 6, lineWidth: 1, strokeColor: BORDER }] },
+            { text: infoLine, fontSize: 7.5, margin: [0, 8, 0, 10] },
+            { table: { headerRows: 1, widths: ['7%', '41%', '16%', '12%', '24%'], body }, layout: { hLineWidth: (i, n) => (i === 0 || i === 1 || i === n.table.body.length) ? 1 : 0.3, vLineWidth: () => 0, hLineColor: () => BORDER } },
+            { text: '', margin: [0, 10] },
+            {
+                columns: [
+                    { width: '*', text: `Net imposable : ${fcfa(calc.brutImposable)}     Coût employeur total : ${fcfa(calc.gainsTotaux + calc.patronal.grandTotal)}`, fontSize: 6.8, color: '#64748b', margin: [0, 10, 0, 0] },
+                    { width: 170, table: { widths: ['*'], body: [[{ text: 'NET À PAYER', fontSize: 8, bold: true, alignment: 'center' }], [{ text: fcfa(calc.netAPayer) + ' F', fontSize: 15, bold: true, alignment: 'center', fillColor: '#FFFF00', margin: [0, 4] }]] }, layout: { hLineWidth: () => 1.2, vLineWidth: () => 1.2, hLineColor: () => '#000', vLineColor: () => '#000' } }
+                ]
+            },
+            { text: `Mode de règlement : ${employee.virement ? `Virement bancaire${employee.rib ? ` — ${employee.rib}` : ''}` : 'Espèces'}`, fontSize: 6.8, margin: [0, 8, 0, 0], color: '#64748b' },
+            { text: '', margin: [0, 14] },
+            { columns: [{ text: 'Signature Employeur', fontSize: 6.5, alignment: 'center' }, { text: 'Signature Salarié', fontSize: 6.5, alignment: 'center' }] }
+        ],
+        defaultStyle: { font: 'Roboto', fontSize: 8 }
+    };
+}
+
+/**
+ * Quatrième modèle par défaut, inspiré de la mise en page LOGIPAIE : bloc
+ * salarié en grille dense, gains/retenues salariales dans un tableau, charges
+ * patronales dans un second tableau SÉPARÉ en bas de page — LOGIPAIE ne les
+ * mélange jamais sur la même ligne, contrairement au modèle « Grille numérotée ».
+ */
+function generatePdfDefinitionLogipaie(employee, calc, companyInfo = {}) {
+    const NAVY = '#0f172a', BORDER = '#94a3b8', BAND = '#e2e8f0';
+    const company = resolveCompanyInfo(employee, companyInfo);
+    const { gains, retenues, patronal } = construireRubriques(employee, calc, companyInfo.rubriqueCodes);
+
+    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+    const annee = parseInt(employee.annee || new Date().getFullYear());
+    const dernierJour = new Date(annee, moisNum, 0).getDate();
+    const periode = `01/${String(moisNum).padStart(2, '0')}/${annee} au ${dernierJour}/${String(moisNum).padStart(2, '0')}/${annee}`;
+
+    const cell = (text, opts = {}) => ({ text: (text === null || text === undefined) ? '' : text.toString(), fontSize: opts.fontSize || 6.8, bold: opts.bold || false, alignment: opts.align || 'left', fillColor: opts.fill || null, color: opts.color || 'black', colSpan: opts.colSpan || null, margin: opts.margin || [2, 2, 2, 2] });
+    const headerCell = (text) => cell(text, { fill: NAVY, color: 'white', bold: true, align: 'center' });
+
+    const grilleSalarie = {
+        table: {
+            widths: ['16%', '34%', '16%', '34%'],
+            body: [
+                [cell('Matricule', { bold: true, fill: BAND }), cell(employee.matricule || '____'), cell('N° CNPS', { bold: true, fill: BAND }), cell(employee.num_secu || employee.numero_cnps || '____')],
+                [cell('Nom', { bold: true, fill: BAND }), cell((employee.nom || '').toUpperCase()), cell('Prénoms', { bold: true, fill: BAND }), cell(employee.prenom || '')],
+                [cell('Emploi', { bold: true, fill: BAND }), cell(employee.poste || ''), cell('Catégorie', { bold: true, fill: BAND }), cell(employee.categorie || '')],
+                [cell('Date embauche', { bold: true, fill: BAND }), cell(employee.date_embauche ? formatDate(employee.date_embauche) : ''), cell('Ancienneté', { bold: true, fill: BAND }), cell(calc.ancienneteTxt || '')],
+                [cell('Situation familiale', { bold: true, fill: BAND }), cell({ celibataire: 'Célibataire', marie: 'Marié(e)', divorce: 'Divorcé(e)', veuf: 'Veuf/Veuve' }[employee.situation_matrimoniale] || employee.situation_matrimoniale || ''), cell('Parts IGR', { bold: true, fill: BAND }), cell(calc.parts !== undefined ? calc.parts.toFixed(1) : '1.0')]
+            ]
+        },
+        layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => BORDER, vLineColor: () => BORDER }
+    };
+
+    const ligne = (r, retenue = false) => [
+        cell(r.code || '', { align: 'center', color: '#64748b' }),
+        cell(r.label + (r.exonere ? ' (exo.)' : '')),
+        cell(r.base !== undefined ? fcfa(r.base) : '', { align: 'right' }),
+        cell(r.taux || '', { align: 'center' }),
+        cell(fcfa(Math.abs(r.montant)), { align: 'right', color: retenue ? '#dc2626' : '#166534', bold: r.info })
+    ];
+
+    const bodyPaie = [[headerCell('N°'), headerCell('Rubrique'), headerCell('Base'), headerCell('Taux'), headerCell('Montant')]];
+    bodyPaie.push([cell('GAINS', { bold: true, fill: BAND, colSpan: 5 }), {}, {}, {}, {}]);
+    gains.forEach(r => bodyPaie.push(ligne(r)));
+    bodyPaie.push([cell('TOTAL BRUT', { bold: true, fill: BAND, colSpan: 4 }), {}, {}, {}, cell(fcfa(calc.gainsTotaux), { align: 'right', bold: true, fill: BAND })]);
+    bodyPaie.push([cell('RETENUES', { bold: true, fill: BAND, colSpan: 5 }), {}, {}, {}, {}]);
+    retenues.forEach(r => bodyPaie.push(ligne(r, !r.info)));
+    bodyPaie.push([cell('TOTAL RETENUES', { bold: true, fill: BAND, colSpan: 4 }), {}, {}, {}, cell(fcfa(calc.salarial.total), { align: 'right', bold: true, color: '#dc2626', fill: BAND })]);
+
+    const bodyPatronal = [[headerCell('N°'), headerCell('Charge patronale'), headerCell('Base'), headerCell('Taux'), headerCell('Montant')]];
+    patronal.forEach(r => bodyPatronal.push(ligne(r)));
+    bodyPatronal.push([cell('TOTAL CHARGES PATRONALES', { bold: true, fill: BAND, colSpan: 4 }), {}, {}, {}, cell(fcfa(calc.patronal.grandTotal), { align: 'right', bold: true, fill: BAND })]);
+
+    return {
+        pageSize: 'A4', pageMargins: [32, 32, 32, 32],
+        content: [
+            {
+                columns: [
+                    company.logo ? { image: company.logo, fit: [60, 40], width: 70 } : { width: 70, text: '' },
+                    { width: '*', stack: [{ text: company.nom, fontSize: 11, bold: true }, { text: company.adresse, fontSize: 6.8, color: '#475569' }, { text: `CNPS ${company.cnps}  ·  Contribuable ${company.contribuable}`, fontSize: 6.5, color: '#475569' }] },
+                    { width: 150, stack: [{ text: 'BULLETIN DE PAIE', fontSize: 10, bold: true, alignment: 'right', color: NAVY }, { text: `Du ${periode}`, fontSize: 7, alignment: 'right', color: '#475569' }] }
+                ]
+            },
+            { text: '', margin: [0, 6] },
+            grilleSalarie,
+            { text: '', margin: [0, 8] },
+            { table: { headerRows: 1, widths: ['7%', '39%', '16%', '12%', '24%'], body: bodyPaie }, layout: { hLineWidth: (i, n) => (i <= 1 || i === n.table.body.length) ? 1 : 0.3, vLineWidth: () => 0.3, hLineColor: () => BORDER, vLineColor: () => BORDER } },
+            { text: '', margin: [0, 10] },
+            { text: 'CHARGES PATRONALES', fontSize: 7.5, bold: true, color: NAVY, margin: [0, 0, 0, 3] },
+            { table: { headerRows: 1, widths: ['7%', '39%', '16%', '12%', '24%'], body: bodyPatronal }, layout: { hLineWidth: (i, n) => (i <= 1 || i === n.table.body.length) ? 1 : 0.3, vLineWidth: () => 0.3, hLineColor: () => BORDER, vLineColor: () => BORDER } },
+            { text: '', margin: [0, 10] },
+            {
+                columns: [
+                    { width: '*', text: `Mode de règlement : ${employee.virement ? 'Virement bancaire' : 'Espèces'}`, fontSize: 7, margin: [0, 10, 0, 0], color: '#475569' },
+                    { width: 170, table: { widths: ['*'], body: [[{ text: 'NET À PAYER', fontSize: 8, bold: true, alignment: 'center' }], [{ text: fcfa(calc.netAPayer) + ' F', fontSize: 15, bold: true, alignment: 'center', fillColor: '#FFFF00', margin: [0, 4] }]] }, layout: { hLineWidth: () => 1.2, vLineWidth: () => 1.2, hLineColor: () => '#000', vLineColor: () => '#000' } }
+                ]
+            },
+            { text: '', margin: [0, 12] },
+            { columns: [{ text: 'Cachet et signature de l\'employeur', fontSize: 6.5, alignment: 'center' }, { text: 'Signature du salarié (précédée de « lu et approuvé »)', fontSize: 6.5, alignment: 'center' }] }
+        ],
+        defaultStyle: { font: 'Roboto', fontSize: 8 }
+    };
+}
+
+/**
+ * Cinquième modèle par défaut, style « reçu bancaire » : gains et retenues
+ * dans deux tableaux CÔTE À CÔTE plutôt qu'un seul tableau large — courant
+ * dans les bulletins émis par les banques/assurances à Abidjan, où le mode de
+ * règlement occupe une place centrale.
+ */
+function generatePdfDefinitionBancaire(employee, calc, companyInfo = {}) {
+    const TEAL = '#0f766e', BORDER = '#d1d5db', BAND = '#f0fdfa';
+    const company = resolveCompanyInfo(employee, companyInfo);
+    const { gains, retenues, patronal } = construireRubriques(employee, calc, companyInfo.rubriqueCodes);
+    const totalPatronal = patronal.reduce((s, r) => s + (r.montant || 0), 0);
+
+    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+    const annee = parseInt(employee.annee || new Date().getFullYear());
+    const periode = `${['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'][moisNum] || ''} ${annee}`;
+
+    const cell = (text, opts = {}) => ({ text: (text === null || text === undefined) ? '' : text.toString(), fontSize: opts.fontSize || 7, bold: opts.bold || false, alignment: opts.align || 'left', fillColor: opts.fill || null, color: opts.color || 'black', margin: opts.margin || [3, 2, 3, 2] });
+    const headerCell = (text) => cell(text, { fill: TEAL, color: 'white', bold: true, align: 'center' });
+    const ligne = (r) => [cell((r.code ? `${r.code}  ` : '') + r.label + (r.exonere ? ' (exo.)' : ''), { color: r.info ? '#9ca3af' : 'black' }), cell(fcfa(r.montant), { align: 'right', color: r.info ? '#9ca3af' : 'black' })];
+
+    const bodyGains = [[headerCell('GAINS'), headerCell('')], ...gains.map(ligne), [cell('Total brut', { bold: true, fill: BAND }), cell(fcfa(calc.gainsTotaux), { align: 'right', bold: true, fill: BAND })]];
+    const bodyRetenues = [[headerCell('RETENUES'), headerCell('')], ...retenues.map(ligne), [cell('Total retenues', { bold: true, fill: BAND }), cell(fcfa(calc.salarial.total), { align: 'right', bold: true, fill: BAND })]];
+
+    return {
+        pageSize: 'A4', pageMargins: [32, 32, 32, 32],
+        content: [
+            {
+                columns: [
+                    company.logo ? { image: company.logo, fit: [50, 34], width: 60 } : { width: 60, text: '' },
+                    { width: '*', stack: [{ text: company.nom, fontSize: 11, bold: true, color: TEAL }, { text: [company.adresse, company.ville].filter(Boolean).join(', '), fontSize: 7, color: '#6b7280' }] },
+                    { width: 150, stack: [{ text: 'BULLETIN DE PAIE', fontSize: 10, bold: true, alignment: 'right' }, { text: periode, fontSize: 8, alignment: 'right', color: '#6b7280' }] }
+                ]
+            },
+            { canvas: [{ type: 'line', x1: 0, y1: 6, x2: 531, y2: 6, lineWidth: 1.5, strokeColor: TEAL }] },
+            { text: '', margin: [0, 8] },
+            { text: `${(employee.nom || '').toUpperCase()} ${employee.prenom || ''}   —   ${employee.poste || ''}   —   Matricule ${employee.matricule || '____'}   —   N° CNPS ${employee.num_secu || employee.numero_cnps || '____'}`, fontSize: 7.5, margin: [0, 0, 0, 10] },
+            {
+                columns: [
+                    { width: '49%', table: { headerRows: 1, widths: ['70%', '30%'], body: bodyGains }, layout: { hLineWidth: (i, n) => (i <= 1 || i === n.table.body.length) ? 1 : 0.3, vLineWidth: () => 0, hLineColor: () => BORDER } },
+                    { width: '2%', text: '' },
+                    { width: '49%', table: { headerRows: 1, widths: ['70%', '30%'], body: bodyRetenues }, layout: { hLineWidth: (i, n) => (i <= 1 || i === n.table.body.length) ? 1 : 0.3, vLineWidth: () => 0, hLineColor: () => BORDER } }
+                ]
+            },
+            { text: '', margin: [0, 10] },
+            { text: `Charges patronales (information) : ${fcfa(totalPatronal)}     Coût employeur total : ${fcfa(calc.gainsTotaux + totalPatronal)}`, fontSize: 6.8, color: '#6b7280' },
+            { text: '', margin: [0, 12] },
+            {
+                table: {
+                    widths: ['*', 180],
+                    body: [[
+                        { stack: [{ text: 'MODE DE RÈGLEMENT', fontSize: 7, bold: true, color: TEAL }, { text: employee.virement ? `Virement bancaire${employee.rib ? `\nCompte : ${employee.rib}` : ''}` : 'Espèces', fontSize: 8, margin: [0, 3, 0, 0] }], fillColor: BAND, margin: [10, 10] },
+                        { stack: [{ text: 'NET À PAYER', fontSize: 8, bold: true, alignment: 'center' }, { text: fcfa(calc.netAPayer) + ' F', fontSize: 16, bold: true, alignment: 'center', color: TEAL, margin: [0, 4, 0, 0] }], margin: [10, 10] }
+                    ]]
+                },
+                layout: { hLineWidth: () => 1, vLineWidth: (i) => (i === 1 ? 1 : 0), hLineColor: () => TEAL, vLineColor: () => TEAL }
+            },
+            { text: '', margin: [0, 14] },
+            { columns: [{ text: "Cachet & signature de l'employeur", fontSize: 6.5, alignment: 'center' }, { text: 'Signature du salarié', fontSize: 6.5, alignment: 'center' }] }
+        ],
+        defaultStyle: { font: 'Roboto', fontSize: 8 }
+    };
+}
+
+/**
+ * Sixième modèle par défaut, style « cartes » moderne : sections en blocs
+ * colorés distincts plutôt qu'un grand tableau — vise les entreprises qui
+ * veulent un bulletin visuellement plus contemporain, sans rien perdre des
+ * mentions légales.
+ */
+function generatePdfDefinitionModerne(employee, calc, companyInfo = {}) {
+    const INDIGO = '#4338ca', SOFT = '#eef2ff', BORDER = '#e5e7eb';
+    const company = resolveCompanyInfo(employee, companyInfo);
+    const { gains, retenues, patronal } = construireRubriques(employee, calc, companyInfo.rubriqueCodes);
+    const totalPatronal = patronal.reduce((s, r) => s + (r.montant || 0), 0);
+
+    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+    const annee = parseInt(employee.annee || new Date().getFullYear());
+    const periode = `${['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'][moisNum] || ''} ${annee}`;
+
+    const card = (titre, contenu) => ({
+        table: { widths: ['*'], body: [[{ text: titre, fontSize: 8, bold: true, color: 'white', fillColor: INDIGO, margin: [10, 5] }], [{ stack: contenu, margin: [10, 8] }]] },
+        layout: { hLineWidth: () => 0, vLineWidth: () => 0.75, vLineColor: () => BORDER, paddingLeft: () => 0, paddingRight: () => 0 }
+    });
+    const kv = (label, value) => ({ columns: [{ text: label, fontSize: 7, color: '#6b7280', width: 90 }, { text: (value || '').toString(), fontSize: 7.5, bold: true, width: '*' }], margin: [0, 1.5] });
+    const ligneMontant = (r, couleur) => ({ columns: [{ text: (r.code ? `${r.code}  ` : '') + r.label + (r.exonere ? ' (exo.)' : ''), fontSize: 7, italics: !!r.info, color: r.info ? '#9ca3af' : undefined, width: '*' }, { text: fcfa(r.montant), fontSize: 7, bold: !r.info, alignment: 'right', color: r.info ? '#9ca3af' : couleur, width: 70 }], margin: [0, 1.5] });
+
+    return {
+        pageSize: 'A4', pageMargins: [30, 30, 30, 30],
+        content: [
+            {
+                table: { widths: ['*'], body: [[{
+                    columns: [
+                        company.logo ? { image: company.logo, fit: [42, 28], width: 52 } : { width: 52, text: '' },
+                        { width: '*', stack: [{ text: company.nom, fontSize: 11, bold: true, color: 'white' }, { text: [company.adresse, company.ville].filter(Boolean).join(', '), fontSize: 6.8, color: '#e0e7ff' }] },
+                        { width: 150, stack: [{ text: 'BULLETIN DE PAIE', fontSize: 10, bold: true, alignment: 'right', color: 'white' }, { text: periode, fontSize: 7.5, alignment: 'right', color: '#e0e7ff' }] }
+                    ],
+                    margin: [12, 10]
+                }]] },
+                layout: { hLineWidth: () => 0, vLineWidth: () => 0, fillColor: INDIGO }
+            },
+            { text: '', margin: [0, 10] },
+            card('IDENTITÉ DU SALARIÉ', [
+                { columns: [{ stack: [kv('Nom', (employee.nom || '').toUpperCase()), kv('Prénoms', employee.prenom), kv('Emploi', employee.poste), kv('Matricule', employee.matricule)] }, { stack: [kv('N° CNPS', employee.num_secu || employee.numero_cnps), kv('Catégorie', employee.categorie), kv('Ancienneté', calc.ancienneteTxt), kv('Parts IGR', calc.parts !== undefined ? calc.parts.toFixed(1) : '1.0')] }] }
+            ]),
+            { text: '', margin: [0, 8] },
+            {
+                columns: [
+                    { width: '49%', ...card('RÉMUNÉRATION', [...gains.map(r => ligneMontant(r, '#166534')), { canvas: [{ type: 'line', x1: 0, y1: 4, x2: 235, y2: 4, lineWidth: 0.5, lineColor: BORDER }] }, { columns: [{ text: 'Total brut', fontSize: 7.5, bold: true, width: '*' }, { text: fcfa(calc.gainsTotaux), fontSize: 7.5, bold: true, alignment: 'right', width: 70 }], margin: [0, 3, 0, 0] }]) },
+                    { width: '2%', text: '' },
+                    { width: '49%', ...card('COTISATIONS', [...retenues.map(r => ligneMontant(r, '#dc2626')), { canvas: [{ type: 'line', x1: 0, y1: 4, x2: 235, y2: 4, lineWidth: 0.5, lineColor: BORDER }] }, { columns: [{ text: 'Total retenues', fontSize: 7.5, bold: true, width: '*' }, { text: fcfa(calc.salarial.total), fontSize: 7.5, bold: true, alignment: 'right', color: '#dc2626', width: 70 }], margin: [0, 3, 0, 0] }, { text: `Charges patronales (info.) : ${fcfa(totalPatronal)}`, fontSize: 6.3, color: '#9ca3af', margin: [0, 4, 0, 0] }]) }
+                ]
+            },
+            { text: '', margin: [0, 10] },
+            {
+                table: { widths: ['*', 170], body: [[
+                    { stack: [{ text: 'MODE DE RÈGLEMENT', fontSize: 6.8, bold: true, color: INDIGO }, { text: employee.virement ? `Virement bancaire${employee.rib ? ` — ${employee.rib}` : ''}` : 'Espèces', fontSize: 7.5, margin: [0, 3, 0, 0] }], margin: [12, 10] },
+                    { stack: [{ text: 'NET À PAYER', fontSize: 7.5, bold: true, alignment: 'center', color: 'white' }, { text: fcfa(calc.netAPayer) + ' F', fontSize: 15, bold: true, alignment: 'center', color: 'white', margin: [0, 3, 0, 0] }], fillColor: INDIGO, margin: [10, 8] }
+                ]] },
+                layout: { hLineWidth: () => 0.75, vLineWidth: () => 0, hLineColor: () => BORDER }
+            },
+            { text: '', margin: [0, 14] },
+            { columns: [{ text: "Cachet & signature de l'employeur", fontSize: 6.5, alignment: 'center', color: '#6b7280' }, { text: 'Signature du salarié', fontSize: 6.5, alignment: 'center', color: '#6b7280' }] }
+        ],
+        defaultStyle: { font: 'Roboto', fontSize: 8 }
+    };
+}
+
+/**
+ * Septième modèle par défaut, réplique fidèle d'un bulletin réel (LA
+ * LAVANDIERE) : boîte « congés/absences » à gauche, boîte matricule + nom en
+ * gras à droite, tableau Acquis/Reste à prendre/Pris pour repos comp. et
+ * congés, colonne Nombre séparée de Base (jours/heures × taux journalier ou
+ * horaire), et pied « Cumuls » Période/Année.
+ *
+ * Le solde de congés (Acquis/Reste à prendre/Pris) n'est pas un cumul qu'ONDA
+ * conserve aujourd'hui (voir le cumul annuel plus bas) : la colonne est
+ * affichée à blanc plutôt qu'avec une fausse valeur à 0.
+ */
+function generatePdfDefinitionLavandiere(employee, calc, companyInfo = {}) {
+    const BORDER = '#000000';
+    // Vert (thème congés/repos), pas du gris sur gris : chaque modèle ONDA a
+    // sa propre couleur d'accent (bleu, indigo, teal…), celui-ci n'y échappe
+    // pas.
+    const GREEN = '#15803d';
+    const company = resolveCompanyInfo(employee, companyInfo);
+    const codes = resolveCodesRubrique(companyInfo.rubriqueCodes);
+
+    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+    const annee = parseInt(employee.annee || new Date().getFullYear());
+    const dernierJour = new Date(annee, moisNum, 0).getDate();
+    const periodeDebut = `01/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
+    const periodeFin = `${dernierJour}/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
+    const jrsMois = calc.joursTrav || dernierJour;
+
+    const box = (contenu, opts = {}) => ({
+        table: { widths: ['*'], body: [[{ stack: contenu, margin: opts.margin || [6, 5] }]] },
+        layout: { hLineWidth: () => 0.75, vLineWidth: () => 0.75, hLineColor: () => BORDER, vLineColor: () => BORDER }
+    });
+    const kv = (label, value, opts = {}) => ({ columns: [{ text: label, fontSize: 6.8, width: opts.labelWidth || 110 }, { text: (value === undefined || value === null || value === '') ? '' : value.toString(), fontSize: 6.8, bold: true, width: '*' }], margin: [0, 1] });
+
+    const cell = (text, opts = {}) => ({
+        text: (text === null || text === undefined) ? '' : text.toString(),
+        fontSize: opts.fontSize || 6.6,
+        bold: opts.bold || false,
+        alignment: opts.align || 'left',
+        fillColor: opts.fill || null,
+        colSpan: opts.colSpan || null,
+        margin: opts.margin || [2, 1.5, 2, 1.5]
+    });
+    // Vert franc pour les en-têtes, vert moyen pour les sous-groupes (Part
+    // salariale/patronale), vert pâle mais coloré (pas gris) pour les
+    // sous-totaux — la hiérarchie reste lisible sans jamais retomber en
+    // niveaux de gris.
+    const headerCell = (text, opts = {}) => cell(text, { fill: GREEN, color: 'white', bold: true, align: 'center', fontSize: 6.3, ...opts });
+    const subHeaderCell = (text, opts = {}) => cell(text, { fill: '#4ade80', color: '#052e16', bold: true, align: 'center', fontSize: 6.1, ...opts });
+
+    // Nombre (jours/heures) × Base (taux journalier/horaire) = Gain, comme sur
+    // le bulletin d'origine — distinct des autres modèles où Base est
+    // directement le montant mensuel.
+    const ligne = (numero, label, nombre, base, tauxS, gain, retenuePS, baseP, tauxP, retenuePP) => [
+        cell(numero || ''), cell(label),
+        cell(nombre !== undefined && nombre !== null ? nombre : '', { align: 'right' }),
+        cell(base !== undefined && base !== null ? fcfa(base) : '', { align: 'right' }),
+        cell(tauxS || '', { align: 'center' }),
+        cell(gain !== undefined && gain !== null ? fcfa(gain) : '', { align: 'right' }),
+        cell(retenuePS !== undefined && retenuePS !== null ? fcfa(retenuePS) : '', { align: 'right' }),
+        cell(tauxP || '', { align: 'center' }),
+        cell(retenuePP !== undefined && retenuePP !== null ? fcfa(retenuePP) : '', { align: 'right' })
+    ];
+    const bandRow = (label, gain, retenuePS, retenuePP) => [
+        cell('', { fill: '#bbf7d0' }), cell(label, { bold: true, fill: '#bbf7d0' }),
+        cell('', { fill: '#bbf7d0' }), cell('', { fill: '#bbf7d0' }), cell('', { fill: '#bbf7d0' }),
+        cell(gain !== undefined ? fcfa(gain) : '', { align: 'right', bold: true, fill: '#bbf7d0' }),
+        cell(retenuePS !== undefined ? fcfa(retenuePS) : '', { align: 'right', bold: true, fill: '#bbf7d0' }),
+        cell('', { fill: '#bbf7d0' }),
+        cell(retenuePP !== undefined ? fcfa(retenuePP) : '', { align: 'right', bold: true, fill: '#bbf7d0' })
+    ];
+
+    const body = [[
+        headerCell('N°'), headerCell('Désignation'), headerCell('Nombre'), headerCell('Base'),
+        headerCell('Taux'), headerCell('Gain'), headerCell('Retenue'),
+        headerCell('Taux'), headerCell('Retenue')
+    ], [
+        subHeaderCell(''), subHeaderCell(''), subHeaderCell(''), subHeaderCell(''),
+        subHeaderCell('Part salariale', { colSpan: 3 }), {}, {},
+        subHeaderCell('Part patronale', { colSpan: 2 }), {}
+    ]];
+
+    const joursBase = jrsMois || 30;
+    body.push(ligne(codes.salaireBase, 'Salaire de base', joursBase, (calc.salaireBaseMensuel || 0) / joursBase, undefined, calc.salaireBase));
+    if (calc.sursalaire > 0) body.push(ligne(codes.sursalaire, 'Sursalaire', joursBase, (employee.sursalaire || 0) / joursBase, undefined, calc.sursalaire));
+    if (calc.primeAnciennete > 0) body.push(ligne(codes.primeAnciennete, `Prime d'ancienneté (${calc.ansAnciennete} ans)`, undefined, undefined, undefined, calc.primeAnciennete));
+    (employee.primes || []).forEach(p => { if (p.montant > 0) body.push(ligne(codes.prime, p.libelle || p.label || 'Prime', undefined, undefined, undefined, p.montant)); });
+    if (calc.allocationConges > 0) body.push(ligne(codes.allocationConges, `Allocation congés (${calc.joursCP} j)`, calc.joursCP, undefined, undefined, calc.allocationConges));
+    (calc.heuresSupTranches || []).forEach(t => body.push(ligne(codes.heuresSup, `Heures sup. — ${t.label}`, t.heures, calc.tauxHoraire, `×${t.coef}`, t.montant)));
+    if (calc.primeTransport > 0) body.push(ligne(codes.primeTransport, 'Indemnité de transport', undefined, undefined, undefined, calc.primeTransport));
+    if (calc.primeLogement > 0) body.push(ligne(codes.primeLogement, 'Prime de logement', undefined, undefined, undefined, calc.primeLogement));
+
+    body.push(bandRow('TOTAL BRUT', calc.gainsTotaux));
+
+    body.push(ligne(codes.its, 'Impôt sur les Traitements et Salaires', undefined, calc.brutImposable, undefined, undefined, calc.salarial.its));
+    body.push(ligne(codes.cnpsSalariale, 'Retenue CNPS', undefined, calc.baseCNPS, '6,30', undefined, calc.salarial.cnps));
+    body.push(ligne(codes.cmuSalariale, 'CMU — Assurance maladie', undefined, calc.totalPersonnesCMU * 1000, undefined, undefined, calc.salarial.cmu));
+    if (calc.salarial.ricf > 0) body.push(ligne(codes.ricf, 'dont Réduction Impôt Charge de Famille (RICF)', undefined, undefined, undefined, undefined, calc.salarial.ricf));
+    if (calc.salarial.acompte > 0) body.push(ligne(codes.acompte, 'Acompte / avance', undefined, undefined, undefined, undefined, calc.salarial.acompte));
+
+    body.push(ligne(codes.cnpsPatronale, 'Retraite Générale CNPS', undefined, undefined, undefined, undefined, undefined, calc.baseCNPS, '7,70', calc.patronal.cnpsRetraite));
+    body.push(ligne(codes.cnpsPF, 'Prestations Familiales', undefined, undefined, undefined, undefined, undefined, calc.baseCNPS_PfAtAm, '5,00', calc.patronal.cnpsPF));
+    body.push(ligne(codes.cnpsAT, 'Accident du Travail', undefined, undefined, undefined, undefined, undefined, calc.baseCNPS_PfAtAm, `${employee.taux_at || 2},00`, calc.patronal.cnpsAT));
+    body.push(ligne(codes.cmuPatronale, 'CMU — part patronale', undefined, undefined, undefined, undefined, undefined, undefined, undefined, calc.patronal.cmu));
+    body.push(ligne(codes.impotEmployeur, 'T.A.S.P (impôt employeur)', undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '1,20', calc.patronal.impotEmployeur));
+    body.push(ligne(codes.fdfpTA, "Taxe d'Apprentissage", undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '0,40', calc.patronal.fdfpTA));
+    body.push(ligne(codes.fdfpFPC, 'Formation Professionnelle Continue', undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '0,60', calc.patronal.fdfpFPC));
+
+    const totalPatronal = (calc.patronal.cnpsRetraite || 0) + (calc.patronal.cnpsPF || 0) + (calc.patronal.cnpsAT || 0) + (calc.patronal.cmu || 0) + (calc.patronal.impotEmployeur || 0) + (calc.patronal.fdfpTA || 0) + (calc.patronal.fdfpFPC || 0);
+    body.push(bandRow('TOTAL COTISATIONS', undefined, calc.salarial.total, totalPatronal));
+
+    const congesRow = (label, acquis, reste, pris) => [
+        cell(label, { fontSize: 6.6 }), cell(acquis || '', { align: 'center', fontSize: 6.6 }),
+        cell(reste || '', { align: 'center', fontSize: 6.6 }), cell(pris || '', { align: 'center', fontSize: 6.6 })
+    ];
+
+    const cumulsRow = (label, brut, chargesSal, chargesPat, netImposable, jrs, heuresSup, net) => [
+        cell(label, { bold: true, fontSize: 6.3 }), cell(fcfa(brut), { align: 'right', fontSize: 6.3 }),
+        cell(fcfa(chargesSal), { align: 'right', fontSize: 6.3 }), cell(fcfa(chargesPat), { align: 'right', fontSize: 6.3 }),
+        cell(fcfa(netImposable), { align: 'right', fontSize: 6.3 }), cell(jrs, { align: 'right', fontSize: 6.3 }),
+        cell(fcfa(heuresSup), { align: 'right', fontSize: 6.3 }), cell(fcfa(net), { align: 'right', bold: true, fontSize: 6.3 })
+    ];
+
+    return {
+        pageSize: 'A4', pageMargins: [28, 28, 28, 28],
+        content: [
+            {
+                columns: [
+                    { width: '58%', ...box([
+                        company.logo ? { image: company.logo, fit: [90, 40], margin: [0, 0, 0, 4] } : { text: company.nom, fontSize: 11, bold: true },
+                        !company.logo ? null : { text: company.nom, fontSize: 9, bold: true },
+                        { text: company.adresse, fontSize: 6.8 },
+                        { text: company.ville, fontSize: 6.8 },
+                        { text: `Tél : ${company.telephone || '—'}`, fontSize: 6.8 },
+                        { text: `N° CNPS : ${company.cnps}`, fontSize: 6.8 }
+                    ].filter(Boolean)) },
+                    { width: '2%', text: '' },
+                    { width: '40%', ...box([
+                        { text: employee.isLeavePayslip ? "BULLETIN D'ALLOCATION CONGÉ" : 'BULLETIN DE PAIE', fontSize: 12, bold: true, alignment: 'center' }
+                    ], { margin: [6, 12] }) }
+                ]
+            },
+            { text: '', margin: [0, 4] },
+            box([
+                { columns: [kv('Période du', `${periodeDebut} au ${periodeFin}`), kv('Paiement le', `${periodeFin}   par ${employee.virement ? 'Virement' : 'Espèces'}`)] },
+                { columns: [kv("Date d'embauche", employee.date_embauche ? formatDate(employee.date_embauche) : ''), kv('Ancienneté', calc.ancienneteTxt)] },
+                { columns: [kv('Département', employee.departement || ''), kv('Emploi', employee.poste || '')] },
+                { columns: [kv('Catégorie', employee.categorie || ''), kv('Nbre de parts IGR', calc.parts !== undefined ? calc.parts.toFixed(1) : '1,00')] },
+                { columns: [kv('Situation', `${{ celibataire: 'Célibataire', marie: 'Marié(e)', divorce: 'Divorcé(e)', veuf: 'Veuf/Veuve' }[employee.situation_matrimoniale] || employee.situation_matrimoniale || ''}   ${parseInt(employee.nombre_enfants) || 0} Enfant(s)`), kv('N° CNPS', employee.num_secu || employee.numero_cnps || '')] }
+            ]),
+            { text: '', margin: [0, 4] },
+            {
+                columns: [
+                    { width: '48%', ...box([
+                        { text: 'Absences / congés', fontSize: 6.8, bold: true, margin: [0, 0, 0, 3] },
+                        kv('Jours Absence sans solde', parseFloat(employee.absences_jours) || 0, { labelWidth: 150 }),
+                        kv('Jours Absence avec solde', 0, { labelWidth: 150 }),
+                        kv('Jours rappel', '', { labelWidth: 150 }),
+                        kv('Date de retour congés', '', { labelWidth: 150 }),
+                        kv('Date départ congés', '', { labelWidth: 150 }),
+                        kv('Médaille du travail', 0, { labelWidth: 150 })
+                    ]) },
+                    { width: '4%', text: '' },
+                    { width: '48%', stack: [
+                        box([
+                            { text: `Matricule   ${employee.matricule || ''}`, fontSize: 7.5, bold: true },
+                            { text: `${(employee.nom || '').toUpperCase()} ${employee.prenom || ''}`, fontSize: 10, bold: true, margin: [0, 3, 0, 0] }
+                        ]),
+                        { text: '', margin: [0, 3] },
+                        {
+                            table: {
+                                widths: ['34%', '22%', '22%', '22%'],
+                                body: [
+                                    [headerCell(''), headerCell('Acquis'), headerCell('Reste à prendre'), headerCell('Pris')],
+                                    congesRow('Repos comp.'),
+                                    congesRow('Congés')
+                                ]
+                            },
+                            layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => BORDER, vLineColor: () => BORDER }
+                        }
+                    ] }
+                ]
+            },
+            { text: '', margin: [0, 6] },
+            {
+                table: { headerRows: 2, widths: ['5%', '25%', '8%', '11%', '8%', '11%', '11%', '8%', '13%'], body },
+                layout: {
+                    hLineWidth: (i, node) => (i === 0 || i === 2 || i === node.table.body.length) ? 1 : 0.4,
+                    vLineWidth: () => 0.4,
+                    hLineColor: () => '#94a3b8',
+                    vLineColor: () => '#94a3b8'
+                }
+            },
+            { text: '', margin: [0, 8] },
+            {
+                columns: [
+                    { width: '*', text: '' },
+                    {
+                        width: 170,
+                        table: { widths: ['*'], body: [[{ text: 'NET À PAYER', fontSize: 8, bold: true, alignment: 'center', margin: [0, 2] }], [{ text: fcfa(calc.netAPayer) + ' F', fontSize: 15, bold: true, alignment: 'center', fillColor: '#FFFF00', margin: [0, 3] }]] },
+                        layout: { hLineWidth: () => 1.2, vLineWidth: () => 1.2, hLineColor: () => '#000', vLineColor: () => '#000' }
+                    }
+                ]
+            },
+            { text: '', margin: [0, 8] },
+            { text: 'CUMULS', fontSize: 7.5, bold: true, margin: [0, 0, 0, 3] },
+            {
+                table: {
+                    widths: ['12%', '13%', '13%', '13%', '13%', '11%', '11%', '14%'],
+                    body: [
+                        [headerCell('Période'), headerCell('Salaire brut'), headerCell('Charges sal.'), headerCell('Charges pat.'), headerCell('Net imposable'), headerCell('Jrs trav.'), headerCell('Heures sup'), headerCell('NET À PAYER')],
+                        cumulsRow('Mois', calc.gainsTotaux, calc.salarial.total, totalPatronal, calc.brutImposable, calc.joursTrav, calc.montantHeuresSup, calc.netAPayer),
+                        // Cumul annuel identique au cumul du mois : ONDA ne conserve pas
+                        // encore d'historique de paie (voir generatePdfDefinitionGrilleNumerotee
+                        // ci-dessus) — exact pour un premier bulletin de l'année, approximatif ensuite.
+                        cumulsRow(`Année ${annee}`, calc.gainsTotaux, calc.salarial.total, totalPatronal, calc.brutImposable, calc.joursTrav, calc.montantHeuresSup, calc.netAPayer)
+                    ]
+                },
+                layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => BORDER, vLineColor: () => BORDER }
+            },
+            { text: '', margin: [0, 10] },
+            {
+                columns: [
+                    { stack: [{ text: "Visa de l'employeur", fontSize: 7, alignment: 'center', margin: [0, 0, 0, 24] }, { canvas: [{ type: 'line', x1: 40, y1: 0, x2: 200, y2: 0, lineWidth: 0.5 }] }] },
+                    { stack: [{ text: "Visa de l'employé", fontSize: 7, alignment: 'center', margin: [0, 0, 0, 24] }, { canvas: [{ type: 'line', x1: 40, y1: 0, x2: 200, y2: 0, lineWidth: 0.5 }] }] }
+                ]
+            }
+        ],
+        defaultStyle: { font: 'Roboto', fontSize: 8 }
+    };
+}
+
+/**
+ * Huitième modèle par défaut, réplique fidèle d'un bulletin réel (A.D.
+ * ARCHITECTURE) : boîtes « PÉRIODE DE PAIE » / « DATE DE PAIE » / « TYPE DE
+ * PAIE » en en-tête, boîte « CUMULS ANNUELS », résumé GAINS/RETENUES/NET À
+ * PAYER, et pied RÈGLEMENT/BILLETAGE (décompte des coupures en espèces).
+ *
+ * Le bulletin d'origine affiche I.S./C.N./I.G.R. (ancien régime fiscal) dans
+ * ses cumuls annuels ; conformément à la réforme 2024, ce modèle affiche
+ * l'ITS qui les a remplacés plutôt que de reproduire des libellés obsolètes.
+ */
+function generatePdfDefinitionADArchitecture(employee, calc, companyInfo = {}) {
+    const BORDER = '#000000';
+    // Violet (thème « cumuls/administratif »), avec un bandeau franc pour les
+    // sous-totaux — pas un gris sur gris, voir la même remarque sur
+    // generatePdfDefinitionLavandiere ci-dessus.
+    const VIOLET = '#6d28d9';
+    const BAND = '#ddd6fe';
+    const company = resolveCompanyInfo(employee, companyInfo);
+    const codes = resolveCodesRubrique(companyInfo.rubriqueCodes);
+
+    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+    const annee = parseInt(employee.annee || new Date().getFullYear());
+    const dernierJour = new Date(annee, moisNum, 0).getDate();
+    const periodeDebut = `01/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
+    const periodeFin = `${dernierJour}/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
+
+    const box = (contenu, opts = {}) => ({
+        table: { widths: ['*'], body: [[{ stack: contenu, margin: opts.margin || [6, 5] }]] },
+        layout: { hLineWidth: () => 0.75, vLineWidth: () => 0.75, hLineColor: () => BORDER, vLineColor: () => BORDER }
+    });
+    const kv = (label, value, opts = {}) => ({ columns: [{ text: label, fontSize: 6.6, width: opts.labelWidth || 100 }, { text: (value === undefined || value === null || value === '') ? '' : value.toString(), fontSize: 6.6, bold: true, width: '*' }], margin: [0, 1] });
+
+    const cell = (text, opts = {}) => ({
+        text: (text === null || text === undefined) ? '' : text.toString(),
+        fontSize: opts.fontSize || 6.6, bold: opts.bold || false, alignment: opts.align || 'left',
+        fillColor: opts.fill || null, colSpan: opts.colSpan || null, margin: opts.margin || [2, 1.5, 2, 1.5]
+    });
+    const headerCell = (text) => cell(text, { fill: VIOLET, color: 'white', bold: true, align: 'center', fontSize: 6.6 });
+
+    const ligne = (numero, label, base, taux, gain, retenue) => [
+        cell(numero || ''), cell(label),
+        cell(base !== undefined && base !== null ? fcfa(base) : '', { align: 'right' }),
+        cell(taux || '', { align: 'center' }),
+        cell(gain !== undefined && gain !== null ? fcfa(gain) : '', { align: 'right' }),
+        cell(retenue !== undefined && retenue !== null ? fcfa(retenue) : '', { align: 'right' })
+    ];
+    const bandRow = (label, gain, retenue) => [
+        cell('', { fill: BAND }), cell(label, { bold: true, fill: BAND }), cell('', { fill: BAND }), cell('', { fill: BAND }),
+        cell(gain !== undefined ? fcfa(gain) : '', { align: 'right', bold: true, fill: BAND }),
+        cell(retenue !== undefined ? fcfa(retenue) : '', { align: 'right', bold: true, fill: BAND })
+    ];
+
+    const body = [[headerCell('N°'), headerCell('Désignation'), headerCell('Base'), headerCell('Taux'), headerCell('Gains'), headerCell('Retenues')]];
+    body.push(ligne(codes.salaireBase, 'Salaire de base', calc.salaireBaseMensuel, '100%', calc.salaireBase));
+    if (calc.sursalaire > 0) body.push(ligne(codes.sursalaire, 'Sursalaire', employee.sursalaire, '100%', calc.sursalaire));
+    if (calc.primeAnciennete > 0) body.push(ligne(codes.primeAnciennete, `Prime d'ancienneté (${calc.ansAnciennete} ans)`, undefined, undefined, calc.primeAnciennete));
+    (employee.primes || []).forEach(p => { if (p.montant > 0) body.push(ligne(codes.prime, p.libelle || p.label || 'Prime', undefined, undefined, p.montant)); });
+    if (calc.allocationConges > 0) body.push(ligne(codes.allocationConges, `Allocation congés (${calc.joursCP} j)`, undefined, undefined, calc.allocationConges));
+    (calc.heuresSupTranches || []).forEach(t => body.push(ligne(codes.heuresSup, `Heures sup. — ${t.label} (${t.heures}h)`, calc.tauxHoraire, `×${t.coef}`, t.montant)));
+    if (calc.primeTransport > 0) body.push(ligne(codes.primeTransport, 'Indemnité de transport', undefined, undefined, calc.primeTransport));
+    if (calc.primeLogement > 0) body.push(ligne(codes.primeLogement, 'Prime de logement', undefined, undefined, calc.primeLogement));
+    body.push(bandRow('TOTAL BRUT', calc.gainsTotaux));
+
+    body.push(ligne(codes.its, 'ITS — Impôt sur Traitements et Salaires', calc.brutImposable, null, null, calc.salarial.its));
+    body.push(ligne(codes.cnpsSalariale, 'CNPS — Retraite (part salariale)', calc.baseCNPS, '6,3%', null, calc.salarial.cnps));
+    body.push(ligne(codes.cmuSalariale, 'CMU — Assurance maladie', calc.totalPersonnesCMU * 1000, null, null, calc.salarial.cmu));
+    if (calc.salarial.ricf > 0) body.push(ligne(codes.ricf, 'dont RICF (réduction charge de famille)', null, null, null, calc.salarial.ricf));
+    if (calc.salarial.acompte > 0) body.push(ligne(codes.acompte, 'Acompte / avance', null, null, null, calc.salarial.acompte));
+    body.push(bandRow('TOTAL RETENUES', undefined, calc.salarial.total));
+
+    const totalPatronal = (calc.patronal.cnpsRetraite || 0) + (calc.patronal.cnpsPF || 0) + (calc.patronal.cnpsAT || 0) + (calc.patronal.cmu || 0) + (calc.patronal.impotEmployeur || 0) + (calc.patronal.fdfpTA || 0) + (calc.patronal.fdfpFPC || 0);
+
+    // Décompte des coupures pour un règlement en espèces : uniquement affiché
+    // quand ce n'est pas un virement (le « billetage » n'a pas de sens sinon).
+    const coupures = [10000, 5000, 2000, 1000, 500, 250, 100, 50, 25, 10, 5];
+    const billetage = [];
+    if (!employee.virement) {
+        let reste = Math.round(calc.netAPayer || 0);
+        coupures.forEach(c => {
+            const qte = Math.floor(reste / c);
+            if (qte > 0) { billetage.push([cell(`${c} F`, { fontSize: 6.3 }), cell(qte, { align: 'right', fontSize: 6.3 }), cell(fcfa(qte * c), { align: 'right', fontSize: 6.3 })]); reste -= qte * c; }
+        });
+    }
+
+    return {
+        pageSize: 'A4', pageMargins: [28, 28, 28, 28],
+        content: [
+            {
+                columns: [
+                    { width: '46%', ...box([
+                        company.logo ? { image: company.logo, fit: [90, 40], margin: [0, 0, 0, 4] } : { text: company.nom, fontSize: 11, bold: true },
+                        !company.logo ? null : { text: company.nom, fontSize: 9, bold: true },
+                        { text: company.adresse, fontSize: 6.6 }, { text: company.ville, fontSize: 6.6 },
+                        { text: `N° CNPS : ${company.cnps}`, fontSize: 6.6 }, { text: `N° Contribuable : ${company.contribuable}`, fontSize: 6.6 }
+                    ].filter(Boolean)) },
+                    { width: '2%', text: '' },
+                    { width: '27%', ...box([
+                        { text: 'PÉRIODE DE PAIE', fontSize: 6.6, bold: true, alignment: 'center' },
+                        { text: `Du ${periodeDebut} au ${periodeFin}`, fontSize: 7.5, alignment: 'center', margin: [0, 2, 0, 0] }
+                    ]) },
+                    { width: '2%', text: '' },
+                    { width: '23%', stack: [
+                        box([{ text: 'DATE DE PAIE', fontSize: 6.6, bold: true, alignment: 'center' }, { text: periodeFin, fontSize: 7.5, alignment: 'center', margin: [0, 2, 0, 0] }]),
+                        { text: '', margin: [0, 2] },
+                        box([{ text: 'TYPE DE PAIE', fontSize: 6.6, bold: true, alignment: 'center' }, { text: 'Mensuel', fontSize: 7.5, alignment: 'center', margin: [0, 2, 0, 0] }])
+                    ] }
+                ]
+            },
+            { text: '', margin: [0, 4] },
+            { text: employee.isLeavePayslip ? "BULLETIN D'ALLOCATION CONGÉ" : 'BULLETIN DE PAIE', fontSize: 12, bold: true, alignment: 'center', margin: [0, 0, 0, 4] },
+            box([
+                { columns: [kv('Nom', (employee.nom || '').toUpperCase()), kv('Matricule', employee.matricule), kv('Nb Parts IGR', calc.parts !== undefined ? calc.parts.toFixed(1) : '1,00')] },
+                { columns: [kv('Prénoms', employee.prenom), kv('Emploi', employee.poste), kv('Nationalité', employee.nationalite || 'Ivoirienne')] },
+                { columns: [kv('Équipe', employee.equipe || ''), kv('Sal. Cat.', employee.categorie || ''), kv('N° CNPS', employee.num_secu || employee.numero_cnps || '')] },
+                { columns: [kv('Département', employee.departement || ''), kv('Service', employee.service || employee.departement || ''), kv("Date d'embauche", employee.date_embauche ? formatDate(employee.date_embauche) : '')] },
+                { columns: [kv('Ancienneté', calc.ancienneteTxt), kv('Lieu de paie', company.ville), kv('Date retour congés', '')] }
+            ]),
+            { text: '', margin: [0, 6] },
+            {
+                table: { headerRows: 1, widths: ['6%', '30%', '13%', '9%', '13%', '13%'], body },
+                layout: { hLineWidth: (i, node) => (i === 0 || i === 1 || i === node.table.body.length) ? 1 : 0.4, vLineWidth: () => 0.4, hLineColor: () => '#94a3b8', vLineColor: () => '#94a3b8' }
+            },
+            { text: '', margin: [0, 6] },
+            {
+                columns: [
+                    { width: '46%', ...box([
+                        { text: 'CUMULS ANNUELS', fontSize: 6.8, bold: true, margin: [0, 0, 0, 3] },
+                        // Historique de paie non conservé (voir la même remarque sur
+                        // generatePdfDefinitionGrilleNumerotee) : cumul annuel = cumul du
+                        // mois, exact pour un premier bulletin de l'année.
+                        kv('Cumul Brut imposable', fcfa(calc.brutImposable), { labelWidth: 140 }),
+                        kv('Cumul ITS', fcfa(calc.salarial.its), { labelWidth: 140 }),
+                        kv('Cumul CNPS Employé', fcfa(calc.salarial.cnps), { labelWidth: 140 }),
+                        kv('Brut congé', fcfa(calc.allocationConges || 0), { labelWidth: 140 }),
+                        kv('Brut CNPS', fcfa(calc.baseCNPS), { labelWidth: 140 }),
+                        kv('Jrs congés à prendre', calc.joursCP || 0, { labelWidth: 140 }),
+                        kv('Indemnité de Transport', fcfa(calc.primeTransport || 0), { labelWidth: 140 }),
+                        kv('Jours fiscaux', calc.joursTrav || 0, { labelWidth: 140 }),
+                        kv('Cumul exonéré', fcfa((calc.primeTransport || 0) + (calc.primeLogement || 0)), { labelWidth: 140 }),
+                        kv('Cumul CMU', fcfa(calc.salarial.cmu), { labelWidth: 140 })
+                    ]) },
+                    { width: '4%', text: '' },
+                    { width: '50%', stack: [
+                        box([
+                            { columns: [{ text: 'GAINS', fontSize: 7, bold: true }, { text: fcfa(calc.gainsTotaux) + ' F', fontSize: 7, bold: true, alignment: 'right' }] },
+                            { columns: [{ text: 'RETENUES', fontSize: 7, bold: true }, { text: fcfa(calc.salarial.total) + ' F', fontSize: 7, bold: true, alignment: 'right' }], margin: [0, 2, 0, 0] },
+                            { columns: [{ text: 'CHARGES PATRONALES (info.)', fontSize: 6.3, color: '#6b7280' }, { text: fcfa(totalPatronal) + ' F', fontSize: 6.3, color: '#6b7280', alignment: 'right' }], margin: [0, 2, 0, 0] },
+                            { canvas: [{ type: 'line', x1: 0, y1: 4, x2: 235, y2: 4, lineWidth: 0.5, lineColor: '#94a3b8' }] },
+                            {
+                                margin: [0, 4, 0, 0],
+                                table: { widths: ['*', 'auto'], body: [[{ text: 'NET À PAYER', fontSize: 8.5, bold: true, fillColor: '#FFFF00', margin: [4, 3] }, { text: fcfa(calc.netAPayer) + ' F', fontSize: 8.5, bold: true, alignment: 'right', fillColor: '#FFFF00', margin: [4, 3] }]] },
+                                layout: { hLineWidth: () => 1, vLineWidth: () => 1, hLineColor: () => '#000', vLineColor: () => '#000' }
+                            }
+                        ]),
+                        { text: '', margin: [0, 4] },
+                        { text: 'RÈGLEMENT', fontSize: 6.8, bold: true },
+                        { text: employee.virement ? `Virement bancaire${employee.rib ? ` — compte n° ${employee.rib}` : ''}` : 'Espèces', fontSize: 7, margin: [0, 2, 0, 4] },
+                        !employee.virement && billetage.length ? {
+                            table: { widths: ['34%', '33%', '33%'], body: [[headerCell('Coupure'), headerCell('Qté'), headerCell('Montant')], ...billetage] },
+                            layout: { hLineWidth: () => 0.4, vLineWidth: () => 0.4, hLineColor: () => '#94a3b8', vLineColor: () => '#94a3b8' }
+                        } : null,
+                        !employee.virement && billetage.length ? { text: 'BILLETAGE', fontSize: 6, italics: true, color: '#6b7280', margin: [0, 2, 0, 0] } : null
+                    ].filter(Boolean) }
+                ]
+            },
+            { text: '', margin: [0, 10] },
+            {
+                columns: [
+                    { stack: [{ text: "Visa de l'employeur", fontSize: 7, alignment: 'center', margin: [0, 0, 0, 24] }, { canvas: [{ type: 'line', x1: 40, y1: 0, x2: 200, y2: 0, lineWidth: 0.5 }] }] },
+                    { stack: [{ text: "Visa de l'employé", fontSize: 7, alignment: 'center', margin: [0, 0, 0, 24] }, { canvas: [{ type: 'line', x1: 40, y1: 0, x2: 200, y2: 0, lineWidth: 0.5 }] }] }
+                ]
+            }
+        ],
+        defaultStyle: { font: 'Roboto', fontSize: 8 }
+    };
+}
+
+/**
+ * Neuvième modèle par défaut, réplique fidèle d'un bulletin réel (TCM
+ * LOGISTIC) : en-tête Niveau/Coefficient/Indice/Ancienneté/N° Sécurité
+ * Sociale, Qualification/Horaire/CCN, congés Acquis/Reste à prendre/Pris
+ * détaillés, et — sa particularité — une part patronale scindée en deux
+ * colonnes Retenue(+) / Retenue(-) plutôt qu'une seule colonne Retenue.
+ */
+function generatePdfDefinitionTcmLogistic(employee, calc, companyInfo = {}) {
+    const BORDER = '#000000';
+    // Orange (thème transport/logistique), avec un bandeau franc pour les
+    // sous-totaux — voir la même remarque sur generatePdfDefinitionLavandiere
+    // ci-dessus : un gris presque blanc rend TOTAL BRUT/COTISATIONS
+    // indiscernables des lignes normales.
+    const ORANGE = '#c2410c';
+    const BAND = '#fed7aa';
+    const company = resolveCompanyInfo(employee, companyInfo);
+    const codes = resolveCodesRubrique(companyInfo.rubriqueCodes);
+
+    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+    const annee = parseInt(employee.annee || new Date().getFullYear());
+    const dernierJour = new Date(annee, moisNum, 0).getDate();
+    const periodeDebut = `01/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
+    const periodeFin = `${dernierJour}/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
+
+    const box = (contenu, opts = {}) => ({
+        table: { widths: ['*'], body: [[{ stack: contenu, margin: opts.margin || [6, 5] }]] },
+        layout: { hLineWidth: () => 0.75, vLineWidth: () => 0.75, hLineColor: () => BORDER, vLineColor: () => BORDER }
+    });
+    const kv = (label, value, opts = {}) => ({ columns: [{ text: label, fontSize: 6.6, width: opts.labelWidth || 100 }, { text: (value === undefined || value === null || value === '') ? '' : value.toString(), fontSize: 6.6, bold: true, width: '*' }], margin: [0, 1] });
+
+    const cell = (text, opts = {}) => ({
+        text: (text === null || text === undefined) ? '' : text.toString(),
+        fontSize: opts.fontSize || 6.4, bold: opts.bold || false, alignment: opts.align || 'left',
+        fillColor: opts.fill || null, colSpan: opts.colSpan || null, margin: opts.margin || [2, 1.5, 2, 1.5]
+    });
+    const headerCell = (text, opts = {}) => cell(text, { fill: ORANGE, color: 'white', bold: true, align: 'center', fontSize: 6.2, ...opts });
+    const subHeaderCell = (text, opts = {}) => cell(text, { fill: '#fb923c', color: '#431407', bold: true, align: 'center', fontSize: 6, ...opts });
+
+    // Part patronale scindée Retenue(+)/Retenue(-) : « + » pour une charge
+    // patronale normale, « - » réservé à un éventuel avantage/déduction
+    // (aucune rubrique ONDA actuelle n'en produit, la colonne reste à blanc).
+    const ligne = (numero, label, nombre, base, tauxS, gain, retenuePS, baseP, tauxP, retenuePPlus, retenuePMoins) => [
+        cell(numero || ''), cell(label),
+        cell(nombre !== undefined && nombre !== null ? nombre : '', { align: 'right' }),
+        cell(base !== undefined && base !== null ? fcfa(base) : '', { align: 'right' }),
+        cell(tauxS || '', { align: 'center' }),
+        cell(gain !== undefined && gain !== null ? fcfa(gain) : '', { align: 'right' }),
+        cell(retenuePS !== undefined && retenuePS !== null ? fcfa(retenuePS) : '', { align: 'right' }),
+        cell(tauxP || '', { align: 'center' }),
+        cell(retenuePPlus !== undefined && retenuePPlus !== null ? fcfa(retenuePPlus) : '', { align: 'right' }),
+        cell(retenuePMoins !== undefined && retenuePMoins !== null ? fcfa(retenuePMoins) : '', { align: 'right' })
+    ];
+    const bandRow = (label, gain, retenuePS, retenuePPlus) => [
+        cell('', { fill: BAND }), cell(label, { bold: true, fill: BAND }), cell('', { fill: BAND }), cell('', { fill: BAND }), cell('', { fill: BAND }),
+        cell(gain !== undefined ? fcfa(gain) : '', { align: 'right', bold: true, fill: BAND }),
+        cell(retenuePS !== undefined ? fcfa(retenuePS) : '', { align: 'right', bold: true, fill: BAND }),
+        cell('', { fill: BAND }),
+        cell(retenuePPlus !== undefined ? fcfa(retenuePPlus) : '', { align: 'right', bold: true, fill: BAND }),
+        cell('', { fill: BAND })
+    ];
+
+    const body = [[
+        headerCell('N°'), headerCell('Désignation'), headerCell('Nombre'), headerCell('Base'),
+        headerCell('Taux'), headerCell('Gain'), headerCell('Retenue'),
+        headerCell('Taux'), headerCell('Retenue(+)'), headerCell('Retenue(-)')
+    ], [
+        subHeaderCell(''), subHeaderCell(''), subHeaderCell(''), subHeaderCell(''),
+        subHeaderCell('Part salariale', { colSpan: 3 }), {}, {},
+        subHeaderCell('Part patronale', { colSpan: 3 }), {}, {}
+    ]];
+
+    const joursBase = calc.joursTrav || 30;
+    body.push(ligne(codes.salaireBase, 'Salaire de base', joursBase, (calc.salaireBaseMensuel || 0) / joursBase, undefined, calc.salaireBase));
+    if (calc.sursalaire > 0) body.push(ligne(codes.sursalaire, 'Sursalaire', joursBase, (employee.sursalaire || 0) / joursBase, undefined, calc.sursalaire));
+    if (calc.primeAnciennete > 0) body.push(ligne(codes.primeAnciennete, `Prime d'ancienneté (${calc.ansAnciennete} ans)`, undefined, undefined, undefined, calc.primeAnciennete));
+    (employee.primes || []).forEach(p => { if (p.montant > 0) body.push(ligne(codes.prime, p.libelle || p.label || 'Prime', undefined, undefined, undefined, p.montant)); });
+    if (calc.allocationConges > 0) body.push(ligne(codes.allocationConges, `Allocation congés (${calc.joursCP} j)`, calc.joursCP, undefined, undefined, calc.allocationConges));
+    (calc.heuresSupTranches || []).forEach(t => body.push(ligne(codes.heuresSup, `Heures sup. — ${t.label}`, t.heures, calc.tauxHoraire, `×${t.coef}`, t.montant)));
+    if (calc.primeTransport > 0) body.push(ligne(codes.primeTransport, 'Indemnité de transport', undefined, undefined, undefined, calc.primeTransport));
+    if (calc.primeLogement > 0) {
+        // Avantage en nature en toutes lettres dans les cumuls plus bas : ce
+        // bulletin l'affiche explicitement, contrairement aux autres modèles.
+        body.push(ligne(codes.primeLogement, 'Avantage en nature — Logement', undefined, undefined, undefined, calc.primeLogement));
+    }
+    body.push(bandRow('TOTAL BRUT', calc.gainsTotaux));
+
+    body.push(ligne(codes.its, 'ITS — Impôt sur Traitements et Salaires', undefined, calc.brutImposable, undefined, undefined, calc.salarial.its));
+    body.push(ligne(codes.cnpsSalariale, 'Retenue CNPS — Retraite', undefined, calc.baseCNPS, '6,30', undefined, calc.salarial.cnps));
+    body.push(ligne(codes.cmuSalariale, 'CMU — Assurance maladie', undefined, calc.totalPersonnesCMU * 1000, undefined, undefined, calc.salarial.cmu));
+    if (calc.salarial.ricf > 0) body.push(ligne(codes.ricf, 'dont RICF (réduction charge de famille)', undefined, undefined, undefined, undefined, calc.salarial.ricf));
+    if (calc.salarial.acompte > 0) body.push(ligne(codes.acompte, 'Acompte / avance', undefined, undefined, undefined, undefined, calc.salarial.acompte));
+
+    body.push(ligne(codes.cnpsPatronale, 'Retraite Générale CNPS', undefined, undefined, undefined, undefined, undefined, calc.baseCNPS, '7,70', calc.patronal.cnpsRetraite));
+    body.push(ligne(codes.cnpsPF, 'Prestations Familiales', undefined, undefined, undefined, undefined, undefined, calc.baseCNPS_PfAtAm, '5,00', calc.patronal.cnpsPF));
+    body.push(ligne(codes.cnpsAT, 'Accident du Travail', undefined, undefined, undefined, undefined, undefined, calc.baseCNPS_PfAtAm, `${employee.taux_at || 2},00`, calc.patronal.cnpsAT));
+    body.push(ligne(codes.cmuPatronale, 'CMU — part patronale', undefined, undefined, undefined, undefined, undefined, undefined, undefined, calc.patronal.cmu));
+    body.push(ligne(codes.impotEmployeur, 'T.A.S.P (impôt employeur)', undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '1,20', calc.patronal.impotEmployeur));
+    body.push(ligne(codes.fdfpTA, "Taxe d'Apprentissage", undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '0,40', calc.patronal.fdfpTA));
+    body.push(ligne(codes.fdfpFPC, 'Formation Professionnelle Continue', undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '0,60', calc.patronal.fdfpFPC));
+
+    const totalPatronal = (calc.patronal.cnpsRetraite || 0) + (calc.patronal.cnpsPF || 0) + (calc.patronal.cnpsAT || 0) + (calc.patronal.cmu || 0) + (calc.patronal.impotEmployeur || 0) + (calc.patronal.fdfpTA || 0) + (calc.patronal.fdfpFPC || 0);
+    body.push(bandRow('TOTAL COTISATIONS', undefined, calc.salarial.total, totalPatronal));
+
+    const congesRow = (label, acquis, reste, pris) => [
+        cell(label, { fontSize: 6.4 }), cell(acquis || '', { align: 'center', fontSize: 6.4 }),
+        cell(reste || '', { align: 'center', fontSize: 6.4 }), cell(pris || '', { align: 'center', fontSize: 6.4 })
+    ];
+    const cumulsRow = (label, brut, chargesSal, chargesPat, avantages, net) => [
+        cell(label, { bold: true, fontSize: 6.3 }), cell(fcfa(brut), { align: 'right', fontSize: 6.3 }),
+        cell(fcfa(chargesSal), { align: 'right', fontSize: 6.3 }), cell(fcfa(chargesPat), { align: 'right', fontSize: 6.3 }),
+        cell(fcfa(avantages), { align: 'right', fontSize: 6.3 }), cell(fcfa(net), { align: 'right', bold: true, fontSize: 6.3 })
+    ];
+
+    return {
+        pageSize: 'A4', pageMargins: [26, 28, 26, 28],
+        content: [
+            {
+                columns: [
+                    { width: '55%', ...box([
+                        { text: employee.isLeavePayslip ? "BULLETIN D'ALLOCATION CONGÉ" : 'BULLETIN DE PAIE', fontSize: 10, bold: true },
+                        { text: `Période : Du ${periodeDebut} au ${periodeFin}`, fontSize: 6.6, margin: [0, 2, 0, 0] },
+                        { text: `Paiement le ${periodeFin} — Par : ${employee.virement ? 'VIREMENT' : 'ESPÈCES'}`, fontSize: 6.6 }
+                    ]) },
+                    { width: '2%', text: '' },
+                    { width: '43%', ...box([
+                        company.logo ? { image: company.logo, fit: [90, 32], alignment: 'center' } : { text: company.nom, fontSize: 11, bold: true, alignment: 'center' },
+                        !company.logo ? null : { text: company.nom, fontSize: 8, bold: true, alignment: 'center', margin: [0, 2, 0, 0] },
+                        { text: `${company.adresse}${company.ville ? ' — ' + company.ville : ''}`, fontSize: 6.2, alignment: 'center' }
+                    ].filter(Boolean)) }
+                ]
+            },
+            { text: '', margin: [0, 4] },
+            box([
+                { columns: [kv('Matricule', employee.matricule), kv('Niveau', employee.niveau || employee.categorie || ''), kv('Coefficient', employee.coefficient || ''), kv('Indice', employee.indice || '')] },
+                { columns: [kv('Ancienneté', calc.ancienneteTxt), kv('N° Sécurité Sociale', employee.num_secu || employee.numero_cnps || ''), kv('', ''), kv('', '')] },
+                { columns: [kv('Catégorie', employee.categorie || ''), kv('Emploi occupé', employee.poste || ''), kv('Département', employee.departement || ''), kv('', '')] },
+                { columns: [kv('Qualification', employee.qualification || employee.poste || ''), kv('Horaire', '173,33 h/mois'), kv('CCN', employee.ccn || 'Transport / Logistique'), kv('', '')] }
+            ]),
+            { text: '', margin: [0, 4] },
+            {
+                columns: [
+                    { width: '58%', ...box([
+                        { text: `Nombre de parts : ${calc.parts !== undefined ? calc.parts.toFixed(1) : '1,00'}`, fontSize: 6.8 },
+                        { text: `${(employee.nom || '').toUpperCase()} ${employee.prenom || ''}`, fontSize: 10.5, bold: true, margin: [0, 3, 0, 0] }
+                    ]) },
+                    { width: '2%', text: '' },
+                    { width: '40%', stack: [
+                        {
+                            table: {
+                                widths: ['34%', '22%', '22%', '22%'],
+                                body: [
+                                    [headerCell(''), headerCell('Acquis'), headerCell('Reste'), headerCell('Pris')],
+                                    congesRow('Repos comp.'), congesRow('Congés')
+                                ]
+                            },
+                            layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => BORDER, vLineColor: () => BORDER }
+                        },
+                        { text: 'Dates de congés : —', fontSize: 6.2, margin: [2, 3, 0, 0] },
+                        { text: 'Commentaire :', fontSize: 6.2, margin: [2, 2, 0, 0] }
+                    ] }
+                ]
+            },
+            { text: '', margin: [0, 6] },
+            {
+                table: { headerRows: 2, widths: ['6%', '19%', '6%', '9%', '6%', '9%', '9%', '6%', '9%', '9%'], body },
+                layout: { hLineWidth: (i, node) => (i === 0 || i === 2 || i === node.table.body.length) ? 1 : 0.4, vLineWidth: () => 0.4, hLineColor: () => '#94a3b8', vLineColor: () => '#94a3b8' }
+            },
+            { text: '', margin: [0, 8] },
+            {
+                columns: [
+                    { width: '*', text: '' },
+                    {
+                        width: 170,
+                        table: { widths: ['*'], body: [[{ text: 'NET À PAYER', fontSize: 8, bold: true, alignment: 'center', margin: [0, 2] }], [{ text: fcfa(calc.netAPayer) + ' F', fontSize: 15, bold: true, alignment: 'center', fillColor: '#FFFF00', margin: [0, 3] }]] },
+                        layout: { hLineWidth: () => 1.2, vLineWidth: () => 1.2, hLineColor: () => '#000', vLineColor: () => '#000' }
+                    }
+                ]
+            },
+            { text: '', margin: [0, 8] },
+            { text: 'CUMULS', fontSize: 7.5, bold: true, margin: [0, 0, 0, 3] },
+            {
+                table: {
+                    widths: ['14%', '17%', '17%', '17%', '17%', '18%'],
+                    body: [
+                        [headerCell('Période'), headerCell('Salaire Brut'), headerCell('Charges Sal.'), headerCell('Charges Pat.'), headerCell('Avant. en nature'), headerCell('NET À PAYER')],
+                        cumulsRow('Mois', calc.gainsTotaux, calc.salarial.total, totalPatronal, calc.primeLogement || 0, calc.netAPayer),
+                        cumulsRow(`Année ${annee}`, calc.gainsTotaux, calc.salarial.total, totalPatronal, calc.primeLogement || 0, calc.netAPayer)
+                    ]
+                },
+                layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => BORDER, vLineColor: () => BORDER }
+            },
+            { text: '', margin: [0, 10] },
+            { text: 'VISA', fontSize: 7, bold: true, margin: [0, 0, 0, 24] },
+            { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 200, y2: 0, lineWidth: 0.5 }] }
+        ],
+        defaultStyle: { font: 'Roboto', fontSize: 8 }
+    };
+}
+
+/**
+ * Dixième modèle par défaut, réplique fidèle d'un bulletin réel (SCASO) :
+ * bandeau « PÉRIODE DE PAIE » pleine largeur, bloc DIRECTION/VILLE/FONCTION/
+ * DATE DE NAISSANCE/DATE D'ENTRÉE, colonne NBRE/TAUX fusionnée, et pied
+ * « CACHET ET SIGNATURE » (grand encart vide) à côté du résumé GAINS/
+ * RETENUES/NET À PAYER — sans doubles colonnes P.S/P.P, contrairement aux
+ * modèles précédents.
+ *
+ * Contrairement aux autres modèles ONDA, celui-ci reste volontairement en
+ * noir et blanc (traits fins, aucun bandeau coloré) : c'est la mise en page
+ * réelle du bulletin d'origine, sobre, avec un simple filigrane du nom de
+ * l'entreprise en fond de page — pas un choix de « pas assez de couleur »
+ * comme sur les modèles précédents, juste fidèle à la source.
+ */
+function generatePdfDefinitionScaso(employee, calc, companyInfo = {}) {
+    const BORDER = '#000000';
+    const company = resolveCompanyInfo(employee, companyInfo);
+    const codes = resolveCodesRubrique(companyInfo.rubriqueCodes);
+
+    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+    const annee = parseInt(employee.annee || new Date().getFullYear());
+    const dernierJour = new Date(annee, moisNum, 0).getDate();
+    const periodeDebut = `01/${String(moisNum).padStart(2, '0')}/${annee}`;
+    const periodeFin = `${dernierJour}/${String(moisNum).padStart(2, '0')}/${annee}`;
+    const MOIS_NOMS = ['', 'JANVIER', 'FÉVRIER', 'MARS', 'AVRIL', 'MAI', 'JUIN', 'JUILLET', 'AOÛT', 'SEPTEMBRE', 'OCTOBRE', 'NOVEMBRE', 'DÉCEMBRE'];
+    const dateEntree = (() => {
+        if (!employee.date_embauche) return '';
+        const d = new Date(employee.date_embauche);
+        if (isNaN(d.getTime())) return formatDate(employee.date_embauche);
+        return `${MOIS_NOMS[d.getMonth() + 1]} ${d.getFullYear()}`;
+    })();
+
+    const box = (contenu, opts = {}) => ({
+        table: { widths: ['*'], body: [[{ stack: contenu, margin: opts.margin || [6, 5] }]] },
+        layout: { hLineWidth: () => 0.75, vLineWidth: () => 0.75, hLineColor: () => BORDER, vLineColor: () => BORDER }
+    });
+    const kv = (label, value, opts = {}) => ({ columns: [{ text: label, fontSize: 6.8, bold: true, width: opts.labelWidth || 95 }, { text: (value === undefined || value === null || value === '') ? '' : value.toString(), fontSize: 6.8, width: '*' }], margin: [0, 1.5] });
+
+    const cell = (text, opts = {}) => ({
+        text: (text === null || text === undefined) ? '' : text.toString(),
+        fontSize: opts.fontSize || 6.8, bold: opts.bold || false, alignment: opts.align || 'left',
+        margin: opts.margin || [2, 2, 2, 2]
+    });
+    const headerCell = (text) => cell(text, { bold: true, align: 'center', fontSize: 7 });
+
+    const ligne = (code, label, base, nbreTaux, gain, retenue) => [
+        cell(code || ''), cell(label),
+        cell(base !== undefined && base !== null ? fcfa(base) : '', { align: 'right' }),
+        cell(nbreTaux || '', { align: 'center' }),
+        cell(gain !== undefined && gain !== null ? fcfa(gain) : '', { align: 'right' }),
+        cell(retenue !== undefined && retenue !== null ? fcfa(retenue) : '', { align: 'right' })
+    ];
+    // Bandeau de sous-total sobre (gras + trait, pas de fond coloré) : fidèle
+    // à l'original, qui insère « Total Brut » / « Total Retenues — Salaire
+    // Net » comme de simples lignes en gras dans le même tableau.
+    const bandRow = (labelGains, labelRetenues, gain, retenue) => [
+        cell(''), cell(''), cell(''), cell(labelRetenues || '', { bold: true }),
+        cell(gain !== undefined ? fcfa(gain) : '', { align: 'right', bold: true }),
+        cell(retenue !== undefined ? fcfa(retenue) : '', { align: 'right', bold: true })
+    ];
+    void bandRow;
+
+    const body = [[headerCell('CODE'), headerCell('RUBRIQUE'), headerCell('BASE'), headerCell('NBRE/TAUX'), headerCell('GAINS'), headerCell('RETENUES')]];
+    body.push(ligne(codes.salaireBase, 'Salaire de base', calc.salaireBaseMensuel, (calc.joursTrav || 30).toFixed(2), calc.salaireBase));
+    if (calc.sursalaire > 0) body.push(ligne(codes.sursalaire, 'Sursalaire', employee.sursalaire, '100%', calc.sursalaire));
+    if (calc.primeAnciennete > 0) body.push(ligne(codes.primeAnciennete, "Prime d'ancienneté", null, `${calc.ansAnciennete},00`, calc.primeAnciennete));
+    (employee.primes || []).forEach(p => { if (p.montant > 0) body.push(ligne(codes.prime, p.libelle || p.label || "Prime d'incitation", null, null, p.montant)); });
+    if (calc.allocationConges > 0) body.push(ligne(codes.allocationConges, `Allocation congés (${calc.joursCP} j)`, null, null, calc.allocationConges));
+    (calc.heuresSupTranches || []).forEach(t => body.push(ligne(codes.heuresSup, `Heures sup. — ${t.label}`, calc.tauxHoraire, `×${t.coef}`, t.montant)));
+    if (calc.primeTransport > 0) body.push(ligne(codes.primeTransport, 'Indemnité Transport non Imposable', null, `${(calc.joursTrav || 30).toFixed(2)}`, calc.primeTransport));
+    if (calc.primeLogement > 0) body.push(ligne(codes.primeLogement, 'Prime de logement', null, null, calc.primeLogement));
+    body.push([cell(''), cell('Total Brut', { bold: true }), cell(''), cell(''), cell(fcfa(calc.gainsTotaux), { align: 'right', bold: true }), cell('')]);
+
+    body.push(ligne(codes.its, 'Impôt sur Traitements et Salaires (ITS)', calc.brutImposable, null, null, calc.salarial.its));
+    body.push(ligne(codes.cnpsSalariale, 'CNPS Régime général', calc.baseCNPS, '6,30', null, calc.salarial.cnps));
+    body.push(ligne(codes.cmuSalariale, 'CMU — Assurance maladie', calc.totalPersonnesCMU * 1000, null, null, calc.salarial.cmu));
+    if (calc.salarial.ricf > 0) body.push(ligne(codes.ricf, 'dont RICF (réduction charge de famille)', null, null, null, calc.salarial.ricf));
+    if (calc.salarial.acompte > 0) body.push(ligne(codes.acompte, 'Acompte / avance', null, null, null, calc.salarial.acompte));
+    body.push([cell(''), cell('Total Retenues — Salaire Net', { bold: true }), cell(''), cell(''), cell(fcfa(calc.netAPayer), { align: 'right', bold: true }), cell(fcfa(calc.salarial.total), { align: 'right', bold: true })]);
+
+    return {
+        pageSize: 'A4', pageMargins: [30, 28, 30, 28],
+        // Filigrane discret du nom de l'entreprise, comme le logo circulaire en
+        // fond de page du bulletin d'origine.
+        background: (currentPage, pageSize) => ({
+            text: company.nom, fontSize: 74, color: '#f1f5f9', bold: true,
+            alignment: 'center', angle: 30,
+            absolutePosition: { x: 0, y: pageSize.height / 2 - 60 }, width: pageSize.width
+        }),
+        content: [
+            {
+                columns: [
+                    { width: '55%', ...box([
+                        company.logo ? { image: company.logo, fit: [80, 36], margin: [0, 0, 0, 4] } : null,
+                        { text: company.nom, fontSize: 11, bold: true },
+                        { text: company.adresse, fontSize: 7 },
+                        { text: company.ville, fontSize: 7 }
+                    ].filter(Boolean)) },
+                    { width: '2%', text: '' },
+                    { width: '43%', ...box([{ text: employee.isLeavePayslip ? "BULLETIN D'ALLOCATION CONGÉ" : 'BULLETIN DE PAIE', fontSize: 11.5, bold: true, alignment: 'center', margin: [0, 8] }]) }
+                ]
+            },
+            {
+                table: { widths: ['*'], body: [[{ text: `PÉRIODE DE PAIE DU ${periodeDebut} AU ${periodeFin}`, fontSize: 7.5, alignment: 'center', margin: [0, 4] }]] },
+                layout: { hLineWidth: () => 0.75, vLineWidth: () => 0.75, hLineColor: () => BORDER, vLineColor: () => BORDER }
+            },
+            { text: '', margin: [0, 4] },
+            {
+                columns: [
+                    { width: '55%', ...box([
+                        kv('DIRECTION', employee.departement || ''),
+                        kv('VILLE', company.ville),
+                        kv('FONCTION', employee.poste || ''),
+                        kv('DATE DE NAISS.', employee.date_naissance ? formatDate(employee.date_naissance) : ''),
+                        kv('DATE ENTREE', dateEntree)
+                    ]) },
+                    { width: '2%', text: '' },
+                    { width: '43%', ...box([
+                        { text: 'NOM ET ADRESSE DU SALARIÉ', fontSize: 6.6, bold: true, alignment: 'center' },
+                        { text: `${(employee.nom || '').toUpperCase()} ${employee.prenom || ''}`, fontSize: 10, bold: true, alignment: 'center', margin: [0, 10, 0, 0] }
+                    ], { margin: [6, 14] }) }
+                ]
+            },
+            { text: '', margin: [0, 6] },
+            {
+                table: { headerRows: 1, widths: ['7%', '33%', '13%', '12%', '17%', '18%'], body },
+                layout: { hLineWidth: (i, node) => (i === 0 || i === 1 || i === node.table.body.length) ? 1 : 0.4, vLineWidth: () => 0.4, hLineColor: () => '#94a3b8', vLineColor: () => '#94a3b8' }
+            },
+            { text: '', margin: [0, 10] },
+            {
+                columns: [
+                    {
+                        width: '58%',
+                        table: { widths: ['*'], body: [[{ text: 'CACHET ET SIGNATURE', fontSize: 7, bold: true, alignment: 'center', margin: [0, 4] }], [{ text: '', margin: [0, 30] }]] },
+                        layout: { hLineWidth: () => 0.75, vLineWidth: () => 0.75, hLineColor: () => BORDER, vLineColor: () => BORDER }
+                    },
+                    { width: '2%', text: '' },
+                    {
+                        width: '40%',
+                        table: {
+                            widths: ['*', 'auto'],
+                            body: [
+                                [cell('GAINS', { bold: true }), cell(fcfa(calc.gainsTotaux) + 'F', { align: 'right', bold: true })],
+                                [cell('RETENUES', { bold: true }), cell(fcfa(calc.salarial.total) + 'F', { align: 'right', bold: true })],
+                                [cell('NET A PAYER', { bold: true, fontSize: 8 }), cell(fcfa(calc.netAPayer) + 'F', { align: 'right', bold: true, fontSize: 8 })]
+                            ]
+                        },
+                        layout: { hLineWidth: () => 0.75, vLineWidth: () => 0.75, hLineColor: () => BORDER, vLineColor: () => BORDER, paddingLeft: () => 5, paddingRight: () => 5, paddingTop: () => 3, paddingBottom: () => 3 }
+                    }
+                ]
+            }
+        ],
+        defaultStyle: { font: 'Roboto', fontSize: 8 }
+    };
+}
+
+/**
+ * Onzième modèle, seul modèle « paramétrable » : même structure sobre que
+ * generatePdfDefinition (Classique), mais la couleur d'accent (bandeaux
+ * d'en-tête, sous-totaux) est celle choisie par le compte dans Paramètres
+ * (companyInfo.bulletinCouleur) plutôt qu'une couleur figée dans le code —
+ * un calque de couleur sur un gabarit neutre, pas un bulletin de plus.
+ * Sans couleur enregistrée, retombe sur un bleu par défaut.
+ */
+function generatePdfDefinitionPersonnalise(employee, calc, companyInfo = {}) {
+    const ACCENT = /^#[0-9a-fA-F]{6}$/.test(companyInfo.bulletinCouleur || '') ? companyInfo.bulletinCouleur : '#1e3a8a';
+    // Teintes dérivées de l'accent pour les bandeaux clairs (sous-totaux) et
+    // moyens (sous-groupes), en gardant le même calcul que les couleurs fixes
+    // choisies pour les autres modèles (bandeau clair mais net, pas un gris
+    // presque blanc).
+    const hexToRgb = (hex) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+    const [r, g, b] = hexToRgb(ACCENT);
+    const mix = (v, ratio) => Math.round(v + (255 - v) * ratio);
+    const teinte = (ratio) => `#${[r, g, b].map(v => mix(v, ratio).toString(16).padStart(2, '0')).join('')}`;
+    const BAND = teinte(0.82);
+    const SUBHEADER = teinte(0.35);
+
+    const company = resolveCompanyInfo(employee, companyInfo);
+    const { gains, retenues, patronal } = construireRubriques(employee, calc, companyInfo.rubriqueCodes);
+    const totalPatronal = patronal.reduce((s, r) => s + (r.montant || 0), 0);
+
+    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+    const annee = parseInt(employee.annee || new Date().getFullYear());
+    const periode = `${['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'][moisNum] || ''} ${annee}`;
+
+    const cell = (text, opts = {}) => ({
+        text: (text === null || text === undefined) ? '' : text.toString(),
+        fontSize: opts.fontSize || 6.8, bold: opts.bold || false, alignment: opts.align || 'left',
+        fillColor: opts.fill || null, color: opts.color || 'black', colSpan: opts.colSpan || null,
+        margin: opts.margin || [2, 2, 2, 2]
+    });
+    const headerCell = (text, opts = {}) => cell(text, { fill: ACCENT, color: 'white', bold: true, align: 'center', fontSize: 6.8, ...opts });
+    const infoRow = (label, value) => [
+        { text: label, fontSize: 7, color: '#475569', margin: [0, 1.5, 0, 1.5] },
+        { text: (value || '').toString(), fontSize: 7, bold: true, margin: [0, 1.5, 0, 1.5] }
+    ];
+
+    const body = [[headerCell('N°'), headerCell('Désignation'), headerCell('Base'), headerCell('Taux'), headerCell('Gains'), headerCell('Retenues')]];
+    const ligneGain = (r) => [cell(r.code || ''), cell(r.label), cell(r.base !== undefined && r.base !== null ? fcfa(r.base) : '', { align: 'right' }), cell(r.taux || '', { align: 'center' }), cell(fcfa(r.montant), { align: 'right' }), cell('')];
+    const ligneRetenue = (r) => [cell(r.code || ''), cell(r.label + (r.info ? ' (info.)' : '')), cell(r.base !== undefined && r.base !== null ? fcfa(r.base) : '', { align: 'right' }), cell(r.taux || '', { align: 'center' }), cell(''), cell(r.info ? '' : fcfa(r.montant), { align: 'right' })];
+    gains.forEach(r => body.push(ligneGain(r)));
+    body.push([cell('', { fill: BAND }), cell('TOTAL BRUT', { bold: true, fill: BAND }), cell('', { fill: BAND }), cell('', { fill: BAND }), cell(fcfa(calc.gainsTotaux), { align: 'right', bold: true, fill: BAND }), cell('', { fill: BAND })]);
+    retenues.forEach(r => body.push(ligneRetenue(r)));
+    body.push([cell('', { fill: BAND }), cell('TOTAL RETENUES', { bold: true, fill: BAND }), cell('', { fill: BAND }), cell('', { fill: BAND }), cell('', { fill: BAND }), cell(fcfa(calc.salarial.total), { align: 'right', bold: true, fill: BAND })]);
+
+    return {
+        pageSize: 'A4', pageMargins: [30, 30, 30, 30],
+        content: [
+            {
+                table: { widths: ['*'], body: [[{
+                    columns: [
+                        company.logo ? { image: company.logo, fit: [42, 28], width: 52 } : { width: 52, text: '' },
+                        { width: '*', stack: [{ text: company.nom, fontSize: 11, bold: true, color: 'white' }, { text: [company.adresse, company.ville].filter(Boolean).join(', '), fontSize: 6.8, color: 'white' }] },
+                        { width: 150, stack: [{ text: employee.isLeavePayslip ? "BULLETIN D'ALLOCATION CONGÉ" : 'BULLETIN DE PAIE', fontSize: 10, bold: true, alignment: 'right', color: 'white' }, { text: periode, fontSize: 7.5, alignment: 'right', color: 'white' }] }
+                    ],
+                    margin: [12, 10]
+                }]] },
+                layout: { hLineWidth: () => 0, vLineWidth: () => 0, fillColor: ACCENT }
+            },
+            { text: '', margin: [0, 8] },
+            {
+                columns: [
+                    { width: '50%', table: { widths: ['40%', '60%'], body: [infoRow('Nom', (employee.nom || '').toUpperCase()), infoRow('Prénoms', employee.prenom), infoRow('Emploi', employee.poste), infoRow('Matricule', employee.matricule)] }, layout: 'noBorders' },
+                    { width: '50%', table: { widths: ['46%', '54%'], body: [infoRow('N° CNPS', employee.num_secu || employee.numero_cnps), infoRow('Catégorie', employee.categorie), infoRow('Ancienneté', calc.ancienneteTxt), infoRow('Nombre de parts', calc.parts !== undefined ? calc.parts.toFixed(1) : '1.0')] }, layout: 'noBorders' }
+                ],
+                columnGap: 16
+            },
+            { text: '', margin: [0, 8] },
+            {
+                table: { headerRows: 1, widths: ['6%', '32%', '13%', '9%', '20%', '20%'], body },
+                layout: { hLineWidth: (i, node) => (i === 0 || i === 1 || i === node.table.body.length) ? 1 : 0.4, vLineWidth: () => 0.4, hLineColor: () => '#cbd5e1', vLineColor: () => '#cbd5e1' }
+            },
+            { text: '', margin: [0, 8] },
+            { text: `Charges patronales (info.) : ${fcfa(totalPatronal)} F`, fontSize: 6.5, color: '#6b7280' },
+            { text: '', margin: [0, 6] },
+            {
+                table: { widths: ['*', 170], body: [[
+                    { stack: [{ text: 'MODE DE RÈGLEMENT', fontSize: 6.8, bold: true, color: ACCENT }, { text: employee.virement ? `Virement bancaire${employee.rib ? ` — ${employee.rib}` : ''}` : 'Espèces', fontSize: 7.5, margin: [0, 3, 0, 0] }], margin: [12, 10] },
+                    { stack: [{ text: 'NET À PAYER', fontSize: 7.5, bold: true, alignment: 'center', color: 'white' }, { text: fcfa(calc.netAPayer) + ' F', fontSize: 15, bold: true, alignment: 'center', color: 'white', margin: [0, 3, 0, 0] }], fillColor: ACCENT, margin: [10, 8] }
+                ]] },
+                layout: { hLineWidth: () => 0.75, vLineWidth: () => 0, hLineColor: () => '#cbd5e1' }
+            },
+            { text: '', margin: [0, 14] },
+            { columns: [{ text: "Cachet & signature de l'employeur", fontSize: 6.5, alignment: 'center', color: '#6b7280' }, { text: 'Signature du salarié', fontSize: 6.5, alignment: 'center', color: '#6b7280' }] }
+        ],
+        defaultStyle: { font: 'Roboto', fontSize: 8 }
+    };
+}
+
+// ─── Modèle « Sur-mesure » : éditeur visuel type Canva ─────────────────────
+// Au lieu d'une mise en page figée dans le code (comme les 10 modèles
+// ci-dessus), celui-ci lit un tableau de blocs positionnés librement
+// (bulletinCanvasLayout, JSON sur le compte) et les imprime chacun à ses
+// coordonnées exactes via `absolutePosition` de pdfmake. C'est le même
+// système de coordonnées (points PDF, 1pt = 1/72") que l'éditeur affiche à
+// l'écran : ce qui est glissé-déposé dans Paramètres est ce qui s'imprime,
+// au point près — pas une conversion susceptible de diverger.
+const CANVAS_PAGE = { width: 595.28, height: 841.89 }; // A4 portrait, en points
+
+// Catalogue des champs qu'un bloc texte peut afficher — sert à la fois de
+// résolveur ici et de source pour le menu déroulant de l'éditeur (exporté
+// plus bas), pour ne jamais avoir deux listes de champs à tenir à jour.
+exports.CANVAS_CHAMPS_DISPONIBLES = [
+    { cle: 'company.nom', libelle: "Nom de l'entreprise", groupe: 'Entreprise' },
+    { cle: 'company.adresse', libelle: 'Adresse', groupe: 'Entreprise' },
+    { cle: 'company.ville', libelle: 'Ville', groupe: 'Entreprise' },
+    { cle: 'company.cnps', libelle: 'N° CNPS employeur', groupe: 'Entreprise' },
+    { cle: 'company.contribuable', libelle: 'N° contribuable', groupe: 'Entreprise' },
+    { cle: 'company.telephone', libelle: 'Téléphone', groupe: 'Entreprise' },
+    { cle: 'company.email', libelle: 'E-mail', groupe: 'Entreprise' },
+    { cle: 'titre.bulletin', libelle: 'Titre (« Bulletin de paie »)', groupe: 'Bulletin' },
+    { cle: 'periode.texte', libelle: 'Période (« Août 2026 »)', groupe: 'Bulletin' },
+    { cle: 'employee.nomComplet', libelle: 'Nom complet du salarié', groupe: 'Salarié' },
+    { cle: 'employee.matricule', libelle: 'Matricule', groupe: 'Salarié' },
+    { cle: 'employee.poste', libelle: 'Emploi', groupe: 'Salarié' },
+    { cle: 'employee.categorie', libelle: 'Catégorie', groupe: 'Salarié' },
+    { cle: 'employee.cnps', libelle: 'N° CNPS salarié', groupe: 'Salarié' },
+    { cle: 'employee.dateEmbauche', libelle: "Date d'embauche", groupe: 'Salarié' },
+    { cle: 'employee.anciennete', libelle: 'Ancienneté', groupe: 'Salarié' },
+    { cle: 'employee.parts', libelle: 'Nombre de parts IGR', groupe: 'Salarié' },
+    { cle: 'totaux.brut', libelle: 'Total brut', groupe: 'Totaux' },
+    { cle: 'totaux.retenues', libelle: 'Total retenues salariales', groupe: 'Totaux' },
+    { cle: 'totaux.chargesPatronales', libelle: 'Total charges patronales', groupe: 'Totaux' },
+    { cle: 'totaux.netAPayer', libelle: 'Net à payer', groupe: 'Totaux' }
+];
+
+function resoudreChampCanvas(champ, ctx) {
+    const { employee, calc, company, periode } = ctx;
+    switch (champ) {
+        case 'company.nom': return company.nom;
+        case 'company.adresse': return company.adresse;
+        case 'company.ville': return company.ville;
+        case 'company.cnps': return company.cnps;
+        case 'company.contribuable': return company.contribuable;
+        case 'company.telephone': return company.telephone;
+        case 'company.email': return company.email;
+        case 'titre.bulletin': return employee.isLeavePayslip ? "BULLETIN D'ALLOCATION CONGÉ" : 'BULLETIN DE PAIE';
+        case 'periode.texte': return periode;
+        case 'employee.nomComplet': return `${(employee.nom || '').toUpperCase()} ${employee.prenom || ''}`.trim();
+        case 'employee.matricule': return employee.matricule || '';
+        case 'employee.poste': return employee.poste || '';
+        case 'employee.categorie': return employee.categorie || '';
+        case 'employee.cnps': return employee.num_secu || employee.numero_cnps || '';
+        case 'employee.dateEmbauche': return employee.date_embauche ? formatDate(employee.date_embauche) : '';
+        case 'employee.anciennete': return calc.ancienneteTxt || '';
+        case 'employee.parts': return calc.parts !== undefined ? calc.parts.toFixed(1) : '1.0';
+        case 'totaux.brut': return fcfa(calc.gainsTotaux) + ' F';
+        case 'totaux.retenues': return fcfa(calc.salarial.total) + ' F';
+        case 'totaux.chargesPatronales': return fcfa(ctx.totalPatronal) + ' F';
+        case 'totaux.netAPayer': return fcfa(calc.netAPayer) + ' F';
+        default: return '';
+    }
+}
+
+// Disposition par défaut proposée à l'ouverture de l'éditeur (et utilisée
+// telle quelle si le compte n'a encore rien personnalisé) — une mise en page
+// simple et complète, pas un canevas vide, pour qu'il y ait toujours quelque
+// chose à ajuster plutôt qu'à construire de zéro.
+const CANVAS_LAYOUT_DEFAUT = [
+    { id: 'logo', type: 'logo', x: 30, y: 30, w: 90, h: 48 },
+    { id: 'nom-entreprise', type: 'text', x: 132, y: 30, w: 250, h: 16, champ: 'company.nom', fontSize: 12, bold: true, color: '#0f172a' },
+    { id: 'adresse-entreprise', type: 'text', x: 132, y: 48, w: 250, h: 12, champ: 'company.adresse', fontSize: 7.5, color: '#475569' },
+    { id: 'ville-entreprise', type: 'text', x: 132, y: 60, w: 250, h: 12, champ: 'company.ville', fontSize: 7.5, color: '#475569' },
+    { id: 'titre', type: 'text', x: 395, y: 30, w: 170, h: 20, champ: 'titre.bulletin', fontSize: 13, bold: true, color: '#1e3a8a', align: 'right' },
+    { id: 'periode', type: 'text', x: 395, y: 52, w: 170, h: 12, champ: 'periode.texte', fontSize: 8, color: '#475569', align: 'right' },
+    { id: 'nom-salarie', type: 'text', x: 30, y: 100, w: 260, h: 14, champ: 'employee.nomComplet', fontSize: 10, bold: true },
+    { id: 'poste-salarie', type: 'text', x: 30, y: 116, w: 260, h: 12, champ: 'employee.poste', fontSize: 7.5, color: '#475569' },
+    { id: 'matricule-salarie', type: 'text', x: 300, y: 100, w: 130, h: 12, champ: 'employee.matricule', fontSize: 7.5, color: '#475569' },
+    { id: 'cnps-salarie', type: 'text', x: 300, y: 116, w: 265, h: 12, champ: 'employee.cnps', fontSize: 7.5, color: '#475569' },
+    { id: 'table', type: 'table', x: 30, y: 150, w: 535, h: 380, headerColor: '#1e3a8a', showPatronal: false, fontSize: 7.5 },
+    { id: 'net-a-payer', type: 'netBox', x: 395, y: 545, w: 170, h: 50, backgroundColor: '#1e3a8a', textColor: '#ffffff', fontSize: 15 },
+    { id: 'ligne-visa-employeur', type: 'line', x: 30, y: 660, w: 200, h: 1, color: '#000000' },
+    { id: 'texte-visa-employeur', type: 'text', x: 30, y: 664, w: 200, h: 12, texte: "Cachet & signature de l'employeur", fontSize: 6.5, align: 'center', color: '#6b7280' },
+    { id: 'ligne-visa-salarie', type: 'line', x: 365, y: 660, w: 200, h: 1, color: '#000000' },
+    { id: 'texte-visa-salarie', type: 'text', x: 365, y: 664, w: 200, h: 12, texte: 'Signature du salarié', fontSize: 6.5, align: 'center', color: '#6b7280' }
+];
+exports.CANVAS_LAYOUT_DEFAUT = CANVAS_LAYOUT_DEFAUT;
+exports.CANVAS_PAGE = CANVAS_PAGE;
+
+function generatePdfDefinitionSurMesure(employee, calc, companyInfo = {}) {
+    const company = resolveCompanyInfo(employee, companyInfo);
+    const codes = resolveCodesRubrique(companyInfo.rubriqueCodes);
+    const { gains, retenues, patronal } = construireRubriques(employee, calc, companyInfo.rubriqueCodes);
+    const totalPatronal = patronal.reduce((s, r) => s + (r.montant || 0), 0);
+
+    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+    const annee = parseInt(employee.annee || new Date().getFullYear());
+    const periode = `${['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'][moisNum] || ''} ${annee}`;
+
+    const ctx = { employee, calc, company, periode, totalPatronal };
+    const layoutBrut = Array.isArray(companyInfo.bulletinCanvasLayout) && companyInfo.bulletinCanvasLayout.length
+        ? companyInfo.bulletinCanvasLayout
+        : CANVAS_LAYOUT_DEFAUT;
+
+    // Le nombre de lignes du tableau des rubriques dépend du salarié réel
+    // (heures sup, primes libres, RICF...), pas seulement du style — une
+    // disposition conçue (à la main ou par l'IA) pour un salarié « simple »
+    // sous-estime souvent la hauteur réelle du tableau pour un salarié avec
+    // plus de rubriques, et les blocs placés dessous (encart Net à payer,
+    // signature...) chevauchaient alors le bas du tableau. On calcule donc la
+    // hauteur RÉELLE ici et on repousse vers le bas tout bloc positionné à ou
+    // sous le bas déclaré du tableau, de la différence — jamais de chevauchement,
+    // quel que soit ce que la disposition enregistrée avait prévu.
+    const hauteurReelleTable = (bloc) => {
+        const fsTable = bloc.fontSize || 7;
+        const ROW_H = Math.max(13, fsTable * 2.3), HEADER_H = Math.max(17, fsTable * 2.6);
+        let nbLignes = gains.length + 1 /* total brut */ + retenues.length + 1 /* total retenues */;
+        if (bloc.showPatronal) nbLignes += patronal.length;
+        return HEADER_H + nbLignes * ROW_H;
+    };
+    const blocTable = layoutBrut.find(b => b.type === 'table' && b.visible !== false);
+    let layout = layoutBrut;
+    if (blocTable) {
+        const hauteurReelle = hauteurReelleTable(blocTable);
+        const hauteurDeclaree = blocTable.h || 0;
+        if (hauteurReelle > hauteurDeclaree) {
+            const decalage = hauteurReelle - hauteurDeclaree;
+            const seuil = blocTable.y + hauteurDeclaree;
+            layout = layoutBrut.map(b => (b.id !== blocTable.id && b.type !== 'watermark' && (b.y || 0) >= seuil - 1)
+                ? { ...b, y: b.y + decalage }
+                : b);
+        }
+    }
+
+    // Rendu du tableau des rubriques en lignes `columns` empilées, chacune sa
+    // propre `absolutePosition`, PAS en un unique `table` multi-colonnes.
+    //
+    // Raison, vérifiée empiriquement (pas une supposition) : dans pdfmake, une
+    // cellule `alignment: 'right'` à l'intérieur d'un `table` dont la largeur
+    // déclarée est INFÉRIEURE à la largeur de page calcule sa position par
+    // rapport à la largeur de page entière, pas par rapport à sa propre
+    // colonne — les montants débordaient donc hors du bloc, jusqu'au bord de
+    // la page, dès que le tableau ne faisait pas toute la largeur (exactement
+    // le cas ici, où l'utilisateur choisit lui-même la largeur du bloc). Avec
+    // `columns` (chaque colonne portant sa propre `width` déclarée), le même
+    // alignement se calcule correctement — confirmé par un test isolé avant
+    // d'écrire ce code, pas une intuition non vérifiée.
+    const blocATableauPdf = (bloc) => {
+        const showPatronal = !!bloc.showPatronal;
+        const fs = bloc.fontSize || 7;
+        const headerColor = bloc.headerColor || '#1e3a8a';
+        const partsPct = showPatronal ? [6, 28, 11, 9, 12, 12, 9, 13] : [7, 38, 15, 10, 15, 15];
+        const colWidths = partsPct.map(p => (p / 100) * bloc.w);
+        const entetes = showPatronal
+            ? ['N°', 'Désignation', 'Base', 'Taux', 'Gains', 'Retenues', 'Taux P.', 'Charges P.']
+            : ['N°', 'Désignation', 'Base', 'Taux', 'Gains', 'Retenues'];
+        const aligns = showPatronal
+            ? ['left', 'left', 'right', 'center', 'right', 'right', 'center', 'right']
+            : ['left', 'left', 'right', 'center', 'right', 'right'];
+
+        const ligneColonnes = (valeurs, opts = {}) => valeurs.map((v, i) => ({
+            width: colWidths[i], text: v === null || v === undefined ? '' : v.toString(),
+            fontSize: opts.fontSize || fs, bold: !!opts.bold, alignment: aligns[i], color: opts.color || '#000000'
+        }));
+
+        // Hauteur de ligne proportionnelle à la taille de police choisie : un
+        // intitulé long (ex. « Impôt sur les Traitements et Salaires (ITS) »)
+        // dans une colonne Désignation étroite passe sur 2 lignes — à hauteur
+        // fixe, la 2e ligne chevauchait le texte de la ligne suivante dès que
+        // fontSize dépassait ~8. Avec de la marge (×2.3), une ligne repliée sur
+        // 2 tient sans empiéter sur la ligne d'après.
+        const ROW_H = Math.max(13, fs * 2.3), HEADER_H = Math.max(17, fs * 2.6);
+        let y = bloc.y;
+        const items = [];
+        const fondDeRangee = (hauteur, couleur) => items.push({ canvas: [{ type: 'rect', x: 0, y: 0, w: bloc.w, h: hauteur, color: couleur }], absolutePosition: { x: bloc.x, y } });
+        const traitBas = (hauteur) => items.push({ canvas: [{ type: 'line', x1: 0, y1: hauteur, x2: bloc.w, y2: hauteur, lineWidth: 0.5, lineColor: '#cbd5e1' }], absolutePosition: { x: bloc.x, y } });
+        const rangee = (valeurs, opts = {}) => items.push({ columns: ligneColonnes(valeurs, opts), absolutePosition: { x: bloc.x, y: y + 3 }, columnGap: 0 });
+
+        fondDeRangee(HEADER_H, headerColor);
+        rangee(entetes, { bold: true, color: 'white' });
+        y += HEADER_H;
+
+        const ligneMontant = (r, colGains, colRetenues) => {
+            const valeurs = new Array(entetes.length).fill('');
+            valeurs[0] = r.code || ''; valeurs[1] = r.label + (r.info ? ' (info.)' : '');
+            valeurs[2] = r.base !== undefined && r.base !== null ? fcfa(r.base) : '';
+            valeurs[3] = r.taux || '';
+            if (colGains !== undefined) valeurs[4] = fcfa(r.montant);
+            if (colRetenues !== undefined && !r.info) valeurs[5] = fcfa(r.montant);
+            rangee(valeurs);
+            traitBas(ROW_H);
+            y += ROW_H;
+        };
+        gains.forEach(r => ligneMontant(r, true));
+
+        fondDeRangee(ROW_H, '#e2e8f0');
+        const totalBrut = new Array(entetes.length).fill('');
+        totalBrut[1] = 'TOTAL BRUT'; totalBrut[4] = fcfa(calc.gainsTotaux);
+        rangee(totalBrut, { bold: true });
+        y += ROW_H;
+
+        retenues.forEach(r => ligneMontant(r, undefined, true));
+
+        if (showPatronal) {
+            patronal.forEach(r => {
+                const valeurs = ['', '', '', '', '', '', '', ''];
+                valeurs[0] = r.code || ''; valeurs[1] = r.label; valeurs[6] = r.taux || ''; valeurs[7] = fcfa(r.montant);
+                rangee(valeurs); traitBas(ROW_H); y += ROW_H;
+            });
+        }
+
+        fondDeRangee(ROW_H, '#e2e8f0');
+        const totalRet = new Array(entetes.length).fill('');
+        totalRet[1] = 'TOTAL RETENUES'; totalRet[5] = fcfa(calc.salarial.total);
+        if (showPatronal) totalRet[7] = fcfa(totalPatronal);
+        rangee(totalRet, { bold: true });
+        y += ROW_H;
+
+        return items;
+    };
+
+    const content = layout.filter(b => b.visible !== false).flatMap(bloc => {
+        switch (bloc.type) {
+            case 'logo':
+                return company.logo
+                    ? { image: company.logo, fit: [bloc.w, bloc.h], absolutePosition: { x: bloc.x, y: bloc.y } }
+                    : null;
+            case 'text': {
+                // Un `text` avec `alignment` sous `absolutePosition` s'aligne sur la
+                // PAGE entière, pas sur son `width` local (comportement pdfmake) —
+                // un titre aligné à droite débordait donc jusqu'au bord de la page
+                // au lieu de rester dans son bloc. Le contenir dans une table à une
+                // cellule d'une largeur déclarée force l'alignement à respecter le
+                // bloc, pas la page.
+                const texte = bloc.champ ? resoudreChampCanvas(bloc.champ, ctx) : (bloc.texte || '');
+                return {
+                    absolutePosition: { x: bloc.x, y: bloc.y },
+                    table: { widths: [bloc.w], body: [[{ text: texte, fontSize: bloc.fontSize || 8, bold: !!bloc.bold, italics: !!bloc.italics, color: bloc.color || '#000000', alignment: bloc.align || 'left', border: [false, false, false, false], margin: [0, 0, 0, 0] }]] },
+                    layout: 'noBorders'
+                };
+            }
+            case 'table':
+                return blocATableauPdf(bloc);
+            case 'netBox':
+                return {
+                    absolutePosition: { x: bloc.x, y: bloc.y },
+                    table: { widths: [bloc.w], body: [[{ text: 'NET À PAYER', fontSize: (bloc.fontSize || 15) * 0.5, bold: true, alignment: 'center', color: bloc.textColor || '#ffffff' }], [{ text: fcfa(calc.netAPayer) + ' F', fontSize: bloc.fontSize || 15, bold: true, alignment: 'center', color: bloc.textColor || '#ffffff' }]] },
+                    layout: { hLineWidth: () => 0, vLineWidth: () => 0, fillColor: bloc.backgroundColor || '#1e3a8a', paddingTop: () => 4, paddingBottom: () => 6 }
+                };
+            case 'line':
+                return { canvas: [{ type: 'line', x1: 0, y1: 0, x2: bloc.w, y2: 0, lineWidth: bloc.thickness || 0.75, lineColor: bloc.color || '#000000' }], absolutePosition: { x: bloc.x, y: bloc.y } };
+            case 'rect':
+                return { canvas: [{ type: 'rect', x: 0, y: 0, w: bloc.w, h: bloc.h, color: bloc.backgroundColor || '#f1f5f9', lineColor: bloc.borderColor || null }], absolutePosition: { x: bloc.x, y: bloc.y } };
+            case 'watermark':
+                // `angle` (rotation) n'a de sens que sur un texte, pas dans une
+                // cellule de table — contrairement aux autres blocs, celui-ci reste
+                // un `text` brut ; sa largeur par défaut (page entière) évite qu'un
+                // centrage mal borné ne se voie.
+                return { text: bloc.texte || company.nom, fontSize: bloc.fontSize || 74, color: bloc.color || '#f1f5f9', bold: true, alignment: 'center', angle: bloc.angle !== undefined ? bloc.angle : 30, absolutePosition: { x: 0, y: bloc.y }, width: CANVAS_PAGE.width };
+            default:
+                return null;
+        }
+    }).filter(Boolean);
+
+    return {
+        pageSize: 'A4', pageMargins: [0, 0, 0, 0],
+        content,
+        defaultStyle: { font: 'Roboto', fontSize: 8 }
+    };
+}
+
+// Modèles ONDA additionnels, réservés à la Côte d'Ivoire pour l'instant — un
+// seul endroit à étendre pour proposer un nouveau style de bulletin.
+const MODELES_CI_SUPPLEMENTAIRES = {
+    grille: generatePdfDefinitionGrilleNumerotee,
+    compact: generatePdfDefinitionCompact,
+    // Clé alignée sur le code envoyé par le sélecteur (renommé « ONDACLASSIC »
+    // côté UI) : la fonction garde son nom d'origine, seule la clé du
+    // dispatch change, sinon ce style était silencieusement introuvable et
+    // la génération retombait sur Classique sans le dire.
+    ondaclassic: generatePdfDefinitionLogipaie,
+    bancaire: generatePdfDefinitionBancaire,
+    moderne: generatePdfDefinitionModerne,
+    lavandiere: generatePdfDefinitionLavandiere,
+    adArchitecture: generatePdfDefinitionADArchitecture,
+    scaso: generatePdfDefinitionScaso,
+    personnalise: generatePdfDefinitionPersonnalise,
+    tcmLogistic: generatePdfDefinitionTcmLogistic,
+    surMesure: generatePdfDefinitionSurMesure
+};
+// Exposé pour que server.js valide `templateStyle` contre la même liste que
+// celle réellement utilisée ici, sans avoir à la recopier à la main.
+exports.STYLES_BULLETIN_DISPONIBLES = Object.keys(MODELES_CI_SUPPLEMENTAIRES);
+
+// Catalogue affiché dans Paramètres > Modèles de bulletin pour éditer les
+// codes : un seul endroit à tenir à jour, le client ne fait que l'afficher.
+exports.CODE_RUBRIQUE = CODE_RUBRIQUE;
+exports.CATALOGUE_RUBRIQUES = [
+    { cle: 'salaireBase', libelle: 'Salaire de base', groupe: 'Gains' },
+    { cle: 'sursalaire', libelle: 'Sursalaire', groupe: 'Gains' },
+    { cle: 'primeAnciennete', libelle: "Prime d'ancienneté", groupe: 'Gains' },
+    { cle: 'prime', libelle: 'Primes libres (diverses)', groupe: 'Gains' },
+    { cle: 'allocationConges', libelle: 'Allocation congés payés', groupe: 'Gains' },
+    { cle: 'heuresSup', libelle: 'Heures supplémentaires', groupe: 'Gains' },
+    { cle: 'gratification', libelle: 'Gratification / 13e mois', groupe: 'Gains' },
+    { cle: 'primeTransport', libelle: 'Indemnité de transport', groupe: 'Gains' },
+    { cle: 'primeLogement', libelle: 'Prime de logement', groupe: 'Gains' },
+    { cle: 'its', libelle: 'ITS — impôt sur salaire (nouveau régime, 2024)', groupe: 'Retenues salariales' },
+    { cle: 'cnpsSalariale', libelle: 'CNPS retraite (part salariale)', groupe: 'Retenues salariales' },
+    { cle: 'cmuSalariale', libelle: 'CMU (part salariale)', groupe: 'Retenues salariales' },
+    { cle: 'ricf', libelle: 'RICF (réduction impôt charges familiales)', groupe: 'Retenues salariales' },
+    { cle: 'acompte', libelle: 'Acompte / avance', groupe: 'Retenues salariales' },
+    { cle: 'cnpsPatronale', libelle: 'CNPS retraite (part patronale)', groupe: 'Charges patronales' },
+    { cle: 'cnpsPF', libelle: 'CNPS prestations familiales', groupe: 'Charges patronales' },
+    { cle: 'cnpsAT', libelle: 'CNPS accident du travail', groupe: 'Charges patronales' },
+    { cle: 'cnpsAM', libelle: 'CNPS assurance maternité', groupe: 'Charges patronales' },
+    { cle: 'cmuPatronale', libelle: 'CMU (part patronale)', groupe: 'Charges patronales' },
+    { cle: 'impotEmployeur', libelle: 'T.A.S.P (impôt employeur)', groupe: 'Charges patronales' },
+    { cle: 'fdfpTA', libelle: "FDFP — Taxe d'apprentissage", groupe: 'Charges patronales' },
+    { cle: 'fdfpFPC', libelle: 'FDFP — Formation professionnelle continue', groupe: 'Charges patronales' }
+];
 
 // Instantané par salarié pour l'historique de paie persistant (fondation des futures
 // déclarations réglementaires CNPS/ITS/CMU) — capture ce qui a réellement été calculé/déclaré,
@@ -561,7 +2452,69 @@ function buildPayslipSnapshot(emp, calculs) {
     };
 }
 
-exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, mapping = null, htmlTemplate = null, country = 'CI', sheetName = null) => {
+const MOIS_ETAT_PAIE = ['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
+    'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+
+/**
+ * État de paie : le lot entier en une seule vue tableur, à côté des bulletins
+ * PDF individuels — un contrôle global (masse salariale, cohérence entre
+ * salariés) est bien plus rapide sur un tableau que PDF par PDF, et c'est le
+ * format attendu pour le transmettre tel quel à un comptable ou à la CNPS.
+ */
+function construireEtatDePaie(lignes, { nomEntreprise, mois, annee } = {}) {
+    const periode = mois ? `${MOIS_ETAT_PAIE[parseInt(mois, 10)] || ''} ${annee || ''}`.trim() : (annee || '');
+    const entete = [
+        ['ÉTAT DE PAIE'],
+        [nomEntreprise || '', periode ? `Période : ${periode}` : ''],
+        []
+    ];
+    const colonnes = [
+        'Matricule', 'Nom', 'Prénom', 'N° CNPS', 'Poste',
+        'Jours travaillés', 'Absences (j)', 'Heures sup (nb)',
+        'Salaire de base', 'Montant heures sup', 'Brut total',
+        'CNPS salarié', 'ITS', 'RICF', 'CMU salarié', 'Net à payer',
+        'CNPS patronal (retraite)', 'CNPS patronal (PF)', 'CNPS patronal (AT)', 'CMU patronal'
+    ];
+    const lignesDonnees = lignes.map(l => [
+        l.matricule, l.nom, l.prenom, l.numeroCnps, l.poste,
+        l.joursTravailles, l.absencesJours, l.heuresSupNb,
+        l.salaireBase, l.montantHeuresSup, l.brutTotal,
+        l.cnpsSal, l.its, l.ricf, l.cmuSal, l.netAPayer,
+        l.cnpsRetraitePat, l.cnpsPF, l.cnpsAT, l.cmuPat
+    ]);
+    const somme = (cle) => lignes.reduce((acc, l) => acc + (Number(l[cle]) || 0), 0);
+    const ligneTotal = [
+        `TOTAL (${lignes.length} salarié(s))`, '', '', '', '', '', '', '',
+        somme('salaireBase'), somme('montantHeuresSup'), somme('brutTotal'),
+        somme('cnpsSal'), somme('its'), somme('ricf'), somme('cmuSal'), somme('netAPayer'),
+        somme('cnpsRetraitePat'), somme('cnpsPF'), somme('cnpsAT'), somme('cmuPat')
+    ];
+
+    const aoa = [...entete, colonnes, ...lignesDonnees, [], ligneTotal];
+    const feuille = XLSX.utils.aoa_to_sheet(aoa);
+    feuille['!cols'] = colonnes.map(c => ({ wch: Math.max(12, c.length + 2) }));
+    feuille['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: colonnes.length - 1 } }];
+
+    const classeur = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(classeur, feuille, 'État de paie');
+    return classeur;
+}
+
+/**
+ * Decode un document transmis en base64, tolerant au prefixe data URL.
+ *
+ * Buffer.from n'echoue pas sur « data:…;base64, » : il ignore les caracteres
+ * invalides et rend un tampon decale, illisible comme ZIP. On retire donc le
+ * prefixe avant de decoder, plutot que de laisser l'erreur surgir plus loin.
+ */
+function decoderDocumentBase64(valeur) {
+    const texte = String(valeur || '');
+    const virgule = texte.indexOf(',');
+    const utile = texte.startsWith('data:') && virgule > 0 ? texte.slice(virgule + 1) : texte;
+    return Buffer.from(utile, 'base64');
+}
+
+exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, mapping = null, htmlTemplate = null, country = 'CI', sheetName = null, leavesToProcess = [], docxTemplateBase64 = null, templateStyle = null) => {
     return new Promise(async (resolve, reject) => {
         try {
             console.log(`[RH] Lecture Excel: ${dataPath}`);
@@ -629,10 +2582,14 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, m
             });
 
             // Output init
-            const isDocxMode = !!templatePath && templatePath.toLowerCase().endsWith('.docx');
+            const isDocxMode = (!!templatePath && templatePath.toLowerCase().endsWith('.docx')) || !!docxTemplateBase64;
             const isHtmlTemplateMode = !!htmlTemplate;
             let docTemplateContent = null;
-            if (templatePath) docTemplateContent = fs.readFileSync(templatePath);
+            if (docxTemplateBase64) {
+                docTemplateContent = decoderDocumentBase64(docxTemplateBase64);
+            } else if (templatePath) {
+                docTemplateContent = fs.readFileSync(templatePath);
+            }
 
             const output = fs.createWriteStream(outputPath);
             const archive = archiver('zip', { zlib: { level: 9 } });
@@ -655,26 +2612,12 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, m
 
             const promises = [];
             let browser = null;
-            if (isHtmlTemplateMode && puppeteer) {
-                // Tente de trouver un exécutable système sur Linux (VPS)
-                const commonPaths = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'];
-                let executablePath;
-                for (const p of commonPaths) { if (fs.existsSync(p)) { executablePath = p; break; } }
-                if (!executablePath) {
-                    try { executablePath = require('child_process').execSync('which chromium-browser').toString().trim(); } catch (e) {
-                        try { executablePath = require('child_process').execSync('which google-chrome').toString().trim(); } catch (err) {}
-                    }
-                }
-                if (!executablePath) {
-                    try {
-                        console.log("Installation automatique de Chrome (Puppeteer) en cours pour l'utilisateur serveur...");
-                        require('child_process').execSync('npx puppeteer browsers install chrome', { stdio: 'pipe' });
-                        console.log("Installation Chrome terminée.");
-                    } catch(e) {
-                        console.error("Erreur d'installation automatique:", e.message || e);
-                    }
-                }
-                browser = await puppeteer.launch({ headless: 'new', executablePath: executablePath || undefined, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+            if (isHtmlTemplateMode) {
+                // Une seule instance pour tout le lot. La localisation de Chrome et
+                // son installation automatique vivent dans templateEngine : les
+                // dupliquer ici faisait qu'un require de puppeteer en échec laissait
+                // `browser` à null, et l'erreur ne remontait qu'au premier bulletin.
+                browser = await templateEngine.launchBrowser();
             }
 
             for (const [index, emp] of fullEmployees.entries()) {
@@ -701,71 +2644,52 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, m
                         const finalFileName = currentEmp.isLeavePayslip ? `BULLETIN ALLOCATION CONGE - ${entNom} - ${salNom} - ${moisNom} ${emp.annee || ''}` : `BULLETIN DE PAIE - ${entNom} - ${salNom} - ${moisNom} ${emp.annee || ''}`;
 
                         if (isDocxMode) {
-                            const viewData = { ...currentEmp, ...calculs, date_jour: new Date().toLocaleDateString() };
-                            const zip = new require('pizzip')(docTemplateContent.toString('binary'));
-                            const doc = new require('docxtemplater')(zip, { paragraphLoop: true, linebreaks: true });
-                            doc.render(viewData);
-                            archive.append(doc.getZip().generate({ type: 'nodebuffer' }), { name: `${finalFileName}.docx` });
-                        } else if (isHtmlTemplateMode) {
-                            const viewData = {
+                            const PizZip = require('pizzip');
+                            const Docxtemplater = require('docxtemplater');
+                            const zip = new PizZip(docTemplateContent);
+                            const doc = new Docxtemplater(zip, {
+                                paragraphLoop: true,
+                                linebreaks: true,
+                                nullGetter() { return ""; }
+                            });
+                            
+                            const flatData = {
                                 ...currentEmp,
                                 ...calculs,
-                                date_jour: new Date().toLocaleDateString(),
-                                nom_entreprise: entNom
+                                netAPayer: fcfa(calculs.netAPayer),
+                                brutTotal: fcfa(calculs.gainsTotaux || calculs.brutImposable),
+                                nomComplet: (currentEmp.nom || '') + ' ' + (currentEmp.prenom || ''),
+                                date_jour: new Date().toLocaleDateString()
                             };
+                            doc.render(flatData);
+                            const buf = doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+                            archive.append(buf, { name: `${finalFileName}.docx` });
+                        } else if (isHtmlTemplateMode) {
+                            const viewData = buildViewData(currentEmp, calculs, { ...companyInfo, nom_entreprise: entNom });
                             promises.push((async () => {
-                                if (!puppeteer) throw new Error("puppeteer module not found. Run npm install puppeteer");
-
-                                let html = htmlTemplate;
-                                const formatFCFA = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-
-                                for (const key of Object.keys(viewData)) {
-                                    const val = viewData[key];
-                                    const strVal = typeof val === 'number' ? formatFCFA(val) : (val || '');
-                                    const regex = new RegExp(`{${key}}`, 'g');
-                                    html = html.replace(regex, strVal);
-                                }
-                                html = html.replace(/{[^}]+}/g, '0');
-                                
+                                // Le modèle du client est un bulletin de paie : sur une
+                                // allocation congé, seul le titre change.
+                                let tpl = htmlTemplate;
                                 if (currentEmp.isLeavePayslip) {
-                                    html = html.replace(/BULLETIN DE PAIE/gi, "BULLETIN D'ALLOCATION CONGÉ");
+                                    tpl = tpl.replace(/BULLETIN DE PAIE/gi, "BULLETIN D'ALLOCATION CONGÉ");
                                 }
+                                const pdfBuffer = await templateEngine.renderTemplateToPdf(tpl, viewData, browser);
 
-                                let fullHtml = html;
-                                if (!html.toLowerCase().includes('<html')) {
-                                    fullHtml = `
-                                    <!DOCTYPE html>
-                                    <html>
-                                    <head>
-                                        <meta charset="utf-8">
-                                        <script src="https://cdn.tailwindcss.com"></script>
-                                        <style>
-                                            body { font-family: sans-serif; background: white; }
-                                            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                                        </style>
-                                    </head>
-                                    <body class="p-6">${html}</body>
-                                    </html>
-                                    `;
-                                }
-
-                                const page = await browser.newPage();
-                                await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
-                                const pdfBytes = await page.pdf({ format: 'A4', printBackground: true });
-                                await page.close();
-
-                                archive.append(Buffer.from(pdfBytes), { name: `${finalFileName}.pdf` });
+                                archive.append(pdfBuffer, { name: `${finalFileName}.pdf` });
                             })());
                         } else {
                             let docDefinition;
-                            if (currentEmp.pays === 'BJ') {
+                            const paysCode = currentEmp.pays || country;
+                            if (paysCode === 'BJ') {
                                 docDefinition = generateBeninPdfDefinition(currentEmp, calculs, companyInfo);
-                            } else if (currentEmp.pays === 'TG') {
+                            } else if (paysCode === 'TG') {
                                 docDefinition = generateTogoPdfDefinition(currentEmp, calculs, companyInfo);
+                            } else if (MODELES_CI_SUPPLEMENTAIRES[templateStyle]) {
+                                docDefinition = MODELES_CI_SUPPLEMENTAIRES[templateStyle](currentEmp, calculs, companyInfo);
                             } else {
                                 docDefinition = generatePdfDefinition(currentEmp, calculs, companyInfo);
                             }
-                            
+
                             const pdfDoc = printer.createPdfKitDocument(docDefinition);
                             let chunks = [];
                             pdfDoc.on('data', (chunk) => chunks.push(chunk));
@@ -783,6 +2707,18 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, m
 
             Promise.all(promises).then(async () => {
                 if (browser) await browser.close();
+                // État de paie : le lot entier en une seule vue tableur, à côté des
+                // bulletins PDF individuels (voir construireEtatDePaie).
+                try {
+                    const classeurEtatPaie = construireEtatDePaie(perEmployeeResults, {
+                        nomEntreprise: companyInfo.raison_sociale || companyInfo.nom_entreprise || (fullEmployees[0] && fullEmployees[0].nom_entreprise) || '',
+                        mois: fullEmployees[0] && fullEmployees[0].mois,
+                        annee: fullEmployees[0] && fullEmployees[0].annee
+                    });
+                    archive.append(XLSX.write(classeurEtatPaie, { type: 'buffer', bookType: 'xlsx' }), { name: 'Etat de paie.xlsx' });
+                } catch (e) {
+                    console.warn('État de paie Excel non généré :', e.message);
+                }
                 setTimeout(() => archive.finalize(), 500);
             }).catch(async (err) => {
                 if (browser) await browser.close();
@@ -799,8 +2735,9 @@ exports.processPayrollFile = async (dataPath, outputPath, templatePath = null, m
 function calculateBeninSalaryRules(employee) {
     // 1. Calcul des éléments de base (identique à calculateSalaryRules)
     const salaireBaseMensuel = parseFloat(employee['salaire_base'] || 0);
-    const joursDansLeMois = 30;
-    const JOURS_BASE_STANDARD = 26; // référence légale standard, dénominateur de proratisation des primes
+    // Jours ouvrables d'un mois complet : dénominateur de TOUTE proratisation
+    // liée au temps de travail (salaire de base, sursalaire, primes).
+    const JOURS_BASE_STANDARD = 26;
     const joursAbsences = parseFloat(employee['absences_jours'] || 0);
     const joursTravailleExplicite = (employee['jours_travailles'] !== undefined && employee['jours_travailles'] !== null && employee['jours_travailles'] !== '')
         ? parseFloat(employee['jours_travailles'])
@@ -827,9 +2764,14 @@ function calculateBeninSalaryRules(employee) {
     const joursBasePaie = JOURS_BASE_STANDARD;
     const joursCP = joursConges;
 
-    const salaireBase = Math.round((salaireBaseMensuel / joursDansLeMois) * joursTrav);
+    // Diviseur : joursBasePaie (26), la MÊME échelle que joursTrav.
+    // joursTrav vaut 26 pour un mois complet ; diviser par 30 amputait donc
+    // le salaire de 13,3 % alors même que le salarié n'avait pas été absent.
+    // Les primes divisaient déjà correctement par 26 : le bulletin était
+    // incohérent avec lui-même.
+    const salaireBase = Math.round((salaireBaseMensuel / joursBasePaie) * joursTrav);
     const sursalaireTotal = parseFloat(employee['sursalaire'] || 0);
-    const sursalaire = Math.round((sursalaireTotal / joursDansLeMois) * joursTrav);
+    const sursalaire = Math.round((sursalaireTotal / joursBasePaie) * joursTrav);
 
     const primeTransportMensuel = parseFloat(employee['prime_transport'] || 0);
     const primeTransport = (employee['bulletin_type'] === 'conges') ? 0 : Math.round((primeTransportMensuel / joursBasePaie) * joursTrav);
@@ -923,7 +2865,7 @@ function calculateBeninSalaryRules(employee) {
             totalSocial: totalSocialEmployeur, grandTotal: totalPatronal
         },
         salarial: {
-            its: itsFinal, ricf: 0, baseITS: salImposable, is: 0, cn: 0, igr: 0, cnps: cnssSal, cmu: 0,
+            its: itsFinal, ricf: 0, baseITS: salImposable, cnps: cnssSal, cmu: 0,
             acompte, avance, opposition, autres, total: totalRetenues, regime: '2024',
             autresTaxes: autresTaxesSalariales
         },
@@ -1134,7 +3076,7 @@ function generateBeninPdfDefinition(employee, calc, companyInfo = {}) {
                         stack: [
                             { text: 'SALARIÉ :', fontSize: 8.5, bold: true, color: NAVY_HEADER },
                             { text: (employee.nom || '').toUpperCase() + ' ' + (employee.prenom || ''), fontSize: 8, bold: true, margin: [0, 2, 0, 0] },
-                            { text: 'Matricule : ' + (employee.matricule || '____') + '   |   N° CNSS : ' + (employee.num_secu || '____'), fontSize: 7.5, color: '#475569', margin: [0, 2, 0, 0] },
+                            { text: 'Matricule : ' + (employee.matricule || '____') + '   |   N° CNSS : ' + (employee.num_secu || employee.numero_cnps || '____'), fontSize: 7.5, color: '#475569', margin: [0, 2, 0, 0] },
                             { text: 'Fonction : ' + (employee.poste || '____'), fontSize: 7.5, color: '#475569', margin: [0, 1, 0, 0] }
                         ],
                         width: '35%'
@@ -1236,8 +3178,9 @@ function generateBeninPdfDefinition(employee, calc, companyInfo = {}) {
 
 function calculateTogoSalaryRules(employee) {
     const salaireBaseMensuel = parseFloat(employee['salaire_base'] || 0);
-    const joursDansLeMois = 30;
-    const JOURS_BASE_STANDARD = 26; // référence légale standard, dénominateur de proratisation des primes
+    // Jours ouvrables d'un mois complet : dénominateur de TOUTE proratisation
+    // liée au temps de travail (salaire de base, sursalaire, primes).
+    const JOURS_BASE_STANDARD = 26;
     const joursAbsences = parseFloat(employee['absences_jours'] || 0);
     const joursTravailleExplicite = (employee['jours_travailles'] !== undefined && employee['jours_travailles'] !== null && employee['jours_travailles'] !== '')
         ? parseFloat(employee['jours_travailles'])
@@ -1264,9 +3207,14 @@ function calculateTogoSalaryRules(employee) {
     const joursBasePaie = JOURS_BASE_STANDARD;
     const joursCP = joursConges;
 
-    const salaireBase = Math.round((salaireBaseMensuel / joursDansLeMois) * joursTrav);
+    // Diviseur : joursBasePaie (26), la MÊME échelle que joursTrav.
+    // joursTrav vaut 26 pour un mois complet ; diviser par 30 amputait donc
+    // le salaire de 13,3 % alors même que le salarié n'avait pas été absent.
+    // Les primes divisaient déjà correctement par 26 : le bulletin était
+    // incohérent avec lui-même.
+    const salaireBase = Math.round((salaireBaseMensuel / joursBasePaie) * joursTrav);
     const sursalaireTotal = parseFloat(employee['sursalaire'] || 0);
-    const sursalaire = Math.round((sursalaireTotal / joursDansLeMois) * joursTrav);
+    const sursalaire = Math.round((sursalaireTotal / joursBasePaie) * joursTrav);
 
     let ansAnciennete = 0;
     let tauxAnciennete = 0;
@@ -1366,7 +3314,7 @@ function calculateTogoSalaryRules(employee) {
         },
         salarial: {
             its: irppMensuel, irpp: irppMensuel, ricf: 0, baseITS: revenuNetImposableMensuel, baseIRPP: revenuNetImposableMensuel,
-            is: 0, cn: 0, igr: 0, cnps: cnssSal, inam: inamSal, cmu: inamSal,
+            cnps: cnssSal, inam: inamSal, cmu: inamSal,
             acompte, avance, opposition, autres, total: totalRetenues, regime: '2026',
             autresTaxes: []
         },
@@ -1531,7 +3479,7 @@ function generateTogoPdfDefinition(employee, calc, companyInfo = {}) {
                         stack: [
                             { text: 'SALARIÉ :', fontSize: 8.5, bold: true, color: NAVY_HEADER },
                             { text: (employee.nom || '').toUpperCase() + ' ' + (employee.prenom || ''), fontSize: 8, bold: true, margin: [0, 2, 0, 0] },
-                            { text: 'Matricule : ' + (employee.matricule || '____') + '   |   N° CNSS : ' + (employee.num_secu || '____'), fontSize: 7.5, color: '#475569', margin: [0, 2, 0, 0] },
+                            { text: 'Matricule : ' + (employee.matricule || '____') + '   |   N° CNSS : ' + (employee.num_secu || employee.numero_cnps || '____'), fontSize: 7.5, color: '#475569', margin: [0, 2, 0, 0] },
                             { text: 'Fonction : ' + (employee.poste || '____'), fontSize: 7.5, color: '#475569', margin: [0, 1, 0, 0] }
                         ],
                         width: '35%'
@@ -1675,64 +3623,12 @@ exports.calculateSinglePayroll = (employee) => {
 /**
  * Génère un PDF individuel et retourne un Buffer
  */
-exports.generateSinglePdf = (employee, calculs, companyInfo = {}, htmlTemplate = null) => {
+exports.generateSinglePdf = (employee, calculs, companyInfo = {}, htmlTemplate = null, templateStyle = null) => {
     return new Promise(async (resolve, reject) => {
         try {
             if (htmlTemplate) {
-                if (!puppeteer) {
-                    return reject(new Error("puppeteer module not found. Run npm install puppeteer"));
-                }
-                const viewData = {
-                    ...employee,
-                    ...calculs,
-                    date_jour: new Date().toLocaleDateString(),
-                    nom_entreprise: (companyInfo.nom_entreprise || employee.nom_entreprise || 'ENTREPRISE').toUpperCase()
-                };
-                let html = htmlTemplate;
-                const formatFCFA = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-
-                for (const key of Object.keys(viewData)) {
-                    const val = viewData[key];
-                    const strVal = typeof val === 'number' ? formatFCFA(val) : (val || '');
-                    const regex = new RegExp(`{${key}}`, 'g');
-                    html = html.replace(regex, strVal);
-                }
-                html = html.replace(/{[^}]+}/g, '0');
-
-                let fullHtml = html;
-                if (!html.toLowerCase().includes('<html')) {
-                    fullHtml = `
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta charset="utf-8">
-                        <script src="https://cdn.tailwindcss.com"></script>
-                        <style>
-                            body { font-family: sans-serif; background: white; }
-                            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                        </style>
-                    </head>
-                    <body class="p-6">${html}</body>
-                    </html>
-                    `;
-                }
-
-                // Tente de trouver un exécutable système sur Linux (VPS)
-                const commonPaths = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'];
-                let executablePath;
-                for (const p of commonPaths) { if (fs.existsSync(p)) { executablePath = p; break; } }
-                if (!executablePath) {
-                    try { executablePath = require('child_process').execSync('which chromium-browser').toString().trim(); } catch (e) {
-                        try { executablePath = require('child_process').execSync('which google-chrome').toString().trim(); } catch (err) {}
-                    }
-                }
-                const browser = await puppeteer.launch({ headless: 'new', executablePath: executablePath || undefined, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
-                const page = await browser.newPage();
-                await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
-                const pdfBytes = await page.pdf({ format: 'A4', printBackground: true });
-                await browser.close();
-                
-                return resolve(Buffer.from(pdfBytes));
+                const viewData = buildViewData(employee, calculs, companyInfo);
+                return resolve(await templateEngine.renderTemplateToPdf(htmlTemplate, viewData));
             }
             const now = new Date();
             if (employee.mois) now.setMonth(parseInt(employee.mois) - 1);
@@ -1743,6 +3639,10 @@ exports.generateSinglePdf = (employee, calculs, companyInfo = {}, htmlTemplate =
                 docDefinition = generateBeninPdfDefinition(employee, calculs, companyInfo);
             } else if (employee.pays === 'TG') {
                 docDefinition = generateTogoPdfDefinition(employee, calculs, companyInfo);
+            } else if (MODELES_CI_SUPPLEMENTAIRES[templateStyle]) {
+                // Modèles ONDA additionnels, pour l'instant réservés à la Côte
+                // d'Ivoire — seul pays où le référentiel LOGIPAIE a été vérifié.
+                docDefinition = MODELES_CI_SUPPLEMENTAIRES[templateStyle](employee, calculs, companyInfo);
             } else {
                 docDefinition = generatePdfDefinition(employee, calculs, companyInfo);
             }
@@ -1766,60 +3666,8 @@ exports.generateStcPdf = (employee, calculs, htmlTemplate = null) => {
     return new Promise(async (resolve, reject) => {
         try {
             if (htmlTemplate) {
-                if (!puppeteer) {
-                    return reject(new Error("puppeteer module not found. Run npm install puppeteer"));
-                }
-                const viewData = {
-                    ...employee,
-                    ...calculs,
-                    date_jour: new Date().toLocaleDateString(),
-                    nom_entreprise: (employee.nom_entreprise || 'ENTREPRISE').toUpperCase()
-                };
-                let html = htmlTemplate;
-                const formatFCFA = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-
-                for (const key of Object.keys(viewData)) {
-                    const val = viewData[key];
-                    const strVal = typeof val === 'number' ? formatFCFA(val) : (val || '');
-                    const regex = new RegExp(`{${key}}`, 'g');
-                    html = html.replace(regex, strVal);
-                }
-                html = html.replace(/{[^}]+}/g, '0');
-
-                let fullHtml = html;
-                if (!html.toLowerCase().includes('<html')) {
-                    fullHtml = `
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta charset="utf-8">
-                        <script src="https://cdn.tailwindcss.com"></script>
-                        <style>
-                            body { font-family: sans-serif; background: white; }
-                            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                        </style>
-                    </head>
-                    <body class="p-6">${html}</body>
-                    </html>
-                    `;
-                }
-
-                // Tente de trouver un exécutable système sur Linux (VPS)
-                const commonPaths = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'];
-                let executablePath;
-                for (const p of commonPaths) { if (fs.existsSync(p)) { executablePath = p; break; } }
-                if (!executablePath) {
-                    try { executablePath = require('child_process').execSync('which chromium-browser').toString().trim(); } catch (e) {
-                        try { executablePath = require('child_process').execSync('which google-chrome').toString().trim(); } catch (err) {}
-                    }
-                }
-                const browser = await puppeteer.launch({ headless: 'new', executablePath: executablePath || undefined, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
-                const page = await browser.newPage();
-                await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
-                const pdfBytes = await page.pdf({ format: 'A4', printBackground: true });
-                await browser.close();
-                
-                return resolve(Buffer.from(pdfBytes));
+                const viewData = buildViewData(employee, calculs);
+                return resolve(await templateEngine.renderTemplateToPdf(htmlTemplate, viewData));
             }
 
             const emp = employee;
@@ -2005,14 +3853,24 @@ exports.generateStcPdf = (employee, calculs, htmlTemplate = null) => {
 
 // ─── processPayrollJson ────────────────────────────────────────────────────────
 
-exports.processPayrollJson = async (employeesList, outputPath, templatePath = null, mapping = null, htmlTemplate = null, country = 'CI') => {
+exports.processPayrollJson = async (employeesList, outputPath, templatePath = null, mapping = null, htmlTemplate = null, country = 'CI', companyInfoOverride = null, leavesToProcess = [], docxTemplateBase64 = null, templateStyle = null) => {
     return new Promise(async (resolve, reject) => {
         try {
             console.log(`[RH] Lecture depuis JSON (Base Locale)`);
             if (!employeesList || employeesList.length === 0) return reject(new Error(`La liste des employés est vide`));
 
+            // Le profil entreprise (paramètres) fait foi quand il est fourni. À
+            // défaut, on retombe sur le premier salarié du lot — mais son
+            // `numero_cnps` est SON numéro personnel, pas celui de l'employeur :
+            // c'est un pis-aller, pas la bonne source.
             const firstEmp = employeesList[0] || {};
-            const companyInfo = {
+            const companyInfo = companyInfoOverride ? {
+                nom_entreprise: companyInfoOverride.nom_entreprise || 'Mon Entreprise',
+                adresse: companyInfoOverride.adresse || '',
+                numero_cnps: companyInfoOverride.numero_cnps || '',
+                numero_contribuable: companyInfoOverride.numero_contribuable || '',
+                logo: companyInfoOverride.logo || null,
+            } : {
                 nom_entreprise: firstEmp.nom_entreprise || 'Mon Entreprise',
                 adresse: firstEmp.adresse || '',
                 numero_cnps: firstEmp.numero_cnps || '',
@@ -2048,26 +3906,12 @@ exports.processPayrollJson = async (employeesList, outputPath, templatePath = nu
 
             const promises = [];
             let browser = null;
-            if (isHtmlTemplateMode && puppeteer) {
-                // Tente de trouver un exécutable système sur Linux (VPS)
-                const commonPaths = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'];
-                let executablePath;
-                for (const p of commonPaths) { if (fs.existsSync(p)) { executablePath = p; break; } }
-                if (!executablePath) {
-                    try { executablePath = require('child_process').execSync('which chromium-browser').toString().trim(); } catch (e) {
-                        try { executablePath = require('child_process').execSync('which google-chrome').toString().trim(); } catch (err) {}
-                    }
-                }
-                if (!executablePath) {
-                    try {
-                        console.log("Installation automatique de Chrome (Puppeteer) en cours pour l'utilisateur serveur...");
-                        require('child_process').execSync('npx puppeteer browsers install chrome', { stdio: 'pipe' });
-                        console.log("Installation Chrome terminée.");
-                    } catch(e) {
-                        console.error("Erreur d'installation automatique:", e.message || e);
-                    }
-                }
-                browser = await puppeteer.launch({ headless: 'new', executablePath: executablePath || undefined, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+            if (isHtmlTemplateMode) {
+                // Une seule instance pour tout le lot. La localisation de Chrome et
+                // son installation automatique vivent dans templateEngine : les
+                // dupliquer ici faisait qu'un require de puppeteer en échec laissait
+                // `browser` à null, et l'erreur ne remontait qu'au premier bulletin.
+                browser = await templateEngine.launchBrowser();
             }
 
             for (const [index, emp] of fullEmployees.entries()) {
@@ -2087,7 +3931,7 @@ exports.processPayrollJson = async (employeesList, outputPath, templatePath = nu
                     const entNom = (companyInfo.nom_entreprise || emp.nom_entreprise || 'ENTREPRISE').toUpperCase();
                     const salNom = (emp.nom || `Employe${index}`).toUpperCase();
                     
-                    const leave = (typeof leavesToProcess !== 'undefined' ? leavesToProcess : []).find(l => l.id === emp.id || (l.matricule && l.matricule === emp.matricule));
+                    const leave = leavesToProcess.find(l => l.id === emp.id || (l.matricule && l.matricule === emp.matricule));
                     const employesToGenerate = [emp];
                     if (leave) employesToGenerate.push({ ...emp, isLeavePayslip: true });
 
@@ -2095,64 +3939,56 @@ exports.processPayrollJson = async (employeesList, outputPath, templatePath = nu
                         const finalFileName = currentEmp.isLeavePayslip ? `BULLETIN ALLOCATION CONGE - ${entNom} - ${salNom} - ${moisNom} ${annee}` : `BULLETIN DE PAIE - ${entNom} - ${salNom} - ${moisNom} ${annee}`;
 
                         if (isHtmlTemplateMode) {
-                            const viewData = {
+                            // `companyInfo` (pas un objet à la volée réduit à son nom) :
+                            // c'est lui qui porte le logo du compte, sans quoi un modèle
+                            // PDF importé se rendait toujours sans logo, même configuré.
+                            const viewData = buildViewData(currentEmp, calculs, { ...companyInfo, nom_entreprise: entNom });
+                            promises.push((async () => {
+                                // Le modèle du client est un bulletin de paie : sur une
+                                // allocation congé, seul le titre change.
+                                let tpl = htmlTemplate;
+                                if (currentEmp.isLeavePayslip) {
+                                    tpl = tpl.replace(/BULLETIN DE PAIE/gi, "BULLETIN D'ALLOCATION CONGÉ");
+                                }
+                                const pdfBuffer = await templateEngine.renderTemplateToPdf(tpl, viewData, browser);
+
+                                archive.append(pdfBuffer, { name: `${finalFileName}.pdf` });
+                            })());
+                        } else if (docxTemplateBase64) {
+                            const PizZip = require('pizzip');
+                            const Docxtemplater = require('docxtemplater');
+                            const templateContent = decoderDocumentBase64(docxTemplateBase64);
+                            const zip = new PizZip(templateContent);
+                            const doc = new Docxtemplater(zip, {
+                                paragraphLoop: true,
+                                linebreaks: true,
+                                nullGetter() { return ""; }
+                            });
+                            
+                            const flatData = {
                                 ...currentEmp,
                                 ...calculs,
-                                date_jour: new Date().toLocaleDateString(),
-                                nom_entreprise: entNom
+                                netAPayer: fcfa(calculs.netAPayer),
+                                brutTotal: fcfa(calculs.gainsTotaux || calculs.brutImposable),
+                                nomComplet: (currentEmp.nom || '') + ' ' + (currentEmp.prenom || '')
                             };
-                            promises.push((async () => {
-                                if (!puppeteer) throw new Error("puppeteer module not found. Run npm install puppeteer");
-                                let html = htmlTemplate;
-                                const formatFCFA = (val) => Math.round(val || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-
-                                for (const key of Object.keys(viewData)) {
-                                    const val = viewData[key];
-                                    const strVal = typeof val === 'number' ? formatFCFA(val) : (val || '');
-                                    const regex = new RegExp(`{${key}}`, 'g');
-                                    html = html.replace(regex, strVal);
-                                }
-                                html = html.replace(/{[^}]+}/g, '0');
-
-                                if (currentEmp.isLeavePayslip) {
-                                    html = html.replace(/BULLETIN DE PAIE/gi, "BULLETIN D'ALLOCATION CONGÉ");
-                                }
-
-                                let fullHtml = html;
-                                if (!html.toLowerCase().includes('<html')) {
-                                    fullHtml = `
-                                    <!DOCTYPE html>
-                                    <html>
-                                    <head>
-                                        <meta charset="utf-8">
-                                        <script src="https://cdn.tailwindcss.com"></script>
-                                        <style>
-                                            body { font-family: sans-serif; background: white; }
-                                            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                                        </style>
-                                    </head>
-                                    <body class="p-6">${html}</body>
-                                    </html>
-                                    `;
-                                }
-
-                                const page = await browser.newPage();
-                                await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
-                                const pdfBytes = await page.pdf({ format: 'A4', printBackground: true });
-                                await page.close();
-
-                                archive.append(Buffer.from(pdfBytes), { name: `${finalFileName}.pdf` });
-                            })());
+                            
+                            doc.render(flatData);
+                            const buf = doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+                            archive.append(buf, { name: `${finalFileName}.docx` });
                         } else {
                             let docDefinition;
-                            if (currentEmp.pays === 'BJ') {
+                            const paysCode = currentEmp.pays || country;
+                            if (paysCode === 'BJ') {
                                 docDefinition = generateBeninPdfDefinition(currentEmp, calculs, companyInfo);
-                            } else if (currentEmp.pays === 'TG') {
+                            } else if (paysCode === 'TG') {
                                 docDefinition = generateTogoPdfDefinition(currentEmp, calculs, companyInfo);
+                            } else if (MODELES_CI_SUPPLEMENTAIRES[templateStyle]) {
+                                docDefinition = MODELES_CI_SUPPLEMENTAIRES[templateStyle](currentEmp, calculs, companyInfo);
                             } else {
                                 docDefinition = generatePdfDefinition(currentEmp, calculs, companyInfo);
                             }
-                            
+
                             const pdfDoc = printer.createPdfKitDocument(docDefinition);
                             let chunks = [];
                             pdfDoc.on('data', (chunk) => chunks.push(chunk));
@@ -2170,6 +4006,19 @@ exports.processPayrollJson = async (employeesList, outputPath, templatePath = nu
 
             Promise.all(promises).then(async () => {
                 if (browser) await browser.close();
+                // État de paie : un tableur qui récapitule tout le lot en une vue,
+                // à côté des bulletins PDF — utile pour un contrôle rapide ou pour
+                // transmettre au comptable, sans avoir à ouvrir chaque PDF.
+                try {
+                    const classeurEtatPaie = construireEtatDePaie(perEmployeeResults, {
+                        nomEntreprise: companyInfo.nom_entreprise || (employeesList[0] && employeesList[0].nom_entreprise) || '',
+                        mois: employeesList[0] && employeesList[0].mois,
+                        annee: employeesList[0] && employeesList[0].annee
+                    });
+                    archive.append(XLSX.write(classeurEtatPaie, { type: 'buffer', bookType: 'xlsx' }), { name: 'Etat de paie.xlsx' });
+                } catch (e) {
+                    console.warn('État de paie Excel non généré :', e.message);
+                }
                 setTimeout(() => archive.finalize(), 500);
             }).catch(async (err) => {
                 if (browser) await browser.close();

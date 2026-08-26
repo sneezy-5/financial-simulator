@@ -55,6 +55,23 @@ const fontOptions = [
   { label: 'Impact', value: 'Impact, sans-serif' }
 ]
 
+// Le texte collé depuis Word porte des styles de fond et de couleur qui
+// n'existent que dans Word (fond blanc « surligné », texte gris de
+// placeholder) : collés tels quels, ils s'affichent comme des blocs et du
+// texte délavés dans l'éditeur. On les retire, mais uniquement sur ce qui
+// vient d'être collé — jamais sur le contenu déjà enregistré par
+// l'utilisateur, dont la mise en forme (couleur, surlignage) est volontaire.
+const nettoyerStylesColles = (html) => {
+  const conteneur = document.createElement('div')
+  conteneur.innerHTML = html
+  conteneur.querySelectorAll('[style]').forEach((el) => {
+    el.style.removeProperty('background-color')
+    el.style.removeProperty('background')
+    el.style.removeProperty('color')
+  })
+  return conteneur.innerHTML
+}
+
 const editor = useEditor({
   content: props.modelValue || '',
   extensions: [
@@ -93,6 +110,21 @@ const editor = useEditor({
     attributes: {
       class: 'rich-doc-content',
     },
+    // Dépose d'une variable glissée depuis la liste (DocumentsGenerator.vue) :
+    // on insère le texte brut ({{cle}}) exactement à l'endroit du curseur de
+    // dépose, sans passer par le presse-papiers. `moved` distingue ça d'un
+    // déplacement de texte interne à l'éditeur, que TipTap doit gérer lui-même.
+    handleDrop: (view, event, slice, moved) => {
+      if (moved) return false
+      const texte = event.dataTransfer?.getData('text/plain')
+      if (!texte || !texte.trim()) return false
+      const coords = view.posAtCoords({ left: event.clientX, top: event.clientY })
+      if (!coords) return false
+      event.preventDefault()
+      view.dispatch(view.state.tr.insertText(texte, coords.pos))
+      return true
+    },
+    transformPastedHTML: nettoyerStylesColles,
   },
   onUpdate: ({ editor }) => {
     emit('update:modelValue', editor.getHTML())

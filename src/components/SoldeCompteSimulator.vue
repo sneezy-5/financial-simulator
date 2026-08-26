@@ -1,8 +1,13 @@
 <script setup>
+import {
+  indemniteLicenciement, indemniteFinCDD, droitsConges,
+  dommagesInteretsRuptureAnticipee, salaireReference, PARAMS_STC_CI
+} from '../services/soldeToutCompte.js'
 import { ref, computed, onMounted } from 'vue'
 import { localDb } from '../services/localDatabase.js'
 import EmployeeSelect from './hr/EmployeeSelect.vue'
 import { user } from '../services/auth.js'
+import { getContracts, findActiveContract } from '../services/payrollInput.js'
 
 const props = defineProps({
   country: {
@@ -42,11 +47,20 @@ const emp = ref({
   // Préavis
   preavis_mois_effectues: -1,  // -1 = not set yet (défaut = préavis complet effectué)
   preavis_mois_contrat: 0,     // Dépassement contractuel
+  // Rémunérations globales des 12 mois précédant la rupture. Sans elles,
+  // l'indemnité de licenciement se calcule sur la rémunération courante, ce qui
+  // n'est exact que si le salaire n'a pas bougé.
+  historique_remunerations: null,
+  // CDD : cumul réel des salaires bruts du contrat (assiette des 3 %) et mois
+  // restant à courir jusqu'au terme (assiette des dommages-intérêts).
+  salaires_bruts_cumules_cdd: 0,
+  mois_restants_cdd: 0,
   avances_impayees: 0,
   arrieres_salaire: 0,
 })
 
 const availableEmployees = ref([])
+const contrats = ref([])
 
 onMounted(async () => {
   if (user.value) {
@@ -58,7 +72,41 @@ onMounted(async () => {
   } catch (e) {
     availableEmployees.value = []
   }
+  try {
+    contrats.value = getContracts()
+  } catch (e) {
+    contrats.value = []
+  }
 })
+
+// Le contrat fait foi sur la rémunération, le poste et la date d'embauche :
+// c'est la pièce signée (voir payrollInput.js). La fiche employé ne sert que
+// de repli quand aucun contrat actif n'est trouvé.
+const selectEmployeeCustom = (e) => {
+  if (!e) return
+  emp.value.nom = e.nom || ''
+  emp.value.prenom = e.prenom || ''
+  emp.value.nom_entreprise = e.employeur || emp.value.nom_entreprise
+
+  const maintenant = new Date()
+  const contrat = findActiveContract(e.id, contrats.value, {
+    mois: maintenant.getMonth() + 1,
+    annee: maintenant.getFullYear()
+  })
+
+  emp.value.poste = contrat?.poste || e.poste || ''
+  emp.value.date_embauche = contrat?.dateDebut || e.date_embauche || e.date_entree || ''
+  emp.value.type_contrat = (contrat?.type || e.type_contrat || 'CDI').toLowerCase()
+
+  emp.value.salaire_de_base = contrat && contrat.salaireDeBase !== '' && contrat.salaireDeBase != null
+    ? (+contrat.salaireDeBase || 0)
+    : (e.salaire_base || e.salaire || 0)
+
+  const primesContrat = (contrat?.primes || []).reduce((sum, p) => sum + (+p.montant || 0), 0)
+  emp.value.sursalaire_primes = contrat
+    ? (+contrat.sursalaire || 0) + primesContrat
+    : (e.sursalaire || 0)
+}
 
 // ══════════════════════════════════════════════
 // CALCULS AUTOMATIQUES COMPLETS
@@ -69,7 +117,19 @@ const calc = computed(() => {
   if (!de || (!emp.value.salaire_de_base && !emp.value.sursalaire_primes)) return null
 
   // Selon le Code du Travail CI, l'Indemnité de Licenciement et les Congés se calculent sur le Salaire Moyen Global (Brut)
-  const brut = (+emp.value.salaire_de_base || 0) + (+emp.value.sursalaire_primes || 0);
+  // Rémunération globale courante : ce qui rémunère le travail.
+  const brutCourant = (+emp.value.salaire_de_base || 0) + (+emp.value.sursalaire_primes || 0);
+
+  // L'indemnité de licenciement se calcule sur la MOYENNE des rémunérations
+  // globales des 12 mois précédents. Sans cet historique, on retombe sur la
+  // rémunération courante : exact si le salaire n'a pas bougé, approximatif
+  // sinon. Le cas est signalé à l'utilisateur plutôt que passé sous silence.
+  const historiqueRem = Array.isArray(emp.value.historique_remunerations)
+    ? emp.value.historique_remunerations
+    : null;
+  const brut = Math.round(salaireReference(historiqueRem, brutCourant));
+  const referenceApprochee = !historiqueRem ||
+    historiqueRem.length < PARAMS_STC_CI.moisReferenceSalaire;
   const salaireDeBase = +emp.value.salaire_de_base || 0;
 
   // ─── ANCIENNETÉ ────────────────────────────
@@ -95,17 +155,29 @@ const calc = computed(() => {
   // ─── PREVIS ────────────────────────────────
   // Art. 16.11 : < 1 an = 8 jours, 1-5 ans = 1 mois, > 5 ans = 2 mois
   const motif = emp.value.motif_rupture
+  // La faute lourde prive de l'indemnité légale de licenciement, et le préavis
+  // peut ne pas être dû : elle ne doit surtout pas être rangée avec les
+  // licenciements ordinaires, sous peine de verser une indemnité indue.
+  const estFauteLourde = motif === 'licenciement_faute_lourde'
   const estLicenciement = ['licenciement', 'commun_accord', 'deces', 'force_majeure'].includes(motif)
   const estRetraite = motif === 'retraite'
   const estDemission = motif === 'demission'
-  const estFinCDD = motif === 'fin_cdd' && emp.value.type_contrat === 'cdd'
+  // L'indemnité de 3 % n'est pas due lorsque la rupture est imputable au salarié,
+  // qu'un CDI équivalent a été refusé, ou en cas de faute lourde. Elle reste due
+  // lorsque c'est l'employeur qui rompt avant le terme.
+  const estFinCDD = ['fin_cdd', 'cdd_rupture_employeur'].includes(motif)
+    && emp.value.type_contrat === 'cdd' && !estFauteLourde
   
   let preavisMois = 0; // On stocke en fraction de mois pour calculer * brut
   let preavisLabel = '';
   if (emp.value.type_contrat === 'cdi') {
     if (emp.value.statut_pro === 'cadre') {
-        preavisMois = 3; preavisLabel = '3 mois'; // La CI donne 3 mois en standard pour cadres (parfois 4+ ou 6, mais 3 est la base)
-    } 
+        // 3 mois jusqu'à 16 ans d'ancienneté, 4 au-delà — même palier que les
+        // autres catégories, la base légale ne s'arrête pas à 3 mois pour un
+        // cadre de longue ancienneté.
+        if (ans <= 16) { preavisMois = 3; preavisLabel = '3 mois'; }
+        else           { preavisMois = 4; preavisLabel = '4 mois'; }
+    }
     else if (emp.value.statut_pro === 'employe_mensuel') {
         if (ans < 6)       { preavisMois = 1; preavisLabel = '1 mois'; }
         else if (ans < 11) { preavisMois = 2; preavisLabel = '2 mois'; }
@@ -137,11 +209,16 @@ const calc = computed(() => {
   const preavisMoisReliquat = Math.max(0, preavisMoisTotal - moisEffectues);
 
   let preavisDeduction = false;
+  let preavisASignaler = false;
   let preavisPayable = false;
 
   if (preavisMoisReliquat > 0) {
       if (estLicenciement || estRetraite) preavisPayable = true;
-      else if (estDemission) preavisDeduction = true;
+      // Sur une démission, le préavis non exécuté peut être dû à l'employeur,
+      // mais SEULEMENT s'il y a droit et s'il l'établit. On ne le retient donc
+      // plus d'office : aucune somme ne doit être déduite du solde au seul motif
+      // que le salarié s'en va. Il reste signalé pour que l'employeur décide.
+      else if (estDemission) preavisASignaler = true;
   }
 
   const montantPreavis = Math.round(brut * preavisMoisReliquat);
@@ -182,45 +259,66 @@ const calc = computed(() => {
     moisPeriode = Math.max(0, moisPeriode);
     
     // Total des jours
-    totalJoursCP = Math.round(moisPeriode * 2.2 * 10) / 10;
-    
-    // Base 26.4 jours par an = 1 mois de salaire
-    salJour = brut / 26.4;
-    montantConges = Math.round(totalJoursCP * salJour);
+    // Droits de congés délégués au module : jours par mois et valeur du jour
+    // de congé y sont des paramètres, une convention pouvant être plus
+    // favorable que la base légale.
+    const detailConges = droitsConges({
+      moisService: moisPeriode,
+      anneesAnciennete: moisTotal / 12,
+      joursDejaPris: 0,
+      salaireRef: brut,
+      valeurJourConge: +emp.value.valeur_jour_conge || null
+    });
+    totalJoursCP = detailConges.joursNonPris;
+    salJour = detailConges.valeurJour;
+    montantConges = detailConges.montant;
   }
 
   // ─── INDEMNITÉ DE LICENCIEMENT / RETRAITE ──
-  // TG: 1-5 ans: 35%, 6-10 ans: 40%, >10 ans: 45%
-  // CI/BJ: 1-5 ans: 30%, 6-10 ans: 35%, >10 ans: 40%
-  let montantIndemnite = 0
-  if (emp.value.type_contrat === 'cdi' && (estLicenciement || estRetraite) && moisTotal >= 12) {
-    const t1 = props.country === 'TG' ? 0.35 : 0.30;
-    const t2 = props.country === 'TG' ? 0.40 : 0.35;
-    const t3 = props.country === 'TG' ? 0.45 : 0.40;
-    
-    for (let a = 1; a <= ans; a++) {
-      if (a <= 5)       montantIndemnite += brut * t1;
-      else if (a <= 10) montantIndemnite += brut * t2;
-      else              montantIndemnite += brut * t3;
-    }
-    // Prorata mois partiels
-    const tauxDernier = (ans + 1) <= 5 ? t1 : (ans + 1) <= 10 ? t2 : t3;
-    if (moisResto > 0) montantIndemnite += brut * tauxDernier * (moisResto / 12);
-    montantIndemnite = Math.round(montantIndemnite);
-  }
+  // Barème délégué au module de règles : c'est lui qui porte les tranches,
+  // la condition d'ancienneté et les motifs qui privent du droit — dont la
+  // faute lourde, qui versait auparavant l'indemnité complète.
+  const paramsPays = props.country === 'TG'
+    ? { ...PARAMS_STC_CI, baremeLicenciement: [
+        { jusquA: 5, taux: 0.35 }, { jusquA: 10, taux: 0.40 }, { jusquA: Infinity, taux: 0.45 }
+      ] }
+    : PARAMS_STC_CI;
 
-  // ─── INDEMNITÉ FIN DE CDD ──────────────────
-  let montantFinCDD = 0
-  if (estFinCDD) {
-    if (props.country === 'TG' && ans >= 4) {
-      // Togo : 1 mois de salaire si 4 ans consécutifs
-      montantFinCDD = Math.round(brut);
-    } else if (props.country === 'CI') {
-      // CI : 3% du total des salaires versés
-      montantFinCDD = Math.round(brut * moisTotal * 0.03);
-    }
-    // Bénin (BJ) : Pas d'indemnité légale de fin de contrat définie par défaut
-  }
+  const detailIndemnite = emp.value.type_contrat === 'cdi'
+    ? indemniteLicenciement({ salaireRef: brut, anciennete: { moisTotal }, motif, params: paramsPays })
+    : { montant: 0, du: false, tranches: [], motifExclusion: 'contrat à durée déterminée' };
+
+  const montantIndemnite = detailIndemnite.du ? detailIndemnite.montant : 0;
+
+  // ─── INDEMNITÉ DE FIN DE CDD ───────────────
+  // 3 % du total des salaires bruts de TOUTE la durée du contrat. Faute de
+  // ce cumul, on l'approxime par la rémunération courante × durée, et on le
+  // signale : l'approximation est fausse dès qu'il y a eu une évolution de
+  // salaire. Le module porte aussi les cas où l'indemnité n'est PAS due.
+  const cumulCDD = +emp.value.salaires_bruts_cumules_cdd || null;
+  const detailFinCDD = emp.value.type_contrat === 'cdd'
+    ? indemniteFinCDD({
+        salairesBrutsCumules: cumulCDD,
+        salaireMensuel: brutCourant,
+        dureeMois: moisTotal,
+        motif
+      })
+    : { montant: 0, du: false, approxime: false, motifExclusion: null };
+
+  let montantFinCDD = detailFinCDD.du ? detailFinCDD.montant : 0;
+  // Le Togo retient une règle différente : un mois de salaire après quatre
+  // années consécutives.
+  if (props.country === 'TG' && detailFinCDD.du && ans >= 4) montantFinCDD = Math.round(brut);
+
+  // ─── DOMMAGES-INTÉRÊTS : RUPTURE ANTICIPÉE PAR L'EMPLOYEUR ──
+  // Valeur des salaires et avantages que le salarié aurait perçus jusqu'au
+  // terme restant du contrat.
+  const detailDommages = dommagesInteretsRuptureAnticipee({
+    salaireMensuel: brutCourant,
+    moisRestants: +emp.value.mois_restants_cdd || 0,
+    motif
+  });
+  const montantDommages = detailDommages.du ? detailDommages.montant : 0;
 
   // ─── GRATIFICATION (13E MOIS) PRORATISÉE ─────────────
   // De janvier à la date de sortie
@@ -260,7 +358,7 @@ const calc = computed(() => {
   const arrieres = Math.max(0, +emp.value.arrieres_salaire || 0);
 
   // ─── TOTAUX ────────────────────────────────
-  let totalBrut = montantConges + montantIndemnite + montantFinCDD + montant13e + arrieres;
+  let totalBrut = montantConges + montantIndemnite + montantFinCDD + montantDommages + montant13e + arrieres;
   if (preavisPayable) totalBrut += montantPreavis;
 
   const avances = Math.max(0, +emp.value.avances_impayees || 0);
@@ -283,6 +381,15 @@ const calc = computed(() => {
     loi: props.country === 'TG' ? 'Code du travail togolais (Loi n° 2021‑012)' 
        : props.country === 'BJ' ? 'Code du Travail Béninois (Loi n° 98‑004)' 
        : 'Art. 16.11 CTCI / Décret N° 96-200 du 7 mars 1996 / CCI 1977 Art.34'
+  })
+
+  if (montantDommages > 0) lignes.push({
+    code: 'DI',
+    libelle: `Dommages et intérêts — rupture anticipée du CDD (${detailDommages.moisRestants} mois restants)`,
+    calcul: `${fcfa(brutCourant)} F × ${detailDommages.moisRestants} mois`,
+    montant: montantDommages,
+    type: 'gain',
+    loi: "Valeur des salaires et avantages jusqu'au terme du contrat"
   })
 
   if (arrieres > 0) lignes.push({
@@ -362,6 +469,24 @@ const calc = computed(() => {
     ans, moisTotal, moisResto, joursResto,
     preavisLabel, preavisMoisTotal, preavisMoisReliquat, moisEffectues,
     preavisPayable, preavisDeduction, preavisApplique, montantPreavis,
+    preavisASignaler, estFauteLourde,
+    detailIndemnite, detailFinCDD, montantDommages, referenceApprochee,
+    // Ce que le calcul ne peut pas trancher seul, dit à l'utilisateur plutôt
+    // que masqué derrière un montant qui paraîtrait certain.
+    aVerifier: [
+      referenceApprochee && montantIndemnite > 0
+        ? "Salaire de référence estimé sur la rémunération courante : fournir les 12 derniers mois pour un montant exact."
+        : null,
+      detailFinCDD.approxime && detailFinCDD.du
+        ? "Indemnité de fin de CDD estimée : fournir le cumul réel des salaires bruts du contrat."
+        : null,
+      detailIndemnite.motifExclusion && emp.value.type_contrat === 'cdi'
+        ? `Indemnité de licenciement : ${detailIndemnite.motifExclusion}.`
+        : null,
+      detailFinCDD.motifExclusion && emp.value.type_contrat === 'cdd'
+        ? `Indemnité de fin de CDD : ${detailFinCDD.motifExclusion}.`
+        : null
+    ].filter(Boolean),
     dateDebutReferenceConge, moisPeriode, totalJoursCP, montantConges,
     montantIndemnite,
     montantFinCDD,
@@ -376,6 +501,33 @@ const calc = computed(() => {
 // ══════════════════════════════════════════════
 const fcfa = v => v ? Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') : '0'
 const showRefs = ref(false)
+
+// ── Historique des 12 derniers mois ──────────────────────────────────────────
+// Replié par défaut : la plupart des dossiers n'ont pas connu d'évolution de
+// salaire, et imposer douze saisies à tout le monde ferait fuir la fonction.
+const saisieHistorique = ref(false)
+const moisHistorique = ref(Array.from({ length: 12 }, () => ({ salaire: null, primes: null })))
+
+const appliquerHistorique = () => {
+  const remplis = moisHistorique.value.filter(m => (+m.salaire || 0) + (+m.primes || 0) > 0)
+  emp.value.historique_remunerations = remplis.length
+    ? remplis.map(m => ({ salaire: +m.salaire || 0, primes: +m.primes || 0 }))
+    : null
+}
+
+const prefillHistorique = () => {
+  // Point de départ pratique : on recopie la rémunération courante sur les
+  // douze mois, l'utilisateur ne corrige que ce qui a changé.
+  const base = +emp.value.salaire_de_base || 0
+  const primes = +emp.value.sursalaire_primes || 0
+  moisHistorique.value = Array.from({ length: 12 }, () => ({ salaire: base, primes }))
+  appliquerHistorique()
+}
+
+const viderHistorique = () => {
+  moisHistorique.value = Array.from({ length: 12 }, () => ({ salaire: null, primes: null }))
+  emp.value.historique_remunerations = null
+}
 const ancLabel = (a, m, j = 0) => {
   const r = m % 12
   let label = ""
@@ -386,6 +538,10 @@ const ancLabel = (a, m, j = 0) => {
 }
 
 const motifLabels = {
+  licenciement_faute_lourde: 'Licenciement pour faute lourde',
+  cdd_rupture_employeur: "CDD rompu par l'employeur",
+  cdd_rupture_salarie: 'CDD rompu par le salarié',
+  cdd_refus_cdi: 'Fin de CDD, CDI équivalent refusé',
   licenciement: 'Licenciement',
   demission: 'Démission',
   retraite: 'Retraite',
@@ -455,16 +611,7 @@ const reset = () => { generated.value = false; downloadUrl.value = null; errorMs
           <div class="bloc-title"><span class="bloc-num"></span> Pré-remplir depuis l'annuaire</div>
           <div class="field-row">
             <div class="field-group" style="width: 100%;">
-              <EmployeeSelect :employees="availableEmployees" @select="(e) => {
-                if(!e) return;
-                emp.nom = e.nom || '';
-                emp.prenom = e.prenom || '';
-                emp.poste = e.poste || '';
-                emp.nom_entreprise = e.employeur || '';
-                emp.date_embauche = e.date_embauche || e.date_entree || '';
-                emp.salaire_de_base = e.salaire_base || e.salaire || 0;
-                emp.sursalaire_primes = e.sursalaire || 0;
-              }" placeholder="Rechercher par nom, prénom ou matricule..." />
+              <EmployeeSelect :employees="availableEmployees" @select="selectEmployeeCustom" placeholder="Rechercher par nom, prénom ou matricule..." />
             </div>
           </div>
         </div>
@@ -534,11 +681,15 @@ const reset = () => { generated.value = false; downloadUrl.value = null; errorMs
             <div class="field-group">
               <label>Raison du départ</label>
               <select v-model="emp.motif_rupture" class="inp">
-                <option value="licenciement">Licenciement</option>
+                <option value="licenciement">Licenciement (hors faute lourde)</option>
+                <option value="licenciement_faute_lourde">Licenciement pour faute lourde</option>
                 <option value="retraite">Retraite</option>
                 <option value="commun_accord">Accord commun</option>
                 <option value="demission">Démission</option>
                 <option value="fin_cdd">Fin normale de CDD</option>
+                <option value="cdd_rupture_employeur">CDD rompu par l'employeur</option>
+                <option value="cdd_rupture_salarie">CDD rompu par le salarié</option>
+                <option value="cdd_refus_cdi">Fin de CDD, CDI équivalent refusé</option>
                 <option value="deces">Décès du salarié</option>
                 <option value="force_majeure">Force majeure</option>
               </select>
@@ -567,8 +718,57 @@ const reset = () => { generated.value = false; downloadUrl.value = null; errorMs
           
           <div class="auto-badge" v-if="calc && calc.brut > 0">
             <span class="badge-icon">📊</span>
-            <span>Salaire Mensuel Brut Global (Base STC Licensing/CP) : </span>
+            <span>Salaire de référence (indemnité de licenciement et congés) : </span>
             <strong>{{ fcfa(calc.brut) }} FCFA</strong>
+          </div>
+
+          <!-- Historique des 12 mois, replié par défaut -->
+          <div class="histo-zone">
+            <button type="button" class="histo-toggle" @click="saisieHistorique = !saisieHistorique">
+              {{ saisieHistorique ? '▾' : '▸' }}
+              Rémunérations des 12 derniers mois
+              <span class="histo-etat" :class="{ exact: emp.historique_remunerations }">
+                {{ emp.historique_remunerations
+                    ? emp.historique_remunerations.length + ' mois saisis — référence exacte'
+                    : 'non saisies — référence estimée sur le salaire courant' }}
+              </span>
+            </button>
+
+            <div v-if="saisieHistorique" class="histo-panel">
+              <p class="histo-aide">
+                L'indemnité de licenciement se calcule sur la <strong>moyenne des rémunérations
+                globales des 12 mois précédant la rupture</strong>. Renseignez-les si le salaire
+                ou les primes ont varié ; sinon la rémunération courante suffit.
+                Les remboursements de frais professionnels sont à exclure : ils ne rémunèrent pas le travail.
+              </p>
+              <div class="histo-actions">
+                <button type="button" class="histo-btn" @click="prefillHistorique">Reprendre le salaire courant sur 12 mois</button>
+                <button type="button" class="histo-btn ghost" @click="viderHistorique">Tout effacer</button>
+              </div>
+              <div class="histo-grid">
+                <div v-for="(m, i) in moisHistorique" :key="i" class="histo-mois">
+                  <span class="histo-num">M-{{ 12 - i }}</span>
+                  <input v-model.number="m.salaire" @input="appliquerHistorique" type="number" min="0" step="1000" placeholder="Salaire" class="inp inp-mini" />
+                  <input v-model.number="m.primes" @input="appliquerHistorique" type="number" min="0" step="1000" placeholder="Primes" class="inp inp-mini" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Spécifique CDD -->
+          <div class="field-row" v-if="emp.type_contrat === 'cdd'">
+            <div class="field-group">
+              <label>Cumul des salaires bruts du CDD (FCFA)
+                <span class="hint">Assiette réelle des 3 % d'indemnité de fin de contrat</span>
+              </label>
+              <input v-model.number="emp.salaires_bruts_cumules_cdd" type="number" min="0" step="1000" placeholder="Laisser vide pour une estimation" class="inp" />
+            </div>
+            <div class="field-group">
+              <label>Mois restant à courir jusqu'au terme
+                <span class="hint">Base des dommages-intérêts si l'employeur rompt avant le terme</span>
+              </label>
+              <input v-model.number="emp.mois_restants_cdd" type="number" min="0" step="1" placeholder="Ex: 6" class="inp" />
+            </div>
           </div>
         </div>
 
@@ -773,6 +973,34 @@ const reset = () => { generated.value = false; downloadUrl.value = null; errorMs
         </div>
 
         <template v-else>
+          <!-- Points de droit que le calcul ne peut pas trancher seul -->
+          <div v-if="calc.estFauteLourde" class="stc-alerte grave">
+            <strong>Faute lourde : indemnité de licenciement non due</strong>
+            <p>
+              Le salarié conserve ses droits déjà acquis — salaire dû, congés non pris,
+              primes acquises — mais l'indemnité légale de licenciement n'est pas versée,
+              et le préavis peut ne pas être dû. Vérifiez la qualification de la faute :
+              elle conditionne tout le calcul.
+            </p>
+          </div>
+
+          <div v-if="calc.aVerifier && calc.aVerifier.length" class="stc-alerte">
+            <strong>Points à vérifier</strong>
+            <ul>
+              <li v-for="(a, i) in calc.aVerifier" :key="i">{{ a }}</li>
+            </ul>
+          </div>
+
+          <div v-if="calc.preavisASignaler" class="stc-alerte">
+            <strong>Préavis non exécuté : {{ fcfa(calc.montantPreavis) }} FCFA</strong>
+            <p>
+              Cette somme peut être due <em>à l'employeur</em>, mais seulement s'il y a
+              droit. Elle n'est donc <strong>pas déduite d'office</strong> : aucune retenue
+              ne doit peser sur le solde au seul motif que le salarié s'en va. Ajoutez-la
+              en retenue justifiée si le droit est établi.
+            </p>
+          </div>
+
           <!-- Identité rapide -->
           <div class="id-card">
             <div class="id-name">{{ (emp.nom + ' ' + emp.prenom).trim() || 'Employé' }}</div>
@@ -987,6 +1215,41 @@ const reset = () => { generated.value = false; downloadUrl.value = null; errorMs
 </template>
 
 <style scoped>
+.stc-alerte {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  color: #78350f;
+}
+.stc-alerte.grave { background: #fef2f2; border-color: #fca5a5; color: #7f1d1d; }
+.stc-alerte strong { font-size: 0.86rem; }
+.stc-alerte p { margin: 6px 0 0; font-size: 0.78rem; line-height: 1.5; }
+.stc-alerte ul { margin: 6px 0 0; padding-left: 18px; }
+.histo-zone { margin-top: 12px; }
+.histo-toggle {
+  width: 100%; text-align: left; background: #f8fafc; border: 1px solid #e2e8f0;
+  border-radius: 8px; padding: 10px 12px; cursor: pointer; font-size: 0.84rem;
+  font-weight: 600; color: #334155; display: flex; align-items: center; gap: 8px;
+}
+.histo-etat { margin-left: auto; font-weight: 400; font-size: 0.74rem; color: #b45309; }
+.histo-etat.exact { color: #047857; }
+.histo-panel { border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 8px 8px; padding: 12px; }
+.histo-aide { font-size: 0.76rem; color: #475569; line-height: 1.5; margin: 0 0 10px; }
+.histo-actions { display: flex; gap: 8px; margin-bottom: 10px; }
+.histo-btn {
+  padding: 6px 10px; border-radius: 6px; border: 1px solid #cbd5e1;
+  background: #fff; font-size: 0.74rem; cursor: pointer; color: #334155;
+}
+.histo-btn.ghost { color: #64748b; }
+.histo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.histo-mois { display: flex; align-items: center; gap: 6px; }
+.histo-num { font-size: 0.7rem; color: #94a3b8; width: 30px; flex-shrink: 0; }
+.inp-mini { padding: 5px 7px !important; font-size: 0.78rem !important; }
+
+.stc-alerte li { font-size: 0.78rem; line-height: 1.5; margin-bottom: 3px; }
+
 * { box-sizing: border-box; }
 
 .stc-wrapper {

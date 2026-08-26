@@ -13,6 +13,30 @@ const getHeaders = () => {
   };
 };
 
+// Les modèles étaient auparavant enregistrés dans le localStorage du
+// navigateur (clé `onda_templates`), donc perdus au changement de poste. On
+// les fait migrer vers le serveur une seule fois, au premier chargement.
+let modelesHeritesMigres = false;
+async function migrerModelesHerites() {
+  if (modelesHeritesMigres) return;
+  modelesHeritesMigres = true;
+  let herites = [];
+  try { herites = JSON.parse(localStorage.getItem('onda_templates') || '[]'); } catch { herites = []; }
+  if (!herites.length) return;
+  try {
+    for (const t of herites) {
+      const res = await fetch(`${API_URL}/hr/templates`, { method: 'POST', headers: getHeaders(), body: JSON.stringify(t) });
+      if (!res.ok) throw new Error(`Échec migration du modèle « ${t.name || t.id} »`);
+    }
+    localStorage.removeItem('onda_templates');
+  } catch (e) {
+    // On retentera au prochain chargement : les données restent en localStorage tant
+    // que le serveur ne les a pas toutes confirmées.
+    modelesHeritesMigres = false;
+    console.error('Migration des modèles locaux vers le serveur a échoué :', e);
+  }
+}
+
 export const localDb = {
   // 👥 EMPLOYÉS
   async getEmployees() {
@@ -279,40 +303,43 @@ export const localDb = {
     return true;
   },
 
-  // 📄 MODÈLES PDF (TEMPLATES)
+  // 📄 MODÈLES DE DOCUMENTS (TEMPLATES)
+  // Enregistrés côté serveur pour survivre à un changement de poste ou de
+  // navigateur — auparavant limités au localStorage de l'appareil courant.
   async getTemplates() {
-    return JSON.parse(localStorage.getItem('onda_templates') || '[]');
+    await migrerModelesHerites();
+    const res = await fetch(`${API_URL}/hr/templates`, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Erreur chargement des modèles');
+    const data = await res.json();
+    return data.templates || [];
   },
 
   async saveTemplate(template) {
-    const temps = JSON.parse(localStorage.getItem('onda_templates') || '[]');
-    if (template.id) {
-      const idx = temps.findIndex(t => t.id === template.id);
-      if (idx !== -1) temps[idx] = template;
-      else temps.push(template);
-    } else {
-      template.id = Date.now();
-      temps.push(template);
-    }
-    localStorage.setItem('onda_templates', JSON.stringify(temps));
-    return template;
+    const res = await fetch(`${API_URL}/hr/templates`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(template)
+    });
+    if (!res.ok) throw new Error('Erreur sauvegarde du modèle');
+    const data = await res.json();
+    return data.template;
   },
 
   async deleteTemplate(id) {
-    let temps = JSON.parse(localStorage.getItem('onda_templates') || '[]');
-    temps = temps.filter(t => t.id !== id);
-    localStorage.setItem('onda_templates', JSON.stringify(temps));
+    const res = await fetch(`${API_URL}/hr/templates/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    });
+    if (!res.ok) throw new Error('Erreur suppression du modèle');
     return true;
   },
 
   async clearDefaultTemplates(type = 'payslip') {
     const templates = await this.getTemplates();
-    templates.forEach(t => {
-      if (t.isDefault && (t.type || 'payslip') === type) {
-        t.isDefault = false;
-      }
-    });
-    localStorage.setItem('onda_templates', JSON.stringify(templates));
+    const aReinitialiser = templates.filter(t => t.isDefault && (t.type || 'payslip') === type);
+    for (const t of aReinitialiser) {
+      await this.saveTemplate({ ...t, isDefault: false });
+    }
     return true;
   },
 

@@ -167,7 +167,12 @@ const importExcel = async (e) => {
   formData.append('file', file)
   
   try {
-    const res = await fetch('/api/rh/extract-data', { method: 'POST', body: formData })
+    const token = localStorage.getItem('auth_token')
+    const res = await fetch('/api/rh/extract-data', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData
+    })
     const data = await res.json()
     if (!data.success) throw new Error(data.error)
     
@@ -272,11 +277,7 @@ const importExcel = async (e) => {
         <p class="ctr-sub">{{ alertes.length }} alerte(s) active(s) · {{ contrats.length }} contrat(s) enregistré(s)</p>
       </div>
       
-      <div style="margin-left:auto; display:flex; gap:0.5rem; align-items:center;">
-        <a href="/api/rh/download/modele-contrats.xlsx" class="ctr-model-link" download title="Télécharger le modèle Excel à remplir puis importer">
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          Modèle Excel
-        </a>
+      <div class="ctr-header-actions">
         <!-- Bouton Import -->
         <button class="ctr-import-btn" @click="triggerImport" :disabled="isImporting">
           <svg v-if="!isImporting" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><path d="M12 18v-6"/><path d="m9 15 3 3 3-3"/></svg>
@@ -420,15 +421,25 @@ const importExcel = async (e) => {
 
 <style scoped>
 .contrats-wrapper { padding: 1.5rem; }
-.ctr-header { display:flex;align-items:center;gap:1rem;margin-bottom:1.25rem;padding:1.1rem 1.4rem;background:linear-gradient(135deg,#065f46 0%,#059669 100%);border-radius:14px;color:white; }
+.ctr-header { display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:1.25rem;padding:1.1rem 1.4rem;background:linear-gradient(135deg,#065f46 0%,#059669 100%);border-radius:14px;color:white; }
 .ctr-icon { width:40px;height:40px;background:rgba(255,255,255,0.15);border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0; }
 .ctr-title { margin:0;font-size:1.05rem;font-weight:800; }
 .ctr-sub { margin:0;font-size:0.78rem;opacity:0.8; }
+.ctr-header-actions { margin-left:auto; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; }
 .ctr-add-btn, .ctr-import-btn { display:flex;align-items:center;gap:0.4rem;padding:0.5rem 1rem;background:rgba(255,255,255,0.15);color:white;border:1.5px solid rgba(255,255,255,0.3);border-radius:9px;cursor:pointer;font-weight:700;font-size:0.82rem;white-space:nowrap; transition:all 0.15s; }
 .ctr-add-btn:hover, .ctr-import-btn:hover { background: rgba(255,255,255,0.25); }
 .ctr-import-btn:disabled { opacity:0.5; cursor:not-allowed; }
-.ctr-model-link { display:flex;align-items:center;gap:0.4rem;padding:0.5rem 0.85rem;color:white;text-decoration:underline;font-weight:600;font-size:0.8rem;white-space:nowrap;opacity:0.9; }
-.ctr-model-link:hover { opacity:1; }
+.contrats-table { overflow-x:auto; }
+.ct-header, .ct-row { min-width: 640px; }
+
+@media (max-width: 600px) {
+  .contrats-wrapper { padding: 1rem; }
+  .ctr-header { padding: 1rem; gap: 0.75rem; }
+  .ctr-title { font-size: 0.95rem; }
+  .ctr-sub { font-size: 0.72rem; }
+  .ctr-header-actions { margin-left: 0; width: 100%; }
+  .ctr-add-btn, .ctr-import-btn { flex: 1 1 auto; justify-content: center; font-size: 0.78rem; padding: 0.55rem 0.6rem; }
+}
 
 .loader-spinner {
   width: 14px; height: 14px;

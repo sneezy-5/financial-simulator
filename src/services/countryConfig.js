@@ -92,6 +92,27 @@ export const COUNTRIES_CONFIG = {
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// PAYS ACTIFS
+//
+// Le moteur de reproduction de documents est mis au point sur la réglementation
+// ivoirienne : lexique des rubriques, modèles de bulletins, variables de paie.
+// Les autres pays restent implémentés — leurs règles de calcul sont intactes —
+// mais ne sont pas proposés tant qu'ils n'ont pas été éprouvés sur de vrais
+// documents. Proposer une réglementation non validée sur un bulletin officiel
+// serait plus dommageable que de l'annoncer comme à venir.
+//
+// Pour réactiver un pays : l'ajouter ici, rien d'autre à modifier.
+// ══════════════════════════════════════════════════════════════════════════
+export const ACTIVE_COUNTRIES = ['CI']
+
+export function isCountryActive(code) {
+  return ACTIVE_COUNTRIES.includes(code)
+}
+
+/** Libellé affiché sur un pays encore indisponible. */
+export const INACTIVE_LABEL = 'Bientôt disponible'
+
 export function getCountryRules(countryCode = 'CI') {
   return COUNTRIES_CONFIG[countryCode] || COUNTRIES_CONFIG['CI']
 }

@@ -3,6 +3,11 @@ import { ref, computed, onMounted } from 'vue'
 import { localDb } from '../../services/localDatabase.js'
 import { showToast } from '../../services/toast.js'
 import EmployeeSelect from './EmployeeSelect.vue'
+import { droitsConges, calculerAnciennete } from '../../services/soldeToutCompte.js'
+
+const props = defineProps({
+  country: { type: String, default: 'CI' }
+})
 
 // ── Données
 const employees = ref([])
@@ -107,11 +112,22 @@ const absencesForDay = (day) => {
 const typeInfo = (typeId) => TYPES_CONGES.find(t => t.id === typeId) || { color: '#64748b', label: typeId }
 
 // ── Soldes par employé (congés annuels)
+//
+// Base légale 2,2 j/mois (26,4 j/an), majorée selon l'ancienneté (Code du
+// Travail ivoirien) — un salarié de 12 ans acquiert plus que 26 jours, un
+// solde figé n'aurait fait que sous-déclarer son droit. Réservé à la CI :
+// on n'a pas de barème vérifié pour les autres pays de ce module.
 const soldesConges = computed(() => {
   return employees.value.map(emp => {
-    const droits = 26
     const pris = absences.value.filter(a => a.employeeId === emp.id && a.type === 'annuel')
       .reduce((sum, a) => sum + (a.jours || 0), 0)
+
+    let droits = 26
+    if (props.country === 'CI' && emp.date_embauche) {
+      const anciennete = calculerAnciennete(emp.date_embauche, new Date())
+      droits = droitsConges({ moisService: 12, anneesAnciennete: anciennete.annees, joursDejaPris: 0 }).joursAcquis
+    }
+
     const restant = Math.max(0, droits - pris)
     return { emp, droits, pris, restant }
   })
@@ -119,15 +135,9 @@ const soldesConges = computed(() => {
 
 // ── Filtre par employé dans la liste
 const filterEmployee = ref('')
-const listEmpSearch = ref('')
-const listFilteredEmployees = computed(() => {
-  const q = listEmpSearch.value.toLowerCase()
-  if (!q) return employees.value
-  return employees.value.filter(e => 
-    (e.nom && e.nom.toLowerCase().includes(q)) || 
-    (e.prenom && e.prenom.toLowerCase().includes(q))
-  )
-})
+const handleFilterEmployeeSelect = (e) => {
+  filterEmployee.value = e ? e.id : ''
+}
 
 const filteredAbsences = computed(() => {
   if (!filterEmployee.value) return absences.value
@@ -236,7 +246,7 @@ const formatDate = (d) => {
           <span v-if="day" class="cal-date">{{ day }}</span>
           <div v-if="day" class="cal-events">
             <div v-for="abs in absencesForDay(day)" :key="abs.id" class="cal-event" :style="{ background: typeInfo(abs.type).color + '22', color: typeInfo(abs.type).color, borderLeft: `3px solid ${typeInfo(abs.type).color}` }" :title="`${abs.employeNom} — ${typeInfo(abs.type).label}`">
-              {{ abs.employeNom.split(' ')[0] }}
+              {{ (abs.employeNom || 'Inconnu').split(' ')[0] }}
             </div>
           </div>
         </div>
@@ -252,17 +262,15 @@ const formatDate = (d) => {
     <!-- LISTE -->
     <div v-if="activeTab==='list'" class="list-section">
       <div style="display:flex;align-items:flex-start;gap:0.75rem;margin-bottom:0.85rem;flex-wrap:wrap;">
-        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; width:280px;">
-          <div style="padding: 0.4rem; border-bottom: 1px solid #e2e8f0; background: #f8fafc;">
-            <input type="text" class="fi" style="border:none; box-shadow:none; padding:0.2rem; outline:none;" v-model="listEmpSearch" placeholder="Filtrer les absences par employé..." />
-          </div>
-          <div style="max-height: 120px; overflow-y: auto;">
-            <div class="emp-search-item" :class="{active: filterEmployee === ''}" @click="filterEmployee = ''">
-              — Tous les employés —
-            </div>
-            <div v-for="emp in listFilteredEmployees" :key="emp.id" class="emp-search-item" :class="{active: filterEmployee === emp.id}" @click="filterEmployee = emp.id">
-              {{ emp.prenom }} {{ emp.nom }}
-            </div>
+        <div style="width:280px;">
+          <EmployeeSelect
+            :employees="employees"
+            @select="handleFilterEmployeeSelect"
+            placeholder="Filtrer les absences par employé..."
+          />
+          <div v-if="filterEmployee" style="margin-top: 0.4rem; padding: 0.35rem 0.6rem; background: #f8fafc; border-radius: 6px; font-size: 0.76rem; color: #334155; border: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
+            <span><strong>Filtré :</strong> {{ employees.find(e => e.id === filterEmployee)?.prenom }} {{ employees.find(e => e.id === filterEmployee)?.nom }}</span>
+            <button @click="filterEmployee = ''" style="font-size: 0.7rem; color: #64748b; background: none; border: none; cursor: pointer; text-decoration: underline;">Réinitialiser</button>
           </div>
         </div>
         <span style="color:#64748b;font-size:0.82rem;margin-top:0.5rem;">{{ filteredAbsences.length }} enregistrement(s)</span>
@@ -397,12 +405,6 @@ const formatDate = (d) => {
 .sc-stats { display: flex; justify-content: space-between; }
 .sc-stat { font-size: 0.78rem; font-weight: 700; }
 .sc-stat.used { color: #475569; }
-
-.emp-search-item {
-  padding: 0.4rem 0.65rem; font-size: 0.8rem; cursor: pointer; border-bottom: 1px solid #f1f5f9; transition: all 0.1s;
-}
-.emp-search-item:hover { background: #f8fafc; }
-.emp-search-item.active { background: #f3f4f6; border-left: 3px solid #2563eb; font-weight: 600; }
 
 @media (max-width: 600px) {
   .conges-header { flex-direction: column; text-align: center; }

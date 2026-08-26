@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import PayslipSimulator from './PayslipSimulator.vue'
 import SoldeCompteSimulator from './SoldeCompteSimulator.vue'
 import LocalDatabasePanel from './LocalDatabasePanel.vue'
@@ -17,19 +17,13 @@ import { getCountryRules } from '../services/countryConfig.js'
 import { localDb } from '../services/localDatabase.js'
 import { showToast } from '../services/toast.js'
 import { user, fetchMe } from '../services/auth.js'
+import { loadPdfJs, prepareTemplateSource, requestTemplateReconstruction, wrapPreviewHtml } from '../services/templateExtractor.js'
+import { buildPayrollBatch, employeeLabel } from '../services/payrollInput.js'
 
 onMounted(() => {
-  // Load pdf.js dynamically for the visual template editor
-  if (!document.getElementById('pdfjs-lib')) {
-    const script = document.createElement('script')
-    script.id = 'pdfjs-lib'
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
-    script.onload = () => {
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
-    }
-    document.head.appendChild(script)
-  }
+  loadPdfJs().catch(e => console.warn('pdf.js indisponible:', e.message))
   fetchPayrollPeriods()
+  if (user.value?.defaultBulletinStyle) builtinStyle.value = user.value.defaultBulletinStyle
 })
 
 const props = defineProps({
@@ -174,11 +168,38 @@ const error = ref(null)
 const dragOver = ref(false)
 const useLocalDb = ref(false)
 const localEmployees = ref([])
+// Salariés dont la rémunération n'est pas définie : leur bulletin sortirait à
+// zéro. On préfère l'annoncer avant la génération plutôt que sur le PDF.
+const payrollWarnings = ref({ sansContrat: [], sansRemuneration: [] })
 
 // --- CUSTOM TEMPLATE ---
 const pdfCanvas = ref(null)
 const htmlTemplate = ref(null)
 const draggedVar = ref(null)
+// Image haute résolution + couche texte du modèle uploadé (cf. templateExtractor)
+const templateSource = ref(null)
+// Voie réellement employée par le serveur : 'deterministic' (géométrie exacte
+// lue dans le PDF) ou 'ai-vision' (repli pour les documents scannés).
+const lastEngine = ref(null)
+const detectedVariables = ref([])
+// Champs repérés dans le document mais qu'aucune donnée du système ne remplit
+// encore : ils resteront vides sur le bulletin tant qu'ils ne sont pas rattachés.
+const unmappedFields = ref([])
+// Rapport de conformité : le modèle compare le gabarit produit au document
+// d'origine et signale les écarts. Il constate, il ne corrige jamais.
+const conformity = ref(null)
+// Version du moteur d'analyse en vigueur. Un modèle enregistré avec une version
+// antérieure conserve les défauts corrigés depuis : il doit être réanalysé.
+const CURRENT_ENGINE_VERSION = 5
+const staleTemplate = ref(null)
+// La préparation est asynchrone : sans ce drapeau, un clic rapide envoyait
+// une image vierge à l'IA.
+const pdfReady = ref(false)
+// Nombre de passes de correction demandées à l'IA (rendu → comparaison → correctif)
+const aiRefinePasses = ref(1)
+// Style du modèle ONDA intégré (sans rapport avec un modèle PDF/Word importé) :
+// 'classique' (tableau Base/Taux) ou 'grille' (rubriques numérotées 010, 020…).
+const builtinStyle = ref('classique')
 
 const handleFileUpload = (event) => {
   file.value = event.target.files[0]
@@ -191,35 +212,29 @@ const handleTemplateUpload = (e) => {
   if (file) {
     templateFile.value = file
     htmlTemplate.value = null
+    templateSource.value = null
+    pdfReady.value = false
+    lastEngine.value = null
+    detectedVariables.value = []
+    unmappedFields.value = []
+    conformity.value = null
+    aiMappingSuccess.value = false
     
-    if (file.name.toLowerCase().endsWith('.pdf')) {
-      setTimeout(() => renderPdfCanvas(file), 100)
-    }
+    // Le service accepte aussi les scans JPG/PNG (sans couche texte, l'IA
+    // repasse alors en lecture d'image).
+    nextTick(() => renderPdfCanvas(file))
   }
 }
 
-const renderPdfCanvas = (file) => {
-  if (!window.pdfjsLib) {
-    showToast("La librairie PDF est en cours de chargement, veuillez réessayer dans quelques secondes.", 'error')
-    return
+const renderPdfCanvas = async (file) => {
+  try {
+    const source = await prepareTemplateSource(file, pdfCanvas.value)
+    templateSource.value = source
+    pdfReady.value = true
+  } catch (e) {
+    console.error('Lecture du PDF modèle impossible:', e)
+    showToast(e.message || "Ce PDF n'a pas pu être lu.", 'error')
   }
-  
-  const fileReader = new FileReader()
-  fileReader.onload = async function() {
-    const typedarray = new Uint8Array(this.result)
-    const pdf = await window.pdfjsLib.getDocument(typedarray).promise
-    const page = await pdf.getPage(1)
-    
-    const viewport = page.getViewport({ scale: 1.5 })
-    const canvas = pdfCanvas.value
-    if (!canvas) return
-    const context = canvas.getContext('2d')
-    canvas.height = viewport.height
-    canvas.width = viewport.width
-    
-    await page.render({ canvasContext: context, viewport: viewport }).promise
-  }
-  fileReader.readAsArrayBuffer(file)
 }
 
 const onDragStartVar = (event, varName) => {
@@ -254,67 +269,32 @@ const removeMappedVar = (varName) => {
 const aiMappingLoading = ref(false)
 const aiMappingSuccess = ref(false)
 
-const wrappedHtmlTemplate = computed(() => {
-  if (!htmlTemplate.value) return ''
-  return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <script src="https://cdn.tailwindcss.com"><\/script>
-      <style>
-        body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background: white; color: #1f2937; margin: 0; text-align: left; }
-      <\/style>
-    </head>
-    <body class="p-8">
-      ${htmlTemplate.value}
-    </body>
-    </html>
-  `
-})
+const wrappedHtmlTemplate = computed(() => wrapPreviewHtml(htmlTemplate.value))
 
 const autoMapPdf = async () => {
-  if (!pdfCanvas.value) return
-  
+  if (!pdfReady.value || !templateSource.value) {
+    showToast('Le modèle est encore en cours de lecture, patientez un instant.', 'error')
+    return
+  }
+
   aiMappingLoading.value = true
   aiMappingSuccess.value = false
-  
+
   try {
-    const token = localStorage.getItem('auth_token')
-    
-    if (!token) {
-      throw new Error("Vous devez être connecté pour utiliser l'Intelligence Artificielle.")
-    }
-
-    const imageBase64 = pdfCanvas.value.toDataURL('image/jpeg', 0.8)
-
-    const response = await fetch('/api/rh/analyze-pdf-template', {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({ imageBase64 })
-    })
-    
-    const result = await response.json()
-    
-    if (!response.ok) {
-      if (response.status === 402) {
-        throw new Error("Crédits insuffisants. Veuillez recharger votre compte en cliquant sur votre solde en haut à droite.")
-      }
-      throw new Error(result.error || "Erreur lors de l'analyse IA")
-    }
-
-    if (result.htmlTemplate) {
-      htmlTemplate.value = result.htmlTemplate
-      aiMappingSuccess.value = true
-    } else {
-      showToast("Erreur lors de l'analyse : " + (result.error || "Réponse invalide"), 'error')
-    }
+    const result = await requestTemplateReconstruction(
+      templateSource.value,
+      'payslip',
+      aiRefinePasses.value
+    )
+    htmlTemplate.value = result.htmlTemplate
+    lastEngine.value = result.engine
+    detectedVariables.value = result.variables || []
+    unmappedFields.value = result.unmapped || []
+    conformity.value = result.conformity || null
+    aiMappingSuccess.value = true
   } catch (e) {
     console.error(e)
-    showToast("Erreur de connexion au serveur d'IA.", 'error')
+    showToast(e.message || "Erreur de connexion au serveur d'IA.", 'error')
   } finally {
     aiMappingLoading.value = false
   }
@@ -421,7 +401,12 @@ const analyzeFileHeaders = async (sheetOverride = null) => {
   formData.append('file', file.value)
   if (sheetOverride) formData.append('sheetName', sheetOverride)
   try {
-    const res = await fetch('/api/rh/extract-headers', { method: 'POST', body: formData })
+    const token = localStorage.getItem('auth_token')
+    const res = await fetch('/api/rh/extract-headers', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData
+    })
     const data = await res.json()
     if (!data.success) throw new Error(data.error)
     fileHeaders.value = data.headers
@@ -496,11 +481,18 @@ const useLocalDirectory = async () => {
   const defTpl = templates.find(t => t.isDefault && (!t.type || t.type === 'payslip'))
   if (defTpl && defTpl.htmlTemplate) {
     htmlTemplate.value = defTpl.htmlTemplate
+    staleTemplate.value = (defTpl.engineVersion || 0) < CURRENT_ENGINE_VERSION ? defTpl : null
   } else {
     htmlTemplate.value = null
+    staleTemplate.value = null
   }
   
-  localEmployees.value = emps
+  // Le contrat est la source de vérité de la rémunération ; la fiche employé ne
+  // porte que l'identité et la situation personnelle. Sans cette fusion, aucun
+  // montant n'atteignait le moteur de calcul.
+  const batch = buildPayrollBatch(emps, {}, { mois: payrollMois.value, annee: payrollAnnee.value })
+  localEmployees.value = batch.employees
+  payrollWarnings.value = { sansContrat: batch.sansContrat, sansRemuneration: batch.sansRemuneration }
   useLocalDb.value = true
   file.value = { name: `Annuaire Local (${emps.length} employés)` }
   goToImportStep(4)
@@ -533,7 +525,7 @@ const loadSaisieGrid = async () => {
     saisieEmployees.value = emps
     const grid = {}
     emps.forEach(emp => {
-      grid[emp.id] = { heures_sup_nb: 0, absences_jours: 0 }
+      grid[emp.id] = { heures_sup_nb: 0, heures_sup_nuit: 0, heures_sup_ferie_jour: 0, heures_sup_ferie_nuit: 0, absences_jours: 0 }
     })
     saisieGrid.value = grid
   } finally {
@@ -577,7 +569,12 @@ const importPresenceFile = async (event) => {
   try {
     const formData = new FormData()
     formData.append('file', file)
-    const res = await fetch('/api/rh/extract-data', { method: 'POST', body: formData })
+    const token = localStorage.getItem('auth_token')
+    const res = await fetch('/api/rh/extract-data', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData
+    })
     const data = await res.json()
     if (!data.success) throw new Error(data.error || "Erreur de lecture du fichier")
 
@@ -595,10 +592,14 @@ const importPresenceFile = async (event) => {
         if (mat) unmatched++
         return
       }
-      const current = saisieGrid.value[empId] || { heures_sup_nb: 0, absences_jours: 0 }
+      const current = saisieGrid.value[empId] || { heures_sup_nb: 0, heures_sup_nuit: 0, heures_sup_ferie_jour: 0, heures_sup_ferie_nuit: 0, absences_jours: 0 }
+      const reprendre = (champ) => row[champ] !== undefined && row[champ] !== '' ? parseFloat(row[champ]) : current[champ]
       saisieGrid.value[empId] = {
-        heures_sup_nb: row.heures_sup_nb !== undefined && row.heures_sup_nb !== '' ? parseFloat(row.heures_sup_nb) : current.heures_sup_nb,
-        absences_jours: row.absences_jours !== undefined && row.absences_jours !== '' ? parseFloat(row.absences_jours) : current.absences_jours,
+        heures_sup_nb: reprendre('heures_sup_nb'),
+        heures_sup_nuit: reprendre('heures_sup_nuit'),
+        heures_sup_ferie_jour: reprendre('heures_sup_ferie_jour'),
+        heures_sup_ferie_nuit: reprendre('heures_sup_ferie_nuit'),
+        absences_jours: reprendre('absences_jours'),
         ...(row.jours_travailles !== undefined && row.jours_travailles !== '' ? { jours_travailles: parseFloat(row.jours_travailles) } : {})
       }
       matched++
@@ -624,10 +625,13 @@ const generateFromSaisie = async () => {
   const defTpl = templates.find(t => t.isDefault && (!t.type || t.type === 'payslip'))
   htmlTemplate.value = (defTpl && defTpl.htmlTemplate) ? defTpl.htmlTemplate : null
 
-  localEmployees.value = saisieEmployees.value.map(emp => ({
-    ...emp,
-    ...saisieGrid.value[emp.id]
-  }))
+  const batchSaisie = buildPayrollBatch(
+    saisieEmployees.value,
+    saisieGrid.value,
+    { mois: payrollMois.value, annee: payrollAnnee.value }
+  )
+  localEmployees.value = batchSaisie.employees
+  payrollWarnings.value = { sansContrat: batchSaisie.sansContrat, sansRemuneration: batchSaisie.sansRemuneration }
   useLocalDb.value = true
   file.value = { name: `Saisie Mensuelle (${saisieEmployees.value.length} employés)` }
 
@@ -918,8 +922,19 @@ const processPayroll = async () => {
   if (templateFile.value) {
     formData.append('template', templateFile.value)
   }
+  
   if (htmlTemplate.value) {
     formData.append('htmlTemplate', htmlTemplate.value)
+  } else {
+    // Si c'est un modèle de la db locale qui est DOCX, on envoie son base64
+    const templates = await localDb.getTemplates()
+    const defTpl = templates.find(t => t.isDefault && (!t.type || t.type === 'payslip'))
+    if (defTpl && defTpl.isDocx && defTpl.fileBase64) {
+      formData.append('docxTemplateBase64', defTpl.fileBase64)
+    }
+    // Le style ne s'applique qu'au modèle ONDA intégré, jamais à un modèle
+    // personnalisé (htmlTemplate/docx ci-dessus).
+    if (builtinStyle.value !== 'classique') formData.append('templateStyle', builtinStyle.value)
   }
   const activeLeaves = leaveCandidates.value.filter(c => c.goesOnLeave)
   if (activeLeaves.length > 0) {
@@ -929,8 +944,16 @@ const processPayroll = async () => {
   formData.append('mois', payrollMois.value)
   formData.append('annee', payrollAnnee.value)
 
+  // Le profil entreprise (raison sociale, n° CNPS employeur...) vient des
+  // paramètres, jamais des employés : sans lui, le serveur devait deviner
+  // l'employeur à partir du premier salarié du lot, et son numéro CNPS
+  // PERSONNEL se retrouvait imprimé comme numéro CNPS de l'ENTREPRISE sur
+  // tous les bulletins générés.
+  const entreprise = await localDb.getSetting('entreprise', null)
+  if (entreprise) formData.append('entreprise', JSON.stringify(entreprise))
+
   try {
-    const response = await fetch('/api/rh/generate-pay-slips', { 
+    const response = await fetch('/api/rh/generate-pay-slips', {
       method: 'POST', 
       headers: {
         'Authorization': `Bearer ${token}`
@@ -998,6 +1021,40 @@ const processPayroll = async () => {
     error.value = e.message
   } finally {
     uploading.value = false
+  }
+}
+
+// Le ZIP de bulletins contient des données personnelles réelles (salaires,
+// N° CNPS, RIB) — /api/rh/download/:filename exige désormais d'être connecté
+// et d'en être le propriétaire, donc un simple lien <a href> ne suffit plus
+// (il ne peut pas porter l'en-tête Authorization). On télécharge via fetch et
+// on déclenche l'enregistrement nous-mêmes.
+const downloadingZip = ref(false)
+const downloadZip = async (zipUrl) => {
+  if (!zipUrl || downloadingZip.value) return
+  downloadingZip.value = true
+  try {
+    const token = localStorage.getItem('auth_token')
+    const response = await fetch(zipUrl, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    })
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.error || 'Erreur lors du téléchargement')
+    }
+    const blob = await response.blob()
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = zipUrl.split('/').pop() || 'bulletins.zip'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(objectUrl)
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    downloadingZip.value = false
   }
 }
 
@@ -1422,7 +1479,7 @@ const activeModuleDetails = computed(() => {
     <template v-if="activeModule">
 
       <!-- ════ MODULE SIMULATION ════ -->
-      <div v-if="activeModule === 'simulation'" class="animate-in">
+      <div v-if="activeModule === 'simulation'" class="hr-module-view animate-in">
         <div class="module-content no-pad">
           <PayslipSimulator 
             :initialType="simulationType" 
@@ -1435,7 +1492,7 @@ const activeModuleDetails = computed(() => {
       </div>
 
       <!-- ════ MODULE IMPORT ════ -->
-      <div v-if="activeModule === 'import'" class="module-content animate-in">
+      <div v-if="activeModule === 'import'" class="module-content hr-module-view animate-in">
 
         <!-- Step indicator -->
         <div class="import-stepper">
@@ -1659,14 +1716,31 @@ const activeModuleDetails = computed(() => {
             </div>
             <div>
               <strong>Modèle de bulletin personnalisé <span class="optional-badge">Optionnel</span></strong>
-              <p>Uploadez votre propre modèle de bulletin (PDF). L'IA analysera automatiquement la structure en arrière-plan pour y insérer les données.</p>
+              <p>Uploadez votre propre modèle de bulletin (PDF). Sa mise en page est reproduite à l'identique ; seuls les champs que nous reconnaissons (les mêmes que sur nos bulletins par défaut) sont remplacés par vos données. Le reste du modèle reste tel quel.</p>
             </div>
+          </div>
+
+          <div v-if="!templateFile" class="builtin-style-picker">
+            <label>Style du modèle ONDA (si vous n'importez pas de PDF ci-dessous) :</label>
+            <select v-model="builtinStyle">
+              <option value="classique">Classique (Base / Taux)</option>
+              <option value="grille">Grille numérotée (010, 020… — P.S / P.P)</option>
+              <option value="compact">Compact (une seule colonne)</option>
+              <option value="ondaclassic"> Onda classic(charges patronales séparées)</option>
+              <option value="bancaire">Reçu bancaire (gains / retenues côte à côte)</option>
+              <option value="moderne">Moderne (cartes colorées)</option>
+              <option value="lavandiere">Congés détaillés (Acquis/Reste/Pris)</option>
+              <option value="adArchitecture">Cumuls annuels (billetage espèces)</option>
+              <option value="tcmLogistic">Grille patronale détaillée (Retenue +/-)</option>
+              <option value="scaso">SCASO (noir et blanc, cachet et signature)</option>
+              <option value="personnalise">Personnalisé (votre couleur — Paramètres)</option>
+            </select>
           </div>
 
           <div class="template-zone">
             <div v-if="!templateFile" class="template-empty">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-              <span>Ajouter un modèle de bulletin (.pdf)</span>
+              <span>Ajouter un modèle de bulletin (PDF)</span>
               <input type="file" accept=".pdf" @change="handleTemplateUpload" />
             </div>
             
@@ -1681,20 +1755,68 @@ const activeModuleDetails = computed(() => {
 
           <!-- Actions de l'IA (après upload) -->
           <div class="ai-processing-zone" v-if="templateFile">
-            <button class="btn-ai-automap" style="width: 100%; justify-content: center;" @click="autoMapPdf" v-if="!aiMappingLoading && !htmlTemplate">
+            <div v-if="!aiMappingLoading" class="fidelity-picker">
+              <label>Fidélité de la reproduction (PDF scanné uniquement)</label>
+              <select v-model.number="aiRefinePasses">
+                <option :value="0">Rapide — 1 passe (~15 s)</option>
+                <option :value="1">Fidèle — 2 passes (~40 s)</option>
+                <option :value="2">Maximale — 3 passes (~70 s)</option>
+              </select>
+              <small>Sans texte détectable (scan), le modèle est reconstruit depuis l'image et affiné à chaque passe. Avec un PDF normal, l'analyse est directe et ce réglage ne s'applique pas.</small>
+            </div>
+
+            <button class="btn-ai-automap" style="width: 100%; justify-content: center;" @click="autoMapPdf" v-if="!aiMappingLoading && !htmlTemplate" :disabled="!pdfReady">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h4l3-9 5 18 3-9h5"/></svg>
-              Lancer la Reconstruction IA (HTML to PDF)
+              Analyser le modèle
             </button>
-            
+
             <div v-if="aiMappingLoading" class="flex-center gap-2" style="padding: 1rem; color: #6b7280;">
               <svg class="spin" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-              L'IA réécrit complètement votre bulletin de paie en HTML... (peut prendre 10-15s)
+              Analyse du modèle en cours...
             </div>
 
             <div v-if="aiMappingSuccess && htmlTemplate" class="ai-success-toast animate-in" style="margin-bottom: 1rem; background: #ecfdf5; color: #059669; border: 1px solid #10b981; padding: 1rem; border-radius: 8px; display: flex; align-items: center; gap: 0.5rem; justify-content: center;">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-              Bulletin reconstruit avec succès ! (Aperçu brut ci-dessous)
+              <span v-if="lastEngine === 'deterministic'">
+                Reproduit à l'identique depuis la géométrie du PDF.
+                <template v-if="detectedVariables.length"> {{ detectedVariables.length }} variable(s) détectée(s).</template>
+              </span>
+              <span v-else>Bulletin reconstruit de façon approximative (document scanné). Vérifiez l'aperçu.</span>
             </div>
+            <div v-if="conformity" class="conformity-notice" :class="conformity.verdict">
+              <strong v-if="conformity.verdict === 'identique'">Contrôle de conformité : reproduction jugée fidèle</strong>
+              <strong v-else-if="conformity.verdict === 'indisponible'">Contrôle de conformité non concluant</strong>
+              <strong v-else>Contrôle de conformité : {{ conformity.ecarts.length }} écart(s) relevé(s)</strong>
+              <p v-if="conformity.raison">{{ conformity.raison }}</p>
+              <ul v-if="conformity.ecarts.length">
+                <li v-for="(e, i) in conformity.ecarts" :key="i">
+                  <span class="gravite" :class="e.gravite">{{ e.gravite }}</span>
+                  <strong>{{ e.zone }}</strong> — {{ e.probleme }}
+                </li>
+              </ul>
+              <p v-if="conformity.valeursOubliees && conformity.valeursOubliees.length">
+                Valeurs restées figées : {{ conformity.valeursOubliees.join(' · ') }}
+              </p>
+              <p v-if="conformity.textesEfaces && conformity.textesEfaces.length" class="grave">
+                Mentions effacées à tort : {{ conformity.textesEfaces.join(' · ') }}
+              </p>
+            </div>
+
+            <div v-if="unmappedFields.length" class="unmapped-notice">
+              <strong>{{ unmappedFields.length }} champ(s) repéré(s) sans donnée associée</strong>
+              <p>Ces emplacements sont bien reconnus dans votre modèle, mais le système ne sait pas encore quoi y mettre. Ils resteront vides.</p>
+              <ul>
+                <li v-for="f in unmappedFields" :key="f.variable">
+                  <span class="unmapped-label">{{ f.label || f.variable }}</span>
+                  <span class="unmapped-sample" v-if="f.samples && f.samples.length">ex. {{ f.samples[0] }}</span>
+                </li>
+              </ul>
+            </div>
+
+            <button v-if="htmlTemplate && !aiMappingLoading" class="btn-ai-automap" style="width: 100%; justify-content: center; margin-top: 0.75rem;" @click="autoMapPdf">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+              Relancer la reconstruction
+            </button>
             <iframe v-if="htmlTemplate" :srcdoc="wrappedHtmlTemplate" style="width: 100%; height: 500px; border: 1px solid #e5e7eb; border-radius: 8px; background: white; margin-top: 1rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);"></iframe>
           </div>
 
@@ -1767,6 +1889,34 @@ const activeModuleDetails = computed(() => {
 
         <!-- Étape 5: Lancement -->
         <div v-if="importStep === 5" class="import-step-content animate-in">
+          <div v-if="staleTemplate" class="payroll-warning stale">
+            <strong>Le modèle « {{ staleTemplate.name || 'par défaut' }} » a été analysé par une version antérieure</strong>
+            <p>
+              Un gabarit est figé au moment de son analyse. Celui-ci conserve donc les
+              défauts corrigés depuis — libellés manquants, rubriques non remplies.
+              Réanalysez-le depuis <em>Paramètres → Modèles</em> pour en bénéficier.
+            </p>
+          </div>
+
+          <div v-if="payrollWarnings.sansRemuneration.length" class="payroll-warning">
+            <strong>{{ payrollWarnings.sansRemuneration.length }} salarié(s) sans rémunération définie</strong>
+            <p>
+              Leur bulletin sortira à zéro. La rémunération se saisit dans le
+              <em>contrat</em> (salaire de base, sursalaire, primes) — la fiche employé ne
+              porte que l'identité, la situation matrimoniale et le numéro CNPS.
+            </p>
+            <ul>
+              <li v-for="e in payrollWarnings.sansRemuneration.slice(0, 8)" :key="e.id">
+                {{ employeeLabel(e) }}
+                <span v-if="e._sansContrat" class="warn-tag">aucun contrat</span>
+                <span v-else class="warn-tag">contrat sans salaire</span>
+              </li>
+            </ul>
+            <p v-if="payrollWarnings.sansRemuneration.length > 8" class="warn-more">
+              … et {{ payrollWarnings.sansRemuneration.length - 8 }} autre(s).
+            </p>
+          </div>
+
           <div class="launch-summary">
             <div class="summary-row">
               <span class="summary-label">Fichier de données</span>
@@ -1797,11 +1947,12 @@ const activeModuleDetails = computed(() => {
             <div class="result-text">
               <h4>Bulletins générés !</h4>
               <p>{{ result.message }}</p>
+              <p style="font-size: 0.82rem; color: #64748b; margin-top: 4px;">Le ZIP contient un bulletin PDF par salarié, plus un état de paie récapitulatif au format Excel.</p>
             </div>
-            <a :href="result.zipUrl" class="btn-download" download target="_blank">
+            <button type="button" class="btn-download" :disabled="downloadingZip" @click="downloadZip(result.zipUrl)">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              Télécharger le ZIP
-            </a>
+              {{ downloadingZip ? 'Téléchargement...' : 'Télécharger le ZIP (PDF + Excel)' }}
+            </button>
             <button class="btn-restart" @click="file = null; templateFile = null; result = null; fileHeaders = []; columnMapping = {}; sheetNames = []; selectedSheet = null; showSheetPicker = false; aiMappingUsed = false; goToImportStep(1)">
               Recommencer
             </button>
@@ -1823,12 +1974,12 @@ const activeModuleDetails = computed(() => {
       </div>
 
       <!-- ════ MODULE SOLDE ════ -->
-      <div v-if="activeModule === 'solde'" class="module-content no-pad animate-in">
+      <div v-if="activeModule === 'solde'" class="module-content hr-module-view no-pad animate-in">
         <SoldeCompteSimulator :country="country" />
       </div>
 
       <!-- ════ MODULE SAISIE MENSUELLE ════ -->
-      <div v-if="activeModule === 'saisie'" class="module-content animate-in">
+      <div v-if="activeModule === 'saisie'" class="module-content hr-module-view animate-in">
         <div class="import-intro" style="margin-bottom: 1.25rem;">
           <div class="intro-icon-wrap" style="background: #fffbeb;">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -1928,13 +2079,13 @@ const activeModuleDetails = computed(() => {
           </div>
           <div v-if="result && result.success" class="billing-alert alert-success" style="margin-top: 1rem; padding: 0.85rem 1rem; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; color: #059669;">
             {{ result.message }}
-            <a :href="result.zipUrl" download style="display: block; margin-top: 0.5rem; font-weight: 700;">Télécharger le ZIP</a>
+            <button type="button" :disabled="downloadingZip" @click="downloadZip(result.zipUrl)" style="display: block; margin-top: 0.5rem; font-weight: 700; background: none; border: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer;">{{ downloadingZip ? 'Téléchargement...' : 'Télécharger le ZIP (PDF + Excel)' }}</button>
           </div>
         </div>
       </div>
 
       <!-- ════ MODULE STATISTIQUES EMPLOYÉ ════ -->
-      <div v-if="activeModule === 'stats'" class="module-content animate-in">
+      <div v-if="activeModule === 'stats'" class="module-content hr-module-view animate-in">
         <div class="import-intro" style="margin-bottom: 1.25rem;">
           <div class="intro-icon-wrap" style="background: #eff6ff;">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"><path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/></svg>
@@ -2050,7 +2201,7 @@ const activeModuleDetails = computed(() => {
       </div>
 
       <!-- ════ MODULE ANALYTIQUE RH ENTREPRISE ════ -->
-      <div v-if="activeModule === 'analytics_entreprise'" class="module-content animate-in">
+      <div v-if="activeModule === 'analytics_entreprise'" class="module-content hr-module-view animate-in">
         <div class="import-intro" style="margin-bottom: 1.25rem;">
           <div class="intro-icon-wrap" style="background: #eef2ff;">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
@@ -2222,52 +2373,52 @@ const activeModuleDetails = computed(() => {
       </div>
 
       <!-- ════ MODULE BASE LOCALE ════ -->
-      <div v-if="activeModule === 'local_db'" class="module-content animate-in">
+      <div v-if="activeModule === 'local_db'" class="module-content hr-module-view animate-in">
         <LocalDatabasePanel :country="props.country" />
       </div>
 
       <!-- ════ MODULE ANNUAIRE EMPLOYÉS ════ -->
-      <div v-if="activeModule === 'directory'" class="module-content animate-in">
+      <div v-if="activeModule === 'directory'" class="module-content hr-module-view animate-in">
         <EmployeeDirectory :country="props.country" />
       </div>
 
       <!-- ════ MODULE PARAMÈTRES ════ -->
-      <div v-if="activeModule === 'settings'" class="module-content animate-in">
+      <div v-if="activeModule === 'settings'" class="module-content hr-module-view animate-in">
         <SettingsPanel :country="props.country" @change-country="(c) => emit('change-country', c)" />
       </div>
 
       <!-- ════ MODULE GÉNÉRATEUR DE DOCUMENTS ════ -->
-      <div v-if="activeModule === 'documents'" class="module-content no-pad animate-in">
+      <div v-if="activeModule === 'documents'" class="module-content hr-module-view no-pad animate-in">
         <DocumentsGenerator :country="props.country" />
       </div>
 
       <!-- ════ MODULE ABSENCES & CONGÉS ════ -->
-      <div v-if="activeModule === 'conges'" class="module-content no-pad animate-in">
+      <div v-if="activeModule === 'conges'" class="module-content hr-module-view no-pad animate-in">
         <CongesManager :country="props.country" />
       </div>
 
       <!-- ════ MODULE CONTRATS & ALERTES ════ -->
-      <div v-if="activeModule === 'contrats'" class="module-content no-pad animate-in">
+      <div v-if="activeModule === 'contrats'" class="module-content hr-module-view no-pad animate-in">
         <ContratsManager :country="props.country" />
       </div>
 
       <!-- ════ MODULE ÉVALUATIONS ════ -->
-      <div v-if="activeModule === 'evaluations'" class="module-content no-pad animate-in">
+      <div v-if="activeModule === 'evaluations'" class="module-content hr-module-view no-pad animate-in">
         <EvaluationsManager :country="props.country" />
       </div>
 
       <!-- ════ MODULE FORMATIONS & COMPÉTENCES ════ -->
-      <div v-if="activeModule === 'formations'" class="module-content no-pad animate-in">
+      <div v-if="activeModule === 'formations'" class="module-content hr-module-view no-pad animate-in">
         <FormationsManager :country="props.country" />
       </div>
 
       <!-- ════ MODULE PLANNING HEBDOMADAIRE ════ -->
-      <div v-if="activeModule === 'planning'" class="module-content no-pad animate-in">
+      <div v-if="activeModule === 'planning'" class="module-content hr-module-view no-pad animate-in">
         <PlanningManager :country="props.country" />
       </div>
 
       <!-- ════ MODULE TABLEAU DE BORD ════ -->
-      <div v-if="activeModule === 'dashboard'" class="module-content no-pad animate-in">
+      <div v-if="activeModule === 'dashboard'" class="module-content hr-module-view no-pad animate-in">
         <DashboardManager />
       </div>
 
@@ -2277,6 +2428,98 @@ const activeModuleDetails = computed(() => {
 </template>
 
 <style scoped>
+.conformity-notice {
+  margin-top: 1rem;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 0.8rem;
+}
+.conformity-notice.identique { background: #ecfdf5; border-color: #6ee7b7; color: #065f46; }
+.conformity-notice.ecarts_majeurs { background: #fef2f2; border-color: #fca5a5; color: #7f1d1d; }
+.conformity-notice strong { font-size: 0.85rem; }
+.conformity-notice p { margin: 6px 0 0; line-height: 1.5; }
+.conformity-notice p.grave { font-weight: 600; }
+.conformity-notice ul { margin: 8px 0 0; padding-left: 18px; }
+.conformity-notice li { margin-bottom: 3px; line-height: 1.45; }
+.gravite {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  background: #e2e8f0;
+}
+.gravite.moyenne { background: #fed7aa; }
+.gravite.haute { background: #fecaca; }
+
+.payroll-warning {
+  margin-bottom: 1rem;
+  padding: 14px 16px;
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  border-radius: 8px;
+  color: #7f1d1d;
+}
+.payroll-warning strong { font-size: 0.88rem; }
+.payroll-warning p { margin: 6px 0 8px; font-size: 0.78rem; line-height: 1.5; }
+.payroll-warning ul { margin: 0; padding-left: 18px; }
+.payroll-warning li { font-size: 0.8rem; margin-bottom: 3px; }
+.warn-tag {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #fee2e2;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.warn-more { margin: 6px 0 0; font-style: italic; }
+.payroll-warning.stale {
+  background: #fffbeb;
+  border-color: #fcd34d;
+  color: #78350f;
+}
+
+.unmapped-notice {
+  margin-top: 1rem;
+  padding: 12px 14px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  color: #78350f;
+}
+.unmapped-notice strong { font-size: 0.85rem; }
+.unmapped-notice p { margin: 4px 0 8px; font-size: 0.75rem; line-height: 1.4; }
+.unmapped-notice ul { margin: 0; padding-left: 18px; }
+.unmapped-notice li { font-size: 0.78rem; margin-bottom: 2px; }
+.unmapped-label { font-weight: 600; }
+.unmapped-sample { color: #92400e; margin-left: 6px; font-size: 0.72rem; }
+
+.fidelity-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 1rem;
+  padding: 12px 14px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+.fidelity-picker label { font-size: 0.8rem; font-weight: 600; color: #374151; }
+.fidelity-picker select {
+  padding: 8px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: #fff;
+  color: #111827;
+}
+.fidelity-picker small { font-size: 0.72rem; color: #6b7280; line-height: 1.4; }
+
 .hr-wrapper {
   background: #f8fafc;
   border-radius: 16px;
@@ -2287,6 +2530,27 @@ const activeModuleDetails = computed(() => {
   position: relative;
   display: flex;
   flex-direction: column;
+}
+
+/* En dessous de 900px, .desktop-bg gère déjà son propre défilement interne
+ * (overflow-y: auto). Avec .hr-wrapper en simple flux de page (min-height),
+ * la page elle-même peut aussi défiler dès que le contenu dépasse 85vh : deux
+ * zones de scroll imbriquées se disputent alors le geste tactile, et la
+ * première carte reste coincée à moitié sous l'en-tête fixe (.hr-page-header,
+ * 64px). En figeant .hr-wrapper entre l'en-tête et la barre des tâches, il ne
+ * reste qu'une seule zone défilante — celle de .desktop-bg.
+ */
+@media (max-width: 900px) {
+  .hr-wrapper {
+    position: fixed;
+    top: 64px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    min-height: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
 }
 
 /* ══════════════════════════════════════════
@@ -2306,6 +2570,20 @@ const activeModuleDetails = computed(() => {
   overflow-y: auto;
   overflow-x: hidden;
   padding: 2rem;
+}
+
+/* .desktop-bg centre son contenu (justify-content: center) pour l'aspect
+ * "bureau" sur grand écran. Mais quand le contenu dépasse la hauteur
+ * disponible — la liste de modules sur mobile — un flex centré déborde de
+ * façon symétrique des deux côtés, et le début de la liste (la carte
+ * "Import en Masse") se retrouve repoussé dans un décalage négatif que
+ * scrollTop ne peut pas atteindre : la carte reste inaccessible, quel que
+ * soit le sens du scroll. En alignant au début, tout redevient atteignable
+ * par un simple défilement vers le bas. */
+@media (max-width: 900px) {
+  .desktop-bg {
+    justify-content: flex-start;
+  }
 }
 
 /* Animated Ambient Shapes */
@@ -2827,14 +3105,16 @@ const activeModuleDetails = computed(() => {
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* Ensure active modules take remaining space above taskbar */
-.module-content, .sim-type-chooser, .hr-home-intro {
-  margin-bottom: 48px; /* space for taskbar */
-  position: relative;
-  z-index: 2;
-}
-.hr-wrapper > template > div {
-  height: calc(100% - 48px);
+/* Ensure active modules take remaining space above taskbar and can scroll.
+ * `.hr-wrapper` clips overflow and — on mobile — is pinned to the exact
+ * viewport slice between the header and the taskbar (see its rule above),
+ * so each module view must own its own scroll region rather than relying on
+ * outer page scroll (previously targeted via the invalid selector
+ * `.hr-wrapper > template > div`, which never matches: Vue's `<template
+ * v-if>` doesn't render an actual DOM node, so its children land as direct
+ * children of `.hr-wrapper` and that rule silently applied to nothing). */
+.hr-module-view {
+  height: calc(100% - 48px); /* space for taskbar */
   overflow-y: auto;
   position: relative;
   z-index: 2;
@@ -3502,6 +3782,8 @@ const activeModuleDetails = computed(() => {
 .file-remove.small { padding: 0.1rem; }
 
 /* TEMPLATE */
+.builtin-style-picker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; font-size: 0.85rem; color: #475569; }
+.builtin-style-picker select { border: 1px solid #e2e8f0; border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.85rem; color: #334155; background: white; }
 .template-zone { border: 1.5px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
 .template-empty { display: flex; align-items: center; gap: 0.5rem; padding: 0.75rem 1rem; background: #f8fafc; cursor: pointer; color: #2563eb; font-weight: 600; font-size: 0.875rem; position: relative; transition: background 0.2s; }
 .template-empty:hover { background: #eff6ff; }
@@ -3708,8 +3990,9 @@ const activeModuleDetails = computed(() => {
 .result-text { flex: 1; min-width: 150px; }
 .result-text h4 { margin: 0 0 0.2rem; font-size: 0.95rem; }
 .result-text p { margin: 0; font-size: 0.8rem; opacity: 0.8; }
-.btn-download { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.6rem 1.25rem; background: #16a34a; color: white; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 0.85rem; transition: background 0.2s; }
+.btn-download { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.6rem 1.25rem; background: #16a34a; color: white; text-decoration: none; border: none; border-radius: 8px; font-weight: 700; font-size: 0.85rem; transition: background 0.2s; cursor: pointer; }
 .btn-download:hover { background: #15803d; }
+.btn-download:disabled { opacity: 0.6; cursor: not-allowed; }
 .btn-restart { background: none; border: none; text-decoration: underline; color: #166534; cursor: pointer; font-size: 0.8rem; }
 .result-error { margin-top: 1.25rem; padding: 1rem; background: #fef2f2; border: 1.5px solid #fecaca; border-radius: 12px; display: flex; align-items: flex-start; gap: 0.75rem; color: #991b1b; }
 .result-error strong { display: block; margin-bottom: 0.2rem; font-size: 0.9rem; }

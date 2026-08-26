@@ -1,0 +1,48 @@
+# Exemple — à fusionner avec le stack.yml existant qui déclare déjà le
+# service Postgres. Le point essentiel : `networks:` doit référencer LE MÊME
+# réseau overlay que Postgres, sinon les deux services ne peuvent pas se voir
+# par leur nom de service.
+#
+# IMPORTANT : `docker stack deploy` (mode Swarm) n'accepte PAS `build:` — ça ne
+# fonctionne qu'avec `docker-compose up` en mode classique. Il faut construire
+# l'image et la pousser vers un registre AVANT de déployer :
+#
+#   docker build -t votre-registre/onda-server:latest .
+#   docker push votre-registre/onda-server:latest
+#   docker stack deploy -c stack.yml <nom_du_stack>
+#
+# Sans registre externe (Docker Hub, GHCR...), le plus simple est de lancer un
+# registre local sur le swarm : `docker service create --name registry --publish
+# 5000:5000 registry:2`, puis `votre-registre` devient `localhost:5000` (ou
+# l'IP du nœud manager, si le build tourne sur une autre machine).
+
+version: "3.8"
+
+services:
+  onda-server:
+    image: votre-registre/onda-server:latest
+    environment:
+      DATABASE_URL: postgres://onda_user:${POSTGRES_PASSWORD}@postgres:5432/onda_prod
+      DB_SSL: "false"
+      JWT_SECRET: ${JWT_SECRET}
+      PAYSTACK_SECRET_KEY: ${PAYSTACK_SECRET_KEY}
+      VITE_PAYSTACK_PUBLIC_KEY: ${VITE_PAYSTACK_PUBLIC_KEY}
+      PAYSTACK_WEBHOOK_SECRET: ${PAYSTACK_WEBHOOK_SECRET}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      VITE_APP_MODE: pro
+    ports:
+      - "3002:3002"          # seul port exposé à l'extérieur — jamais celui de Postgres
+    networks:
+      - mon_reseau            # remplacer par le nom réel du réseau overlay de Postgres
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+networks:
+  mon_reseau:
+    external: true            # le réseau existe déjà (créé avec le stack Postgres)
