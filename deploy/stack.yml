@@ -33,7 +33,7 @@ services:
   ondarh-server:
     image: ${ONDA_IMAGE:-ondarh-server:latest}
     environment:
-      DATABASE_URL: postgres://root:${POSTGRES_PASSWORD}@infra_pgbouncer:6432/onda_rh
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@infra_pgbouncer:6432/onda_rh
       DB_SSL: "false"
       JWT_SECRET: ${JWT_SECRET}
       PAYSTACK_SECRET_KEY: ${PAYSTACK_SECRET_KEY}
