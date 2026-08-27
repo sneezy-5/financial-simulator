@@ -11,9 +11,10 @@ FROM node:20-bookworm-slim
 # /usr/bin/chromium en priorité (findChromeExecutable) avant de retomber sur
 # le Chromium embarqué par Puppeteer. L'installer ici évite un téléchargement
 # au premier démarrage et allège l'image (PUPPETEER_SKIP_DOWNLOAD ci-dessous).
-# python3/make/g++ : @vscode/sqlite3 (server/package.json) n'a pas de binaire
-# précompilé pour cette combinaison d'image et se rabat sur une compilation
-# node-gyp, qui échoue sans ces outils sur une image "slim" minimale.
+# python3/make/g++ : sqlite3 (server/package.json, optionalDependencies) n'a
+# pas toujours de binaire précompilé pour cette combinaison d'image et se
+# rabat alors sur une compilation node-gyp, qui échoue sans ces outils sur
+# une image "slim" minimale.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     fonts-liberation \

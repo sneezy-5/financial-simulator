@@ -16,7 +16,6 @@ if (process.env.DATABASE_URL) {
 } else {
     sequelize = new Sequelize({
         dialect: 'sqlite',
-        dialectModule: require('@vscode/sqlite3'),
         storage: process.env.DB_PATH || path.join(__dirname, 'financial_db.sqlite'),
         logging: false
     });
