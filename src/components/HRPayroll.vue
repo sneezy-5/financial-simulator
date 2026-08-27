@@ -61,6 +61,20 @@ const countryRules = computed(() => getCountryRules(props.country))
 
 const isElectron = /electron/i.test(navigator.userAgent);
 const isPro = computed(() => !!user.value || isElectron)
+const isSimulatorMode = import.meta.env.VITE_APP_MODE === 'simulator'
+const PRO_MODULES = ['simulation', 'simulation_habituel', 'simulation_conges', 'solde', 'import', 'local_db', 'directory', 'settings', 'saisie', 'stats', 'analytics_entreprise', 'conges', 'contrats', 'evaluations', 'formations', 'planning', 'dashboard', 'documents']
+// En build simulateur, seuls ces modules restent joignables — peu importe la
+// connexion (isPro) ou une manipulation d'URL/props (?type=import, etc.) : le
+// reste du RH Pro (annuaire, import, dashboard, paramètres...) reste verrouillé.
+const SIMULATOR_ALLOWED_MODULES = ['simulation', 'simulation_habituel', 'simulation_conges', 'solde']
+const canOpenModule = (modId) => {
+  if (isSimulatorMode) return SIMULATOR_ALLOWED_MODULES.includes(modId)
+  return !PRO_MODULES.includes(modId) || isPro.value
+}
+// Pour l'affichage (badge 🔒, style verrouillé) : en simulateur, seuls les
+// modules hors liste blanche sont "verrouillés" — bulletin/congés/solde ne
+// doivent pas paraître bloqués alors qu'ils sont utilisables sans connexion.
+const isModuleLocked = (modId) => !canOpenModule(modId)
 const enterpriseUrl = import.meta.env.VITE_ENTERPRISE_URL || 'http://localhost:5174/'
 // Vente de licences entreprise mise en pause pour le moment (réactivable en repassant à true)
 const ENTERPRISE_SALES_ENABLED = false
@@ -75,21 +89,18 @@ const activeModule = ref(null)
 const hrWrapperRef = ref(null)
 
 const setModuleSafe = (modVal, typeVal = null) => {
-  const proModules = ['simulation', 'simulation_habituel', 'simulation_conges', 'solde', 'import', 'local_db', 'directory', 'settings', 'saisie', 'stats', 'analytics_entreprise', 'conges', 'contrats', 'evaluations', 'formations', 'planning', 'documents']
   let targetMod = modVal
   let targetType = typeVal
 
-  if (targetMod === 'simulation_habituel') {
+  if (!canOpenModule(modVal)) {
+    targetMod = null
+    targetType = null
+  } else if (targetMod === 'simulation_habituel') {
     targetMod = 'simulation'
     targetType = 'habituel'
   } else if (targetMod === 'simulation_conges') {
     targetMod = 'simulation'
     targetType = 'conges'
-  }
-
-  if (proModules.includes(targetMod) && !isPro.value) {
-    targetMod = null
-    targetType = null
   }
 
   activeModule.value = targetMod
@@ -107,10 +118,13 @@ const toggleStartMenu = () => {
 }
 
 const openModule = (modId) => {
-  const proModules = ['simulation', 'simulation_habituel', 'simulation_conges', 'solde', 'import', 'local_db', 'directory', 'settings', 'saisie', 'stats', 'analytics_entreprise', 'conges', 'contrats', 'evaluations', 'formations', 'planning', 'dashboard', 'documents']
-  if (proModules.includes(modId) && !isPro.value) {
-    showToast("Cette fonctionnalité est réservée aux abonnés ONDA RH Pro. Veuillez vous connecter.", "error")
-    emit('require-auth')
+  if (!canOpenModule(modId)) {
+    if (isSimulatorMode) {
+      showToast("Cette fonctionnalité est réservée à la version ONDA RH Pro.", "error")
+    } else {
+      showToast("Cette fonctionnalité est réservée aux abonnés ONDA RH Pro. Veuillez vous connecter.", "error")
+      emit('require-auth')
+    }
     isStartMenuOpen.value = false
     return
   }
@@ -1136,8 +1150,6 @@ onMounted(() => {
   onUnmounted(() => clearInterval(timeInterval))
 })
 
-const isSimulatorMode = import.meta.env.VITE_APP_MODE === 'simulator'
-
 const modules = computed(() => {
   const allModules = [
   {
@@ -1343,7 +1355,7 @@ const activeModuleDetails = computed(() => {
             v-for="mod in modules" 
             :key="mod.id" 
             class="desktop-shortcut-card"
-            :class="{ 'locked-shortcut': !isPro }"
+            :class="{ 'locked-shortcut': isModuleLocked(mod.id) }"
             @click="openModule(mod.id)"
             :style="{ '--shortcut-color': mod.color }"
           >
@@ -1354,7 +1366,7 @@ const activeModuleDetails = computed(() => {
               <h3>{{ mod.title.split(' (')[0] }}</h3>
               <p>{{ mod.subtitle }}</p>
             </div>
-            <div class="shortcut-badge pro-badge" v-if="!isPro">🔒 PRO</div>
+            <div class="shortcut-badge pro-badge" v-if="isModuleLocked(mod.id)">🔒 PRO</div>
             <div class="shortcut-badge" v-else>{{ mod.badge }}</div>
           </button>
         </div>
@@ -1433,7 +1445,7 @@ const activeModuleDetails = computed(() => {
     <!-- ═══ MENU DÉMARRER (START MENU) ═══ -->
     <div class="start-menu-overlay" v-if="isStartMenuOpen" @click="isStartMenuOpen = false"></div>
     <div class="start-menu" :class="{ 'open': isStartMenuOpen }">
-      <div class="start-menu-sidebar">
+      <div class="start-menu-sidebar" v-if="!isSimulatorMode">
         <button class="sm-sidebar-btn" title="Paramètres" @click="openModule('settings')">
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         </button>
@@ -1445,15 +1457,15 @@ const activeModuleDetails = computed(() => {
             v-for="mod in modules"
             :key="mod.id"
             class="sm-tile"
-            :class="{ 'locked-tile': !isPro }"
-            :style="{ background: !isPro ? '#475569' : mod.color }"
+            :class="{ 'locked-tile': isModuleLocked(mod.id) }"
+            :style="{ background: isModuleLocked(mod.id) ? '#475569' : mod.color }"
             @click="openModule(mod.id)"
           >
             <div class="sm-tile-icon">
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="mod.icon"></svg>
             </div>
             <div class="sm-tile-title">
-              <template v-if="!isPro">🔒 </template>
+              <template v-if="isModuleLocked(mod.id)">🔒 </template>
               {{ mod.title.split(' (')[0] }}
             </div>
           </button>

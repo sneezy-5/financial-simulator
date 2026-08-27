@@ -95,16 +95,13 @@ export const COUNTRIES_CONFIG = {
 // ══════════════════════════════════════════════════════════════════════════
 // PAYS ACTIFS
 //
-// Le moteur de reproduction de documents est mis au point sur la réglementation
-// ivoirienne : lexique des rubriques, modèles de bulletins, variables de paie.
-// Les autres pays restent implémentés — leurs règles de calcul sont intactes —
-// mais ne sont pas proposés tant qu'ils n'ont pas été éprouvés sur de vrais
-// documents. Proposer une réglementation non validée sur un bulletin officiel
-// serait plus dommageable que de l'annoncer comme à venir.
-//
-// Pour réactiver un pays : l'ajouter ici, rien d'autre à modifier.
+// La version PRO (facturée) reste verrouillée sur la Côte d'Ivoire tant que
+// les autres réglementations n'y sont pas éprouvées sur de vrais documents.
+// Le build simulateur (VITE_APP_MODE=simulator), lui, propose tous les pays
+// implémentés.
 // ══════════════════════════════════════════════════════════════════════════
-export const ACTIVE_COUNTRIES = ['CI']
+const isSimulatorMode = import.meta.env.VITE_APP_MODE === 'simulator'
+export const ACTIVE_COUNTRIES = isSimulatorMode ? Object.keys(COUNTRIES_CONFIG) : ['CI']
 
 export function isCountryActive(code) {
   return ACTIVE_COUNTRIES.includes(code)

@@ -151,7 +151,7 @@ const props = defineProps({
   show: Boolean
 })
 
-const emit = defineEmits(['close', 'open-billing'])
+const emit = defineEmits(['close', 'open-billing', 'logout'])
 
 const loading = ref(false)
 const errorMsg = ref('')
@@ -269,6 +269,7 @@ const handleSave = async () => {
 const handleLogout = () => {
   logout()
   emit('close')
+  emit('logout')
 }
 </script>
 

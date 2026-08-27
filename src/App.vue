@@ -91,7 +91,9 @@ const showProfileModal = ref(false)
 
 const handleAuthClose = () => {
   showAuthModal.value = false;
-  if (showHR.value && !user.value) {
+  // En simulateur, la connexion n'est jamais obligatoire pour rester sur la
+  // page RH (bulletin/congés/solde restent utilisables sans compte).
+  if (showHR.value && !user.value && !isSimulatorMode) {
     naviguer('landing');
   }
 }
@@ -147,11 +149,15 @@ onMounted(async () => {
   
   initDeeplink()
   
-  if (user.value && currentModule.value === 'landing' && !urlParams.get('module')) {
+  // En build simulateur, pas de landing marketing (elle vend la version PRO) :
+  // on va directement à l'accueil du simulateur (choix entre modules prêt/RH/outils), connecté ou non.
+  if (isSimulatorMode && currentModule.value === 'landing' && !urlParams.get('module')) {
+    naviguer('home', true)
+  } else if (user.value && currentModule.value === 'landing' && !urlParams.get('module')) {
     naviguer('hr', true)
   }
 
-  if (showHR.value && !isDesktop && !user.value) {
+  if (showHR.value && !isDesktop && !isSimulatorMode && !user.value) {
     showAuthModal.value = true
   }
   // Chargement du profil utilisateur si connecté
@@ -624,10 +630,32 @@ function syncUrlParams() {
 }
 
 function naviguer(module, skipReload = false) {
+  // La landing marketing (vente de la version PRO) n'a pas sa place dans un
+  // build simulateur : tout appel vers 'landing' y retombe sur l'accueil des modules.
+  if (isSimulatorMode && module === 'landing') module = 'home'
   const wasHR = currentModule.value === 'hr';
   const isHR = module === 'hr';
-  
-  if (!skipReload && wasHR !== isHR && currentModule.value !== null) {
+  const prevModule = currentModule.value;
+
+  // Met à jour l'état réactif immédiatement : la vue correcte (ex. landing
+  // après déconnexion) s'affiche tout de suite, sans dépendre du succès/de la
+  // rapidité du rechargement réseau ci-dessous (sinon on reste bloqué sur
+  // l'ancienne page si le reload est lent, intercepté par le service worker, etc.)
+  currentModule.value = module
+  if (module === 'hr') {
+    showHR.value = true
+    // En simulateur, bulletin/congés/solde restent utilisables sans connexion
+    // (voir HRPayroll.vue) — pas besoin d'imposer la modale de connexion ici.
+    if (!isDesktop && !isSimulatorMode && !user.value) {
+      showAuthModal.value = true
+    }
+  } else {
+    showHR.value = false
+  }
+  syncUrlParams()
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+
+  if (!skipReload && wasHR !== isHR && prevModule !== null) {
     // Reload to ensure correct PWA manifest is loaded by the browser
     let newUrl = window.location.pathname + '?module=' + module;
     if (currentCountry.value && currentCountry.value !== 'CI') {
@@ -637,20 +665,7 @@ function naviguer(module, skipReload = false) {
       newUrl += '&source=classic';
     }
     window.location.href = newUrl;
-    return;
   }
-
-  currentModule.value = module
-  if (module === 'hr') { 
-    showHR.value = true
-    if (!isDesktop && !user.value) {
-      showAuthModal.value = true
-    }
-  } else { 
-    showHR.value = false 
-  }
-  syncUrlParams()
-  window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
 const hrInitialModule = ref(null)
@@ -1066,16 +1081,15 @@ const toggleNotifMenu = () => {
                </div>
              </template>
              <template v-else>
-               <a href="https://eonda.online" target="_blank" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; text-decoration: none; font-weight: 700; font-size: 0.75rem; padding: 0.5rem 1.25rem; border-radius: 9999px; display: flex; align-items: center; gap: 0.4rem; box-shadow: 0 4px 12px rgba(16,185,129,0.3); transition: transform 0.2s;">
-                 Découvrir la version PRO
-                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M12 5l7 7-7 7"></path></svg>
-               </a>
+               <span style="background: #cbd5e1; color: #64748b; font-weight: 700; font-size: 0.75rem; padding: 0.5rem 1.25rem; border-radius: 9999px; display: flex; align-items: center; gap: 0.4rem; cursor: not-allowed; user-select: none;" title="Bientôt disponible">
+                 Version PRO — Bientôt
+               </span>
              </template>
           </div>
         </div>
       </div>
       <!-- HR Page Content -->
-      <div class="hr-page-content" v-if="user">
+      <div class="hr-page-content" v-if="user || isSimulatorMode">
         <HRPayroll 
           :country="currentCountry" 
           :initialModule="hrInitialModule" 
@@ -1084,7 +1098,9 @@ const toggleNotifMenu = () => {
           :active-type="hrActiveType" 
           @update:active-module="(val) => hrActiveModule = val"
           @update:active-type="(val) => hrActiveType = val"
-          @change-country="(c) => currentCountry = c" 
+          @change-country="(c) => currentCountry = c"
+          @require-auth="showAuthModal = true"
+          @require-billing="showBillingModal = true"
         />
       </div>
       <div v-else style="min-height: calc(100vh - 60px); display: flex; align-items: center; justify-content: center; background: #f8fafc;">
@@ -1933,10 +1949,11 @@ const toggleNotifMenu = () => {
   <!-- Modals (Auth, Billing, Profile) -->
   <AuthModal :show="showAuthModal" @close="handleAuthClose" />
   <BillingModal :show="showBillingModal" @close="showBillingModal = false" />
-  <ProfileModal 
-    :show="showProfileModal" 
-    @close="showProfileModal = false" 
-    @open-billing="showProfileModal = false; showBillingModal = true" 
+  <ProfileModal
+    :show="showProfileModal"
+    @close="showProfileModal = false"
+    @open-billing="showProfileModal = false; showBillingModal = true"
+    @logout="naviguer('landing')"
   />
 
 </template>
