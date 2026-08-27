@@ -71,6 +71,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-onda-key';
 
 const app = express();
 const PORT = process.env.PORT || 3002;
+const HOST = process.env.HOST || '0.0.0.0';
 
 app.use(cors());
 app.use(express.json({ 
@@ -3378,8 +3379,8 @@ process.on('uncaughtException', (err) => {
     process.exit(1);
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Serveur Backend lancé sur le port ${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`🚀 Serveur Backend lancé sur ${HOST}:${PORT}`);
   console.log(`🔗 URL locale: http://localhost:${PORT}`);
   console.log(`🤖 IA OpenRouter: ${process.env.OPENROUTER_MODEL || 'non configuré (ajoutez .env)'}`);
   

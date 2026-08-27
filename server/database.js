@@ -717,6 +717,20 @@ const isSqlite = sequelize.getDialect() === 'sqlite';
             console.warn('Migration Employees.statutSalarie :', e.message);
         }
 
+        try {
+            const colonnesVisits = await sequelize.getQueryInterface().describeTable('Visits');
+            if (!colonnesVisits.country) {
+                await sequelize.getQueryInterface().addColumn('Visits', 'country', { type: DataTypes.STRING, defaultValue: 'CI' });
+                console.log('🛠️  Colonne Visits.country ajoutée.');
+            }
+            if (!colonnesVisits.clientId) {
+                await sequelize.getQueryInterface().addColumn('Visits', 'clientId', { type: DataTypes.STRING, allowNull: true });
+                console.log('🛠️  Colonne Visits.clientId ajoutée.');
+            }
+        } catch (e) {
+            console.warn('Migration Visits.country/clientId :', e.message);
+        }
+
         console.log('✅ Base de données synchronisée avec succès (alter: true).');
 
         // Auto-seeding d'un administrateur par défaut si aucun n'existe
