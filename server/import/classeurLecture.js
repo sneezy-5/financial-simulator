@@ -38,8 +38,11 @@ const SYNONYMES = {
     matricule: ['matricule', 'id_employe', 'identifiant', 'numero_salarie', 'code'],
     nom: ['nom', 'nom_salarie', 'nom_de_famille'],
     prenom: ['prenom', 'prenoms', 'prenom_s'],
+    genre: ['genre', 'sexe', 'civilite'],
+    date_naissance: ['date_naissance', 'date_de_naissance', 'naissance', 'ne_le', 'nee_le', 'date_naiss'],
     poste: ['poste', 'fonction', 'emploi'],
-    categorie: ['categorie', 'classification', 'categorie_professionnelle'],
+    categorie: ['categorie', 'classification', 'categorie_conventionnelle', 'convention_collective'],
+    categorie_professionnelle: ['categorie_professionnelle', 'college', 'statut_professionnel', 'cadre_ou_employe'],
     date_embauche: ['date_embauche', 'date_entree', 'embauche', 'date_de_recrutement'],
     numero_cnps: ['numero_cnps', 'cnps', 'numero_cnps_salarie', 'matricule_cnps'],
     situation_matrimoniale: ['situation_matrimoniale', 'statut_matrimonial', 'situation_familiale', 'etat_civil'],
@@ -120,6 +123,24 @@ function date(v) {
         return a + '-' + m.padStart(2, '0') + '-' + j.padStart(2, '0');
     }
     return s;
+}
+
+/** « Homme », « H », « M », « Masculin » → 'M' ; « Femme », « F », « Mme » → 'F'. */
+function genre(v) {
+    const s = normaliser(v);
+    if (!s) return '';
+    if (['m', 'h', 'homme', 'masculin', 'mr', 'monsieur'].includes(s)) return 'M';
+    if (['f', 'femme', 'feminin', 'mme', 'madame', 'mlle', 'mademoiselle'].includes(s)) return 'F';
+    return '';
+}
+
+/** « Cadre » → 'cadre' ; « Employé », « Agent », « Ouvrier », « Non-cadre » → 'employe'. */
+function categorieProfessionnelle(v) {
+    const s = normaliser(v);
+    if (!s) return '';
+    if (s.includes('cadre') && !s.includes('non')) return 'cadre';
+    if (['employe', 'agent', 'ouvrier', 'non_cadre', 'noncadre'].some(t => s.includes(t))) return 'employe';
+    return '';
 }
 
 /** « oui », « vrai », 1 → true ; « non », « faux », 0 → false ; vide → défaut. */
@@ -211,8 +232,11 @@ function lireClasseur(XLSX, classeur) {
                 matricule: texte(ligne.matricule),
                 nom: texte(ligne.nom),
                 prenom: texte(ligne.prenom),
+                genre: genre(ligne.genre),
+                date_naissance: date(ligne.date_naissance),
                 poste: texte(ligne.poste),
                 categorie: texte(ligne.categorie),
+                categorie_professionnelle: categorieProfessionnelle(ligne.categorie_professionnelle),
                 telephone: texte(ligne.telephone),
                 date_embauche: date(ligne.date_embauche),
                 numero_cnps: texte(ligne.numero_cnps),

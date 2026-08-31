@@ -167,6 +167,19 @@ const User = sequelize.define('User', {
         type: DataTypes.STRING,
         allowNull: true
     },
+    // Paramètres employeur pour les déclarations réglementaires (CNPS, ITS, FDFP).
+    companyNumeroEmployeur: {
+        type: DataTypes.STRING,
+        allowNull: true // N° employeur CNPS (entête du bordereau) — distinct du n° CNPS établissement
+    },
+    companyTauxAtMp: {
+        type: DataTypes.FLOAT,
+        allowNull: true // Taux CNPS Accident du Travail / Maladie Pro (2 à 5 % selon secteur). Absent → 2 %.
+    },
+    companyCnpsVersementMensuel: {
+        type: DataTypes.BOOLEAN,
+        allowNull: true // true = versement mensuel (≥ 20 salariés), false = trimestriel. null → déduit de l'effectif.
+    },
     // Lequel des modèles de bulletin ONDA intégrés (voir payrollService.js :
     // generatePdfDefinition / generatePdfDefinitionGrilleNumerotee) utiliser par
     // défaut. Absent (null), on retombe sur le modèle classique.
@@ -293,7 +306,26 @@ const PayslipRecord = sequelize.define('PayslipRecord', {
     heuresSupNb: { type: DataTypes.FLOAT, defaultValue: 0 },
     montantHeuresSup: { type: DataTypes.FLOAT, defaultValue: 0 },
     joursTravailles: { type: DataTypes.FLOAT, defaultValue: 0 },
-    absencesJours: { type: DataTypes.FLOAT, defaultValue: 0 }
+    absencesJours: { type: DataTypes.FLOAT, defaultValue: 0 },
+
+    // ── Lot 1 : socle des déclarations sociales/fiscales (CNPS, ITS, FDFP, DISA) ──
+    // Ces colonnes sont VOLONTAIREMENT nullable SANS defaultValue : `null` = donnée
+    // inconnue / non recalculable (bulletin antérieur à leur introduction), à
+    // distinguer d'un vrai 0. Un service de déclaration doit ignorer les `null`,
+    // les compter, et marquer sa sortie « partielle » — jamais les traiter comme 0.
+    brutImposable: { type: DataTypes.FLOAT, allowNull: true },
+    baseCnpsRetraite: { type: DataTypes.FLOAT, allowNull: true },
+    baseCnpsPfAt: { type: DataTypes.FLOAT, allowNull: true },
+    cnEmployeur: { type: DataTypes.FLOAT, allowNull: true },
+    ceEmployeur: { type: DataTypes.FLOAT, allowNull: true },
+    fdfpTA: { type: DataTypes.FLOAT, allowNull: true },
+    fdfpFPC: { type: DataTypes.FLOAT, allowNull: true },
+    tauxAtMp: { type: DataTypes.FLOAT, allowNull: true },
+    statutSalarie: { type: DataTypes.STRING, allowNull: true },   // 'local' | 'expatrie'
+    typeSalarie: { type: DataTypes.STRING, allowNull: true },     // 'M' | 'J' | 'H' (CNPS)
+    anneeNaissance: { type: DataTypes.INTEGER, allowNull: true },
+    dateEmbauche: { type: DataTypes.STRING, allowNull: true },
+    dateDepart: { type: DataTypes.STRING, allowNull: true }
 });
 
 // Modèles RH (Multi-tenant via userId)
@@ -681,11 +713,19 @@ const isSqlite = sequelize.getDialect() === 'sqlite';
                 await sequelize.getQueryInterface().addColumn('Users', 'companyLogo', { type: DataTypes.TEXT, allowNull: true });
                 console.log('🛠️  Colonne Users.companyLogo ajoutée.');
             }
-            for (const colonne of ['companyAdresse', 'companyTelephone', 'companyEmail', 'companyVille', 'companySignataireNom', 'companySignataireFonction', 'defaultBulletinStyle', 'rubriqueCodes', 'bulletinCouleur', 'bulletinCanvasLayout']) {
+            for (const colonne of ['companyAdresse', 'companyTelephone', 'companyEmail', 'companyVille', 'companySignataireNom', 'companySignataireFonction', 'defaultBulletinStyle', 'rubriqueCodes', 'bulletinCouleur', 'bulletinCanvasLayout', 'companyNumeroEmployeur']) {
                 if (!colonnesUsers[colonne]) {
                     await sequelize.getQueryInterface().addColumn('Users', colonne, { type: DataTypes.STRING, allowNull: true });
                     console.log(`🛠️  Colonne Users.${colonne} ajoutée.`);
                 }
+            }
+            if (!colonnesUsers.companyTauxAtMp) {
+                await sequelize.getQueryInterface().addColumn('Users', 'companyTauxAtMp', { type: DataTypes.FLOAT, allowNull: true });
+                console.log('🛠️  Colonne Users.companyTauxAtMp ajoutée.');
+            }
+            if (!colonnesUsers.companyCnpsVersementMensuel) {
+                await sequelize.getQueryInterface().addColumn('Users', 'companyCnpsVersementMensuel', { type: DataTypes.BOOLEAN, allowNull: true });
+                console.log('🛠️  Colonne Users.companyCnpsVersementMensuel ajoutée.');
             }
             if (!colonnesUsers.freeMonthlyUsed) {
                 await sequelize.getQueryInterface().addColumn('Users', 'freeMonthlyUsed', { type: DataTypes.INTEGER, defaultValue: 0 });
@@ -715,6 +755,62 @@ const isSqlite = sequelize.getDialect() === 'sqlite';
             }
         } catch (e) {
             console.warn('Migration Employees.statutSalarie :', e.message);
+        }
+
+        // ── Lot 1 : colonnes « déclarations » sur les bulletins enregistrés ──
+        // ADD COLUMN nullable idempotent. Après ajout, un backfill PRUDENT ne
+        // renseigne QUE ce qui est objectivement dérivable par inversion d'un
+        // montant déjà stocké (base = montant / taux). Tout le reste (statut
+        // local/expatrié, CN/CE, FDFP, brut imposable exact...) reste `null` :
+        // la donnée réglementaire de l'époque n'existe pas, on ne l'invente pas.
+        try {
+            const colPayslip = await sequelize.getQueryInterface().describeTable('PayslipRecords');
+            const aAjouter = {
+                brutImposable: { type: DataTypes.FLOAT, allowNull: true },
+                baseCnpsRetraite: { type: DataTypes.FLOAT, allowNull: true },
+                baseCnpsPfAt: { type: DataTypes.FLOAT, allowNull: true },
+                cnEmployeur: { type: DataTypes.FLOAT, allowNull: true },
+                ceEmployeur: { type: DataTypes.FLOAT, allowNull: true },
+                fdfpTA: { type: DataTypes.FLOAT, allowNull: true },
+                fdfpFPC: { type: DataTypes.FLOAT, allowNull: true },
+                tauxAtMp: { type: DataTypes.FLOAT, allowNull: true },
+                statutSalarie: { type: DataTypes.STRING, allowNull: true },
+                typeSalarie: { type: DataTypes.STRING, allowNull: true },
+                anneeNaissance: { type: DataTypes.INTEGER, allowNull: true },
+                dateEmbauche: { type: DataTypes.STRING, allowNull: true },
+                dateDepart: { type: DataTypes.STRING, allowNull: true }
+            };
+            let colonneAjoutee = false;
+            for (const [nom, def] of Object.entries(aAjouter)) {
+                if (!colPayslip[nom]) {
+                    await sequelize.getQueryInterface().addColumn('PayslipRecords', nom, def);
+                    console.log(`🛠️  Colonne PayslipRecords.${nom} ajoutée.`);
+                    colonneAjoutee = true;
+                }
+            }
+            if (colonneAjoutee) {
+                // Backfill dérivable-only. Retraite patronale = base × 7,7 % ;
+                // PF patronale = base × 5 %. On retrouve donc la base plafonnée
+                // par simple division. Le taux AT réellement appliqué se relit
+                // de même (cnpsAT / baseCnpsPfAt). typeSalarie = 'M' : tout
+                // l'historique a été mensualisé (base 26) par le moteur — ce
+                // n'est pas une hypothèse mais le mode de calcul constaté.
+                const anciens = await PayslipRecord.findAll({ where: { baseCnpsRetraite: null } });
+                let repris = 0;
+                for (const r of anciens) {
+                    const maj = { typeSalarie: 'M' };
+                    if (r.cnpsRetraitePat > 0) maj.baseCnpsRetraite = Math.round(r.cnpsRetraitePat / 0.077);
+                    if (r.cnpsPF > 0) maj.baseCnpsPfAt = Math.round(r.cnpsPF / 0.05);
+                    if (maj.baseCnpsPfAt && r.cnpsAT > 0) {
+                        maj.tauxAtMp = Math.round((r.cnpsAT / maj.baseCnpsPfAt) * 10000) / 10000;
+                    }
+                    await r.update(maj);
+                    repris++;
+                }
+                if (repris) console.log(`🛠️  Backfill déclarations : ${repris} bulletin(s) — bases CNPS dérivées, reste inconnu.`);
+            }
+        } catch (e) {
+            console.warn('Migration PayslipRecords (déclarations) :', e.message);
         }
 
         try {

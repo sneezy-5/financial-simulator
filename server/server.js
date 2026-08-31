@@ -38,6 +38,7 @@ const { poserVariables, remplir: remplirOffice } = require('./docengine/office/o
 const { listerTypes: listerTypesDocuments } = require('./docengine/office/typesDocuments');
 const { construireClasseur } = require('./import/classeurModele');
 const { lireClasseur } = require('./import/classeurLecture');
+const { genererDeclaration } = require('./declarations');
 
 // Le moteur ne connaît aucun fournisseur d'IA : on lui injecte le nôtre. L'IA
 // n'intervient que sur les fragments que le lexique métier n'a pas su nommer,
@@ -469,6 +470,7 @@ app.put('/api/auth/profile', authMiddleware, async (req, res) => {
         const {
             name, companyName, phone, accountType, companyNumeroCnps, companyNumeroContribuable, companyLogo,
             companyAdresse, companyTelephone, companyEmail, companyVille, companySignataireNom, companySignataireFonction,
+            companyNumeroEmployeur, companyTauxAtMp, companyCnpsVersementMensuel,
             defaultBulletinStyle, rubriqueCodes, bulletinCouleur, bulletinCanvasLayout
         } = req.body;
         if (name !== undefined) user.name = name;
@@ -484,6 +486,9 @@ app.put('/api/auth/profile', authMiddleware, async (req, res) => {
         if (companyVille !== undefined) user.companyVille = companyVille;
         if (companySignataireNom !== undefined) user.companySignataireNom = companySignataireNom;
         if (companySignataireFonction !== undefined) user.companySignataireFonction = companySignataireFonction;
+        if (companyNumeroEmployeur !== undefined) user.companyNumeroEmployeur = companyNumeroEmployeur;
+        if (companyTauxAtMp !== undefined) user.companyTauxAtMp = (companyTauxAtMp === '' || companyTauxAtMp === null) ? null : parseFloat(companyTauxAtMp);
+        if (companyCnpsVersementMensuel !== undefined) user.companyCnpsVersementMensuel = (companyCnpsVersementMensuel === '' || companyCnpsVersementMensuel === null) ? null : !!companyCnpsVersementMensuel;
         if (defaultBulletinStyle !== undefined) user.defaultBulletinStyle = defaultBulletinStyle;
         // Stocké en JSON (colonne texte) ; { } explicitement envoyé remet aux
         // valeurs par défaut ONDA plutôt que de laisser d'anciens codes traîner.
@@ -1809,6 +1814,64 @@ app.get('/api/rh/periods/:id', authMiddleware, async (req, res) => {
     } catch (e) {
         console.error('❌ Erreur sur GET /api/rh/periods/:id :', e);
         res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
+    }
+});
+
+// ─── Déclarations sociales / fiscales (CNPS, ITS, FDFP...) ────────────────────
+// Générées à partir de l'historique de paie figé (PayslipRecord). Ce sont des
+// AIDES À LA SAISIE sur e-CNPS / e-Impôts, pas des télédéclarations.
+//
+// GET /api/rh/declarations?type=cnps|cnps-liste&format=pdf|xlsx|csv&periodIds=1,2,3
+//   periodIds : une période (mensuel) ou trois d'un même trimestre (trimestriel).
+app.get('/api/rh/declarations', authMiddleware, async (req, res) => {
+    try {
+        const type = String(req.query.type || '');
+        const format = String(req.query.format || 'pdf');
+        const ids = String(req.query.periodIds || req.query.periodId || '')
+            .split(',').map(s => parseInt(s.trim(), 10)).filter(Number.isFinite);
+        if (!ids.length) return res.status(400).json({ error: 'periodIds requis.' });
+
+        const periods = await PayrollPeriod.findAll({ where: { id: ids, userId: req.user.id } });
+        if (periods.length !== ids.length) {
+            return res.status(404).json({ error: "Période(s) introuvable(s) ou non autorisée(s)." });
+        }
+        if (periods.some(p => (p.country || 'CI') !== 'CI')) {
+            return res.status(400).json({ error: "Les déclarations ne sont disponibles que pour la Côte d'Ivoire." });
+        }
+
+        const records = [];
+        for (const p of periods) {
+            const recs = await PayslipRecord.findAll({ where: { periodId: p.id } });
+            records.push(...recs.map(r => r.toJSON()));
+        }
+
+        const u = await User.findByPk(req.user.id);
+        const entreprise = {
+            raisonSociale: u?.companyName || '',
+            numeroCnps: u?.companyNumeroCnps || '',
+            numeroEmployeur: u?.companyNumeroEmployeur || u?.companyNumeroCnps || '',
+            numeroContribuable: u?.companyNumeroContribuable || '',
+            adresse: u?.companyAdresse || '',
+            telephone: u?.companyTelephone || '',
+            ville: u?.companyVille || '',
+            signataireNom: u?.companySignataireNom || '',
+            tauxAtMp: (u?.companyTauxAtMp ?? null),
+            cnpsVersementMensuel: (u?.companyCnpsVersementMensuel ?? null)
+        };
+
+        const out = await genererDeclaration({
+            type, format, entreprise,
+            periodes: periods.map(p => ({ mois: p.mois, annee: p.annee })),
+            records
+        });
+
+        res.setHeader('Content-Type', out.mime);
+        res.setHeader('Content-Disposition', `attachment; filename="${out.filename}"`);
+        if (out.partielle) res.setHeader('X-Declaration-Partielle', '1');
+        return res.send(out.buffer);
+    } catch (e) {
+        console.error('❌ Erreur sur GET /api/rh/declarations :', e);
+        res.status(400).json({ error: e.message || "Génération impossible." });
     }
 });
 

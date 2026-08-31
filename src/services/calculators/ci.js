@@ -2,9 +2,15 @@ export function calculateCIPayslip(baseData, emp, rules) {
   const brutImposable = baseData.salaireBrut
   const gainsTotaux = brutImposable + baseData.primeTransport + baseData.primeLogement + baseData.primesNonImposablesRub
 
-  // Charges fiscales employeur
+  // Charges fiscales employeur — rubriques dissociées (cf. countryConfig CI)
   const baseFiscale = brutImposable
-  const impotEmployeur = Math.round(baseFiscale * rules.tauxImpotEmployeurLocal)
+  const estExpatrie = String(emp.statut_salarie || '').toLowerCase().includes('expat')
+  const cnEmployeur = Math.round(baseFiscale * (rules.tauxCnEmployeur ?? 0.012))
+  const ceEmployeur = Math.round(baseFiscale * (estExpatrie
+    ? (rules.tauxCeEmployeurExpat ?? 0.092)
+    : (rules.tauxCeEmployeurLocal ?? 0)))
+  // Agrégat conservé pour les consommateurs qui affichent une seule ligne « impôt employeur ».
+  const impotEmployeur = cnEmployeur + ceEmployeur
   const fdfpTA = Math.round(baseFiscale * 0.004)
   const fdfpFPC = Math.round(baseFiscale * 0.006)
   const totalFiscalEmployeur = impotEmployeur + fdfpTA + fdfpFPC
@@ -13,9 +19,12 @@ export function calculateCIPayslip(baseData, emp, rules) {
   const plafondCNPS = rules.plafondRetraite
   const baseCNPS = Math.min(brutImposable, plafondCNPS)
   const baseCNPS_PfAtAm = Math.min(brutImposable, rules.plafondPF)
+  // AT/MP : 2 à 5 % selon le secteur. Priorité au paramètre entreprise
+  // (taux_at_mp), fallback historique sur taux_at, puis défaut config (2 %).
+  const tauxAtMp = Number(emp.taux_at_mp) || Number(emp.taux_at) || rules.tauxATPat || 0.02
   const cnpsPF = Math.round(baseCNPS_PfAtAm * rules.tauxPFPat)
   const cnpsAM = Math.round(baseCNPS_PfAtAm * 0.0075)
-  const cnpsAT = Math.round(baseCNPS_PfAtAm * rules.tauxATPat)
+  const cnpsAT = Math.round(baseCNPS_PfAtAm * tauxAtMp)
   const cnpsRetraitePat = Math.round(baseCNPS * rules.tauxRetraitePat)
   
   const sitCmu = String(emp.situation_matrimoniale || '').toLowerCase()
@@ -73,7 +82,7 @@ export function calculateCIPayslip(baseData, emp, rules) {
 
   return {
     ...baseData,
-    brutImposable, baseFiscale, baseCNPS, baseCNPS_PfAtAm, tauxAT: rules.tauxATPat, nbAyantsDroitCMU, totalPersonnesCMU,
+    brutImposable, baseFiscale, baseCNPS, baseCNPS_PfAtAm, tauxAT: tauxAtMp, estExpatrie, nbAyantsDroitCMU, totalPersonnesCMU,
     parts, ricf,
     gainsTotaux,
     salarial: {
@@ -84,7 +93,7 @@ export function calculateCIPayslip(baseData, emp, rules) {
       autresTaxes: [] // Pas de taxes additionnelles en CI
     },
     patronal: {
-      impotEmployeur, fdfpTA, fdfpFPC,
+      cnEmployeur, ceEmployeur, impotEmployeur, fdfpTA, fdfpFPC,
       totalFiscal: totalFiscalEmployeur,
       cnpsPF, cnpsAM, cnpsAT,
       cnpsRetraite: cnpsRetraitePat,

@@ -219,7 +219,6 @@ const importExcel = async (e) => {
           <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
           Annuaire des Employés
         </h2>
-        <p>Gérez vos salariés de manière 100% confidentielle dans votre navigateur (IndexedDB).</p>
         <p class="header-note">
           La fiche décrit <strong>qui est le salarié</strong> ; son <strong>contrat</strong> décrit
           ce qu'il perçoit. Le classeur d'import contient les deux, plus le profil de l'entreprise.

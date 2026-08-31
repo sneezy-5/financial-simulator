@@ -5,8 +5,9 @@
 //
 //   ENTREPRISE — ce qui est vrai pour tout le monde (raison sociale, adresse,
 //                numéros, signataire). Une seule ligne.
-//   EMPLOYES   — l'IDENTITÉ du salarié, et rien de plus : état civil, situation
-//                matrimoniale, enfants à charge, et son salaire NET de référence.
+//   EMPLOYES   — l'IDENTITÉ du salarié, et rien de plus : état civil (sexe, date
+//                de naissance), catégorie, situation matrimoniale, enfants à
+//                charge, et son salaire NET de référence.
 //   CONTRATS   — la RÉMUNÉRATION et ses composantes : salaire de base,
 //                sursalaire, primes. C'est la pièce signée, donc elle fait foi.
 //
@@ -22,7 +23,8 @@ const COLONNES_ENTREPRISE = [
 ];
 
 const COLONNES_EMPLOYES = [
-    'matricule', 'nom', 'prenom', 'poste', 'categorie',
+    'matricule', 'nom', 'prenom', 'sexe', 'date_naissance',
+    'poste', 'categorie', 'categorie_professionnelle',
     'telephone', 'date_embauche', 'numero_cnps',
     'situation_matrimoniale', 'nombre_enfants',
     'expatrie', 'salaire_net'
@@ -51,9 +53,12 @@ const EXEMPLE_ENTREPRISE = {
 const EXEMPLE_EMPLOYE = {
     matricule: 'EMP-001',
     nom: 'KONAN', prenom: 'Yao',
+    sexe: 'M',
+    date_naissance: '15/03/1988',
     poste: 'Comptable', categorie: 'Agent de maîtrise',
+    categorie_professionnelle: 'cadre',
     telephone: '+225 07 00 00 01',
-    date_embauche: '2020-01-15',
+    date_embauche: '15/01/2020',
     numero_cnps: '123456-A',
     situation_matrimoniale: 'marie',
     nombre_enfants: 2,
@@ -64,7 +69,7 @@ const EXEMPLE_EMPLOYE = {
 const EXEMPLE_CONTRAT = {
     matricule: 'EMP-001',
     type: 'CDI',
-    date_debut: '2020-01-15',
+    date_debut: '15/01/2020',
     date_fin: '',
     poste: 'Comptable',
     salaire_base: 350000,
@@ -80,6 +85,9 @@ const MODE_EMPLOI = [
     ['1. ENTREPRISE', 'Une seule ligne. Ces informations servent d\'en-tête à tous les documents générés.'],
     ['2. EMPLOYES', 'Une ligne par salarié. Le matricule est la clé : il relie la fiche à son contrat.'],
     ['', 'Le salaire NET est celui versé au salarié. La composition du salaire se déclare dans CONTRATS.'],
+    ['', 'sexe : M ou F (ou « Homme » / « Femme »).'],
+    ['', 'categorie : classification conventionnelle (ex. Agent de maîtrise, Cadre, Employé).'],
+    ['', 'categorie_professionnelle : cadre ou employe — alimente la répartition Cadres/Employés du tableau de bord RH.'],
     ['3. CONTRATS', 'Une ligne par contrat. Un salarié peut en avoir plusieurs (CDD renouvelé, avenant).'],
     ['', 'C\'est ici que se déclarent le salaire de base, le sursalaire et les primes.'],
     ['', 'Le contrat en vigueur à la date de paie est celui qui est retenu.'],
@@ -88,7 +96,7 @@ const MODE_EMPLOI = [
     ['Situation matrimoniale', 'celibataire, marie, divorce, veuf'],
     ['Expatrié', 'oui / non — laissez vide pour « non ». Change le taux de T.A.S.P payé par l\'employeur.'],
     ['Prime imposable', 'oui / non — laissez vide pour « oui », qui est le régime de droit commun'],
-    ['Dates', 'Format AAAA-MM-JJ (ex. 2026-03-01)'],
+    ['Dates', 'Format français JJ/MM/AAAA (ex. 01/03/2026) — concerne la date de naissance, la date d\'embauche et les dates de contrat.'],
     ['Lignes d\'exemple', 'Les lignes fournies sont des exemples : remplacez-les par vos données.']
 ];
 

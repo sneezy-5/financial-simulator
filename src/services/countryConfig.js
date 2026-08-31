@@ -22,9 +22,19 @@ export const COUNTRIES_CONFIG = {
     tauxRetraitePat: 0.077,
     tauxPFPat: 0.05,
     tauxATPat: 0.02,
+    // Charges fiscales patronales DISSOCIÉES (à ne jamais agréger) :
+    //   CN — Contribution Nationale : 1,2 % du brut imposable, personnel local ET expatrié.
+    //   CE — Contribution Employeur : 0 % pour le local, 9,2 % pour les expatriés.
+    // Le « 10,4 % » expatrié = CE 9,2 % + CN 1,2 % (deux rubriques). Le « 12 % »
+    // (= 9,2 + 1,2 + TA 0,4 + FPC 1,2) n'est PAS utilisé ici : TA et FPC (FDFP)
+    // sont déjà calculées dans leurs propres rubriques.
+    tauxCnEmployeur: 0.012,
+    tauxCeEmployeurLocal: 0,
+    tauxCeEmployeurExpat: 0.092,
+    // Conservés pour l'affichage agrégé (info-bulles, cartes pays) uniquement.
     tauxImpotEmployeurLocal: 0.012,
     tauxImpotEmployeurExpat: 0.104,
-    libelleImpotEmployeur: 'T.A.S.P (Impôt Employeur)',
+    libelleImpotEmployeur: 'CN / CE (Impôts Employeur)',
     libelleImpotSalarial: 'ITS (Impôt sur les Salaires)',
     hasFDFP: true,
     hasCMU: true,

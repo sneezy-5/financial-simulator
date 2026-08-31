@@ -67,8 +67,11 @@ const companyProfileForm = ref({
   companyEmail: '',
   companyNumeroCnps: '',
   companyNumeroContribuable: '',
+  companyNumeroEmployeur: '',
   companySignataireNom: '',
   companySignataireFonction: '',
+  companyTauxAtMp: '',
+  companyCnpsVersementMensuel: '',
   companyLogo: ''
 })
 const companyProfileSaving = ref(false)
@@ -83,8 +86,13 @@ const syncCompanyProfile = () => {
     companyProfileForm.value.companyEmail = user.value.companyEmail || ''
     companyProfileForm.value.companyNumeroCnps = user.value.companyNumeroCnps || ''
     companyProfileForm.value.companyNumeroContribuable = user.value.companyNumeroContribuable || ''
+    companyProfileForm.value.companyNumeroEmployeur = user.value.companyNumeroEmployeur || ''
     companyProfileForm.value.companySignataireNom = user.value.companySignataireNom || ''
     companyProfileForm.value.companySignataireFonction = user.value.companySignataireFonction || ''
+    companyProfileForm.value.companyTauxAtMp = (user.value.companyTauxAtMp ?? '') === '' ? '' : String(user.value.companyTauxAtMp)
+    companyProfileForm.value.companyCnpsVersementMensuel =
+      user.value.companyCnpsVersementMensuel === true ? 'mensuel'
+        : user.value.companyCnpsVersementMensuel === false ? 'trimestriel' : ''
     companyProfileForm.value.companyLogo = user.value.companyLogo || ''
   }
 }
@@ -148,8 +156,12 @@ const saveCompanyProfile = async () => {
       companyEmail: companyProfileForm.value.companyEmail,
       companyNumeroCnps: companyProfileForm.value.companyNumeroCnps,
       companyNumeroContribuable: companyProfileForm.value.companyNumeroContribuable,
+      companyNumeroEmployeur: companyProfileForm.value.companyNumeroEmployeur,
       companySignataireNom: companyProfileForm.value.companySignataireNom,
       companySignataireFonction: companyProfileForm.value.companySignataireFonction,
+      companyTauxAtMp: companyProfileForm.value.companyTauxAtMp === '' ? null : parseFloat(companyProfileForm.value.companyTauxAtMp),
+      companyCnpsVersementMensuel: companyProfileForm.value.companyCnpsVersementMensuel === 'mensuel' ? true
+        : companyProfileForm.value.companyCnpsVersementMensuel === 'trimestriel' ? false : null,
       companyLogo: companyProfileForm.value.companyLogo
     })
     showToast('Profil entreprise enregistré.', 'success')
@@ -597,6 +609,22 @@ const saveScheduleSettings = async () => {
           <div class="form-group">
             <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 6px;">Numéro Contribuable / NIF</label>
             <input v-model="companyProfileForm.companyNumeroContribuable" type="text" placeholder="ex. CI-2024-123456A" style="width: 100%; padding: 0.75rem 1rem; border-radius: 10px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
+          </div>
+          <div class="form-group">
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 6px;">Numéro Employeur CNPS <span style="font-weight: 400; color: #94a3b8;">(entête des déclarations)</span></label>
+            <input v-model="companyProfileForm.companyNumeroEmployeur" type="text" placeholder="ex. 123456" style="width: 100%; padding: 0.75rem 1rem; border-radius: 10px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
+          </div>
+          <div class="form-group">
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 6px;">Taux CNPS Accident du Travail / Maladie Pro <span style="font-weight: 400; color: #94a3b8;">(2 à 5 % selon le secteur — vide = 2 %)</span></label>
+            <input v-model="companyProfileForm.companyTauxAtMp" type="number" step="0.001" min="0.02" max="0.05" placeholder="ex. 0.02" style="width: 100%; padding: 0.75rem 1rem; border-radius: 10px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
+          </div>
+          <div class="form-group">
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 6px;">Périodicité de versement CNPS</label>
+            <select v-model="companyProfileForm.companyCnpsVersementMensuel" style="width: 100%; padding: 0.75rem 1rem; border-radius: 10px; border: 1px solid #e2e8f0; box-sizing: border-box;">
+              <option value="">Automatique (selon l'effectif)</option>
+              <option value="mensuel">Mensuel (≥ 20 salariés)</option>
+              <option value="trimestriel">Trimestriel (&lt; 20 salariés)</option>
+            </select>
           </div>
           <div class="form-group">
             <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 6px;">Signataire — Nom</label>

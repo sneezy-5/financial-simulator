@@ -12,6 +12,7 @@ import EvaluationsManager from './hr/EvaluationsManager.vue'
 import FormationsManager from './hr/FormationsManager.vue'
 import PlanningManager from './hr/PlanningManager.vue'
 import DashboardManager from './hr/DashboardManager.vue'
+import DeclarationsManager from './hr/DeclarationsManager.vue'
 import EmployeeSelect from './hr/EmployeeSelect.vue'
 import { getCountryRules } from '../services/countryConfig.js'
 import { localDb } from '../services/localDatabase.js'
@@ -62,7 +63,7 @@ const countryRules = computed(() => getCountryRules(props.country))
 const isElectron = /electron/i.test(navigator.userAgent);
 const isPro = computed(() => !!user.value || isElectron)
 const isSimulatorMode = import.meta.env.VITE_APP_MODE === 'simulator'
-const PRO_MODULES = ['simulation', 'simulation_habituel', 'simulation_conges', 'solde', 'import', 'local_db', 'directory', 'settings', 'saisie', 'stats', 'analytics_entreprise', 'conges', 'contrats', 'evaluations', 'formations', 'planning', 'dashboard', 'documents']
+const PRO_MODULES = ['simulation', 'simulation_habituel', 'simulation_conges', 'solde', 'import', 'local_db', 'directory', 'settings', 'saisie', 'stats', 'analytics_entreprise', 'conges', 'contrats', 'evaluations', 'formations', 'planning', 'dashboard', 'documents', 'declarations']
 // En build simulateur, seuls ces modules restent joignables — peu importe la
 // connexion (isPro) ou une manipulation d'URL/props (?type=import, etc.) : le
 // reste du RH Pro (annuaire, import, dashboard, paramètres...) reste verrouillé.
@@ -1318,6 +1319,18 @@ const modules = computed(() => {
     gradient: 'linear-gradient(135deg, #064e3b 0%, #059669 100%)',
     badge: 'Pro',
     steps: ['Contrats', 'Alertes']
+  },
+  {
+    id: 'declarations',
+    title: 'Déclarations Sociales',
+    subtitle: 'CNPS · ITS · FDFP',
+    description: `Générez les bordereaux CNPS et la liste nominative à partir de vos périodes de paie, en PDF ou Excel, prêts à reporter sur e-CNPS.`,
+    icon: `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/><line x1="9" y1="11" x2="13" y2="11"/>`,
+    isPro: true,
+    color: '#0d9488',
+    gradient: 'linear-gradient(135deg, #134e4a 0%, #0d9488 100%)',
+    badge: 'Pro',
+    steps: ['Période', 'Génération']
   }
   ]
 
@@ -2038,15 +2051,35 @@ const activeModuleDetails = computed(() => {
               <input type="file" accept=".xlsx,.xls" @change="importPresenceFile" style="display: none;" :disabled="presenceImporting" />
             </label>
           </div>
-          <div style="margin-bottom: 12px; display: flex; justify-content: flex-end;">
-            <div style="width: 100%; max-width: 300px; display: flex; flex-direction: column; align-items: flex-end;">
+          <!-- Barre d'action épinglée : le bouton de génération et la recherche restent
+               visibles même quand la liste des employés est longue et défile. -->
+          <div class="saisie-actionbar">
+            <div class="saisie-actionbar-count">
+              <strong>{{ saisieFilteredEmployees.length }}</strong>
+              <template v-if="saisieSearchQuery"> / {{ saisieEmployees.length }}</template>
+              employé{{ saisieEmployees.length > 1 ? 's' : '' }}
+            </div>
+            <div class="saisie-actionbar-search">
               <EmployeeSelect :employees="saisieEmployees" @select="(e) => saisieSearchQuery = e ? e.matricule : ''" placeholder="Rechercher un employé..." />
-              <button v-if="saisieSearchQuery" @click="saisieSearchQuery = ''" style="margin-top: 0.25rem; font-size: 0.75rem; color: #64748b; background: none; border: none; cursor: pointer; text-decoration: underline;">
+              <button v-if="saisieSearchQuery" @click="saisieSearchQuery = ''" class="saisie-clear-search">
                 Afficher tous les employés
               </button>
             </div>
+            <button class="btn-next saisie-generate-btn" :disabled="uploading" @click="generateFromSaisie">
+              <span v-if="uploading">Génération en cours...</span>
+              <span v-else>Générer les bulletins →</span>
+            </button>
           </div>
-          <div class="mapping-table-container">
+
+          <div v-if="error" class="result-error" style="margin-top: 1rem;">
+            <p>{{ error }}</p>
+          </div>
+          <div v-if="result && result.success" class="billing-alert alert-success" style="margin-top: 1rem; padding: 0.85rem 1rem; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; color: #059669;">
+            {{ result.message }}
+            <button type="button" :disabled="downloadingZip" @click="downloadZip(result.zipUrl)" style="display: block; margin-top: 0.5rem; font-weight: 700; background: none; border: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer;">{{ downloadingZip ? 'Téléchargement...' : 'Télécharger le ZIP (PDF + Excel)' }}</button>
+          </div>
+
+          <div class="mapping-table-container saisie-grid-scroll">
             <table class="mapping-table">
               <thead>
                 <tr>
@@ -2084,14 +2117,6 @@ const activeModuleDetails = computed(() => {
               <span v-if="uploading">Génération en cours...</span>
               <span v-else>Générer les bulletins →</span>
             </button>
-          </div>
-
-          <div v-if="error" class="result-error" style="margin-top: 1rem;">
-            <p>{{ error }}</p>
-          </div>
-          <div v-if="result && result.success" class="billing-alert alert-success" style="margin-top: 1rem; padding: 0.85rem 1rem; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; color: #059669;">
-            {{ result.message }}
-            <button type="button" :disabled="downloadingZip" @click="downloadZip(result.zipUrl)" style="display: block; margin-top: 0.5rem; font-weight: 700; background: none; border: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer;">{{ downloadingZip ? 'Téléchargement...' : 'Télécharger le ZIP (PDF + Excel)' }}</button>
           </div>
         </div>
       </div>
@@ -2414,6 +2439,11 @@ const activeModuleDetails = computed(() => {
         <ContratsManager :country="props.country" />
       </div>
 
+      <!-- ════ MODULE DÉCLARATIONS SOCIALES ════ -->
+      <div v-if="activeModule === 'declarations'" class="module-content hr-module-view no-pad animate-in">
+        <DeclarationsManager :country="props.country" />
+      </div>
+
       <!-- ════ MODULE ÉVALUATIONS ════ -->
       <div v-if="activeModule === 'evaluations'" class="module-content hr-module-view no-pad animate-in">
         <EvaluationsManager :country="props.country" />
@@ -2533,7 +2563,7 @@ const activeModuleDetails = computed(() => {
 .fidelity-picker small { font-size: 0.72rem; color: #6b7280; line-height: 1.4; }
 
 .hr-wrapper {
-  background: #f8fafc;
+  background: #f4f4fa;
   border-radius: 16px;
   overflow: hidden;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.05);
@@ -3910,6 +3940,86 @@ const activeModuleDetails = computed(() => {
   border-radius: 12px;
   overflow: hidden;
   margin-top: 1rem;
+}
+
+/* ══════════════════════════════════════════
+   SAISIE MENSUELLE — barre d'action épinglée + grille défilante
+══════════════════════════════════════════ */
+.saisie-actionbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+}
+.saisie-actionbar-count {
+  font-size: 0.85rem;
+  color: #475569;
+  white-space: nowrap;
+}
+.saisie-actionbar-count strong {
+  color: #0f172a;
+  font-size: 1rem;
+}
+.saisie-actionbar-search {
+  flex: 1;
+  min-width: 200px;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+}
+.saisie-clear-search {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: #64748b;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+  align-self: flex-start;
+}
+.saisie-generate-btn {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.mapping-table-container.saisie-grid-scroll {
+  overflow-y: auto;
+  overflow-x: auto;
+  max-height: 55vh;
+  margin-top: 0.75rem;
+}
+.saisie-grid-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  box-shadow: inset 0 -1px 0 #e2e8f0;
+}
+
+@media (max-width: 640px) {
+  .saisie-actionbar {
+    gap: 8px;
+  }
+  .saisie-actionbar-search {
+    order: 3;
+    max-width: none;
+    width: 100%;
+  }
+  .saisie-generate-btn {
+    order: 2;
+    margin-left: 0;
+  }
+  .mapping-table-container.saisie-grid-scroll {
+    max-height: 60vh;
+  }
 }
 .mapping-table {
   width: 100%;

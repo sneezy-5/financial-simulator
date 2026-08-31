@@ -1740,14 +1740,22 @@ const tabs = [
                   <td></td><td></td>
                 </tr>
 
-                <!-- Fiscalité Patronale -->
+                <!-- Fiscalité Patronale — CN toujours, CE seulement si expatrié -->
                 <tr>
-                  <td class="code">600</td>
-                  <td class="label">{{ countryRules.libelleImpotEmployeur }}</td>
+                  <td class="code">431</td>
+                  <td class="label">CN — Contribution Nationale (employeur)</td>
                   <td class="val">{{ fcfa(calc.brutImposable) }}</td>
                   <td></td><td></td><td></td>
-                  <td class="val">{{ (countryRules.tauxImpotEmployeurLocal * 100).toFixed(1) }}%</td>
-                  <td class="retenue">{{ fcfa(calc.patronal.impotEmployeur) }}</td>
+                  <td class="val">{{ ((countryRules.tauxCnEmployeur ?? countryRules.tauxImpotEmployeurLocal) * 100).toFixed(1) }}%</td>
+                  <td class="retenue">{{ fcfa(calc.patronal.cnEmployeur ?? calc.patronal.impotEmployeur) }}</td>
+                </tr>
+                <tr v-if="calc.patronal.ceEmployeur > 0">
+                  <td class="code">433</td>
+                  <td class="label">CE — Contribution Employeur (expatrié)</td>
+                  <td class="val">{{ fcfa(calc.brutImposable) }}</td>
+                  <td></td><td></td><td></td>
+                  <td class="val">{{ ((countryRules.tauxCeEmployeurExpat ?? 0.092) * 100).toFixed(1) }}%</td>
+                  <td class="retenue">{{ fcfa(calc.patronal.ceEmployeur) }}</td>
                 </tr>
                 <!-- Autres Taxes Patronales (ex: FDFP) -->
                 <tr v-for="taxe in calc.patronal.autresTaxes" :key="taxe.code">

@@ -82,35 +82,6 @@
       </div>
     </div>
 
-    <!-- Actions Sauvegarde & Restauration -->
-    <div class="db-actions-section">
-      <div class="actions-card">
-        <h3>
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: text-bottom; margin-right: 0.25rem; color: #38bdf8;"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
-          Gestion de votre Sauvegarde Locale
-        </h3>
-        <p class="subtext">
-          Conservez une copie autonome de vos données RH ou migrez-les vers un autre ordinateur/terminal.
-        </p>
-
-        <div class="actions-buttons-row">
-          <button @click="handleExport" class="btn-action-primary">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            <span>Exporter la BD Locale (.json)</span>
-          </button>
-
-          <label class="btn-action-secondary">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-            <span>Restaurer une Sauvegarde</span>
-            <input type="file" accept=".json" @change="handleImport" style="display: none;" />
-          </label>
-        </div>
-
-        <div v-if="msg" class="status-msg" :class="msgType">
-          {{ msg }}
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -136,8 +107,6 @@ const stats = ref({
   totalImpotsCountry: 0
 })
 
-const msg = ref('')
-const msgType = ref('success')
 const canInstallPwa = ref(false)
 let deferredPrompt = null
 
@@ -157,35 +126,6 @@ watch(() => props.country, () => {
 
 const formatFcfa = (val) => {
   return Math.round(val || 0).toLocaleString('fr-FR') + ' FCFA'
-}
-
-const handleExport = async () => {
-  try {
-    await localDb.exportBackup()
-    msg.value = "Sauvegarde locale téléchargée avec succès !"
-    msgType.value = "success"
-  } catch (e) {
-    msg.value = "Erreur lors de l'exportation: " + e.message
-    msgType.value = "error"
-  }
-}
-
-const handleImport = async (event) => {
-  const file = event.target.files[0]
-  if (!file) return
-  const reader = new FileReader()
-  reader.onload = async (e) => {
-    try {
-      await localDb.importBackup(e.target.result)
-      await loadStats()
-      msg.value = "Restauration effectuée avec succès !"
-      msgType.value = "success"
-    } catch (err) {
-      msg.value = "Erreur d'importation: " + err.message
-      msgType.value = "error"
-    }
-  }
-  reader.readAsText(file)
 }
 
 onMounted(() => {
@@ -338,97 +278,6 @@ const installPwa = async () => {
   color: #64748b;
   margin-top: 0.25rem;
   font-weight: 600;
-}
-
-/* Actions Section */
-.db-actions-section {
-  background: #f8fafc;
-  border-radius: 16px;
-  padding: 1.5rem;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
-  color: #0f172a;
-}
-
-.actions-card h3 {
-  margin: 0;
-  font-size: 1.1rem;
-  font-weight: 800;
-  color: #0f172a;
-}
-
-.subtext {
-  font-size: 0.9rem;
-  color: #64748b;
-  margin: 0.5rem 0 0 0;
-}
-
-.actions-buttons-row {
-  display: flex;
-  gap: 1rem;
-  margin-top: 1.25rem;
-  flex-wrap: wrap;
-}
-
-.btn-action-primary {
-  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-  color: #ffffff;
-  border: none;
-  padding: 0.7rem 1.2rem;
-  border-radius: 10px;
-  font-weight: 700;
-  font-size: 0.875rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.25);
-  transition: all 0.2s;
-}
-
-.btn-action-primary:hover {
-  background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
-  transform: translateY(-1px);
-}
-
-.btn-action-secondary {
-  background: #ffffff;
-  color: #475569;
-  border: 1px solid #e2e8f0;
-  padding: 0.7rem 1.2rem;
-  border-radius: 10px;
-  font-weight: 700;
-  font-size: 0.875rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  transition: all 0.2s;
-}
-
-.btn-action-secondary:hover {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-}
-
-.status-msg {
-  margin-top: 1rem;
-  padding: 0.75rem 1rem;
-  border-radius: 8px;
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
-.status-msg.success {
-  background: #ecfdf5;
-  color: #059669;
-  border: 1px solid #a7f3d0;
-}
-
-.status-msg.error {
-  background: #fef2f2;
-  color: #dc2626;
-  border: 1px solid #fecaca;
 }
 
 .font-mono {

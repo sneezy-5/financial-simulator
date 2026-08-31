@@ -222,7 +222,17 @@ function calculateSalaryRules(employee) {
     const gainsTotaux = salaireBrut + primeTransport + primeLogement + primesNonImposablesRub + indemLicenciement + indemTransac + fraisFuneraires;
 
     const baseFiscale = brutImposable;
-    const impotEmployeur = Math.round(baseFiscale * 0.012);
+    // Charges fiscales patronales DISSOCIÉES :
+    //   CN — Contribution Nationale : 1,2 %, personnel local ET expatrié.
+    //   CE — Contribution Employeur : 0 % pour le local, 9,2 % pour les expatriés.
+    // « 10,4 % » expatrié = CE 9,2 % + CN 1,2 % ; TA/FPC restent des rubriques à part.
+    const estExpatrie = String(employee['statut_salarie'] || '').toLowerCase().includes('expat');
+    const tauxCnEmployeur = 0.012;
+    const tauxCeEmployeur = estExpatrie ? 0.092 : 0;
+    const cnEmployeur = Math.round(baseFiscale * tauxCnEmployeur);
+    const ceEmployeur = Math.round(baseFiscale * tauxCeEmployeur);
+    // Agrégat conservé pour les gabarits qui affichent une seule ligne « impôt employeur ».
+    const impotEmployeur = cnEmployeur + ceEmployeur;
     const fdfpTA = Math.round(baseFiscale * 0.004);
     const fdfpFPC = Math.round(baseFiscale * 0.006);
     const totalFiscalEmployeur = impotEmployeur + fdfpTA + fdfpFPC;
@@ -231,7 +241,9 @@ function calculateSalaryRules(employee) {
     const baseCNPS = Math.min(brutImposable, plafondCNPS);
     const baseCNPS_PfAtAm = Math.min(brutImposable, 75000);
 
-    const tauxAT = parseFloat(employee['taux_at'] || 0.02);
+    // AT/MP : 2 à 5 % selon le secteur. Priorité au paramètre entreprise
+    // (taux_at_mp), fallback historique sur taux_at, puis 2 %.
+    const tauxAT = parseFloat(employee['taux_at_mp'] || employee['taux_at'] || 0.02);
     const cnpsPF = Math.round(baseCNPS_PfAtAm * 0.05);
     const cnpsAM = Math.round(baseCNPS_PfAtAm * 0.0075);
     const cnpsAT = Math.round(baseCNPS_PfAtAm * tauxAT);
@@ -294,8 +306,9 @@ function calculateSalaryRules(employee) {
         primeTransport, primeLogement,
         brutImposable, gainsTotaux, baseCNPS, baseCNPS_PfAtAm, parts, totalPersonnesCMU, joursTrav,
         patronal: {
+            cnEmployeur, ceEmployeur, tauxCe: tauxCeEmployeur, estExpatrie,
             impotEmployeur, fdfpTA, fdfpFPC, totalFiscal: totalFiscalEmployeur,
-            cnpsPF, cnpsAM, cnpsAT, cnpsRetraite: cnpsRetraitePat, cmu: cmuPat,
+            cnpsPF, cnpsAM, cnpsAT, tauxAt: tauxAT, cnpsRetraite: cnpsRetraitePat, cmu: cmuPat,
             totalSocial: totalSocialEmployeur, grandTotal: totalPatronal
         },
         salarial: {
@@ -434,13 +447,14 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
 
     body.push(row(codes.cnpsSalariale, 'CNPS - RETRAITE', calc.baseCNPS, '6.3%', null, calc.salarial.cnps, '7.7%', calc.patronal.cnpsRetraite));
     body.push(row(codes.cnpsPF, 'CNPS - PRESTATIONS FAMILIALES', calc.baseCNPS_PfAtAm, null, null, null, '5.0%', calc.patronal.cnpsPF));
-    body.push(row(codes.cnpsAT, 'CNPS - ACCIDENT DU TRAVAIL', calc.baseCNPS_PfAtAm, null, null, null, (employee.taux_at || 2) + '%', calc.patronal.cnpsAT));
+    body.push(row(codes.cnpsAT, 'CNPS - ACCIDENT DU TRAVAIL', calc.baseCNPS_PfAtAm, null, null, null, (employee.taux_at_mp || employee.taux_at || 2) + '%', calc.patronal.cnpsAT));
     body.push(row(codes.cnpsAM, 'CNPS - ASSURANCE MATERNITE', calc.baseCNPS_PfAtAm, null, null, null, '0.75%', calc.patronal.cnpsAM));
 
     body.push(row(codes.its, 'ITS (IMPOT UNIQUE 2024)', calc.brutImposable, null, null, calc.salarial.its + calc.salarial.ricf, null, null));
     if (calc.salarial.ricf > 0) body.push(row(codes.ricf, '   dont R.I.C.F', null, null, calc.salarial.ricf, null, null, null));
 
-    body.push(row(codes.impotEmployeur, 'T.A.S.P (IMPOT EMPLOYEUR)', calc.brutImposable, null, null, null, '1.2%', calc.patronal.impotEmployeur));
+    body.push(row(codes.impotEmployeur, 'CN - CONTRIBUTION NATIONALE (EMPLOYEUR)', calc.brutImposable, null, null, null, '1.2%', calc.patronal.cnEmployeur ?? calc.patronal.impotEmployeur));
+    if ((calc.patronal.ceEmployeur || 0) > 0) body.push(row(codes.ceEmployeur, 'CE - CONTRIBUTION EMPLOYEUR (EXPATRIE)', calc.brutImposable, null, null, null, '9.2%', calc.patronal.ceEmployeur));
     body.push(row(codes.fdfpTA, 'FDFP - TAXE APPRENTISSAGE', calc.brutImposable, null, null, null, '0.4%', calc.patronal.fdfpTA));
     body.push(row(codes.fdfpFPC, 'FDFP - FORMATION CONTINUE', calc.brutImposable, null, null, null, '0.6%', calc.patronal.fdfpFPC));
     body.push(row(codes.cmuSalariale, `CMU (ASSURANCE MALADIE) [${calc.totalPersonnesCMU} pers.]`, calc.totalPersonnesCMU * 1000, null, null, calc.salarial.cmu, null, calc.patronal.cmu));
@@ -792,7 +806,7 @@ function generatePdfDefinitionGrilleNumerotee(employee, calc, companyInfo = {}) 
 
     body.push(ligne('CNPS / Caisse de Retraite', calc.baseCNPS, null, null, null, '7.7%', calc.patronal.cnpsRetraite, codes.cnpsPatronale));
     body.push(ligne('CNPS / Prestation Familiale', calc.baseCNPS_PfAtAm, null, null, null, '5.0%', calc.patronal.cnpsPF, codes.cnpsPF));
-    body.push(ligne('CNPS / Accident de Travail', calc.baseCNPS_PfAtAm, null, null, null, `${employee.taux_at || 2}%`, calc.patronal.cnpsAT, codes.cnpsAT));
+    body.push(ligne('CNPS / Accident de Travail', calc.baseCNPS_PfAtAm, null, null, null, `${employee.taux_at_mp || employee.taux_at || 2}%`, calc.patronal.cnpsAT, codes.cnpsAT));
     body.push(ligne('CNAM / Assurance maladie', calc.totalPersonnesCMU * 1000, null, null, null, null, calc.patronal.cmu, codes.cmuPatronale));
     const totalChargesSociales = (calc.patronal.cnpsRetraite || 0) + (calc.patronal.cnpsPF || 0) + (calc.patronal.cnpsAT || 0) + (calc.patronal.cmu || 0);
     body.push(bandRow('Total charges sociales employeurs', undefined, undefined, totalChargesSociales));
@@ -910,7 +924,7 @@ const CODE_RUBRIQUE = {
     primeTransport: '655', primeLogement: '656',
     its: '430', cnpsSalariale: '502', cmuSalariale: '504', ricf: '432', acompte: '460',
     cnpsPatronale: '503', cnpsPF: '450', cnpsAT: '452', cnpsAM: '451', cmuPatronale: '505',
-    impotEmployeur: '431', fdfpTA: '520', fdfpFPC: '530'
+    impotEmployeur: '431', ceEmployeur: '433', fdfpTA: '520', fdfpFPC: '530'
 };
 
 /**
@@ -948,9 +962,12 @@ function construireRubriques(employee, calc, codesCompte) {
     const patronal = [];
     patronal.push({ code: c.cnpsPatronale, label: 'CNPS — Retraite (part patronale)', base: calc.baseCNPS, taux: '7.7%', montant: calc.patronal.cnpsRetraite });
     patronal.push({ code: c.cnpsPF, label: 'CNPS — Prestations familiales', base: calc.baseCNPS_PfAtAm, taux: '5.0%', montant: calc.patronal.cnpsPF });
-    patronal.push({ code: c.cnpsAT, label: 'CNPS — Accident du travail', base: calc.baseCNPS_PfAtAm, taux: `${employee.taux_at || 2}%`, montant: calc.patronal.cnpsAT });
+    patronal.push({ code: c.cnpsAT, label: 'CNPS — Accident du travail', base: calc.baseCNPS_PfAtAm, taux: `${employee.taux_at_mp || employee.taux_at || 2}%`, montant: calc.patronal.cnpsAT });
     patronal.push({ code: c.cmuPatronale, label: 'CMU — part patronale', montant: calc.patronal.cmu });
-    patronal.push({ code: c.impotEmployeur, label: 'T.A.S.P (impôt employeur)', base: calc.brutImposable, taux: '1.2%', montant: calc.patronal.impotEmployeur });
+    patronal.push({ code: c.impotEmployeur, label: 'CN — Contribution Nationale (employeur)', base: calc.brutImposable, taux: '1.2%', montant: calc.patronal.cnEmployeur ?? calc.patronal.impotEmployeur });
+    if ((calc.patronal.ceEmployeur || 0) > 0) {
+        patronal.push({ code: c.ceEmployeur, label: 'CE — Contribution Employeur (expatrié)', base: calc.brutImposable, taux: '9.2%', montant: calc.patronal.ceEmployeur });
+    }
     patronal.push({ code: c.fdfpTA, label: 'FDFP — Taxe apprentissage', base: calc.brutImposable, taux: '0.4%', montant: calc.patronal.fdfpTA });
     patronal.push({ code: c.fdfpFPC, label: 'FDFP — Formation continue', base: calc.brutImposable, taux: '0.6%', montant: calc.patronal.fdfpFPC });
 
@@ -1342,9 +1359,10 @@ function generatePdfDefinitionLavandiere(employee, calc, companyInfo = {}) {
 
     body.push(ligne(codes.cnpsPatronale, 'Retraite Générale CNPS', undefined, undefined, undefined, undefined, undefined, calc.baseCNPS, '7,70', calc.patronal.cnpsRetraite));
     body.push(ligne(codes.cnpsPF, 'Prestations Familiales', undefined, undefined, undefined, undefined, undefined, calc.baseCNPS_PfAtAm, '5,00', calc.patronal.cnpsPF));
-    body.push(ligne(codes.cnpsAT, 'Accident du Travail', undefined, undefined, undefined, undefined, undefined, calc.baseCNPS_PfAtAm, `${employee.taux_at || 2},00`, calc.patronal.cnpsAT));
+    body.push(ligne(codes.cnpsAT, 'Accident du Travail', undefined, undefined, undefined, undefined, undefined, calc.baseCNPS_PfAtAm, `${employee.taux_at_mp || employee.taux_at || 2},00`, calc.patronal.cnpsAT));
     body.push(ligne(codes.cmuPatronale, 'CMU — part patronale', undefined, undefined, undefined, undefined, undefined, undefined, undefined, calc.patronal.cmu));
-    body.push(ligne(codes.impotEmployeur, 'T.A.S.P (impôt employeur)', undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '1,20', calc.patronal.impotEmployeur));
+    body.push(ligne(codes.impotEmployeur, 'CN — Contribution Nationale (employeur)', undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '1,20', calc.patronal.cnEmployeur ?? calc.patronal.impotEmployeur));
+    if ((calc.patronal.ceEmployeur || 0) > 0) body.push(ligne(codes.ceEmployeur, 'CE — Contribution Employeur (expatrié)', undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '9,20', calc.patronal.ceEmployeur));
     body.push(ligne(codes.fdfpTA, "Taxe d'Apprentissage", undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '0,40', calc.patronal.fdfpTA));
     body.push(ligne(codes.fdfpFPC, 'Formation Professionnelle Continue', undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '0,60', calc.patronal.fdfpFPC));
 
@@ -1743,9 +1761,10 @@ function generatePdfDefinitionTcmLogistic(employee, calc, companyInfo = {}) {
 
     body.push(ligne(codes.cnpsPatronale, 'Retraite Générale CNPS', undefined, undefined, undefined, undefined, undefined, calc.baseCNPS, '7,70', calc.patronal.cnpsRetraite));
     body.push(ligne(codes.cnpsPF, 'Prestations Familiales', undefined, undefined, undefined, undefined, undefined, calc.baseCNPS_PfAtAm, '5,00', calc.patronal.cnpsPF));
-    body.push(ligne(codes.cnpsAT, 'Accident du Travail', undefined, undefined, undefined, undefined, undefined, calc.baseCNPS_PfAtAm, `${employee.taux_at || 2},00`, calc.patronal.cnpsAT));
+    body.push(ligne(codes.cnpsAT, 'Accident du Travail', undefined, undefined, undefined, undefined, undefined, calc.baseCNPS_PfAtAm, `${employee.taux_at_mp || employee.taux_at || 2},00`, calc.patronal.cnpsAT));
     body.push(ligne(codes.cmuPatronale, 'CMU — part patronale', undefined, undefined, undefined, undefined, undefined, undefined, undefined, calc.patronal.cmu));
-    body.push(ligne(codes.impotEmployeur, 'T.A.S.P (impôt employeur)', undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '1,20', calc.patronal.impotEmployeur));
+    body.push(ligne(codes.impotEmployeur, 'CN — Contribution Nationale (employeur)', undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '1,20', calc.patronal.cnEmployeur ?? calc.patronal.impotEmployeur));
+    if ((calc.patronal.ceEmployeur || 0) > 0) body.push(ligne(codes.ceEmployeur, 'CE — Contribution Employeur (expatrié)', undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '9,20', calc.patronal.ceEmployeur));
     body.push(ligne(codes.fdfpTA, "Taxe d'Apprentissage", undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '0,40', calc.patronal.fdfpTA));
     body.push(ligne(codes.fdfpFPC, 'Formation Professionnelle Continue', undefined, undefined, undefined, undefined, undefined, calc.brutImposable, '0,60', calc.patronal.fdfpFPC));
 
@@ -2415,7 +2434,9 @@ exports.CATALOGUE_RUBRIQUES = [
     { cle: 'cnpsAT', libelle: 'CNPS accident du travail', groupe: 'Charges patronales' },
     { cle: 'cnpsAM', libelle: 'CNPS assurance maternité', groupe: 'Charges patronales' },
     { cle: 'cmuPatronale', libelle: 'CMU (part patronale)', groupe: 'Charges patronales' },
-    { cle: 'impotEmployeur', libelle: 'T.A.S.P (impôt employeur)', groupe: 'Charges patronales' },
+    { cle: 'cnEmployeur', libelle: 'CN — Contribution Nationale (employeur)', groupe: 'Charges patronales' },
+    { cle: 'ceEmployeur', libelle: 'CE — Contribution Employeur (expatrié)', groupe: 'Charges patronales' },
+    { cle: 'impotEmployeur', libelle: 'CN + CE (impôts employeur, agrégat)', groupe: 'Charges patronales' },
     { cle: 'fdfpTA', libelle: "FDFP — Taxe d'apprentissage", groupe: 'Charges patronales' },
     { cle: 'fdfpFPC', libelle: 'FDFP — Formation professionnelle continue', groupe: 'Charges patronales' }
 ];
@@ -2448,8 +2469,33 @@ function buildPayslipSnapshot(emp, calculs) {
         heuresSupNb: parseFloat(emp.heures_sup_nb) || 0,
         montantHeuresSup: calculs.montantHeuresSup || 0,
         joursTravailles: calculs.joursTrav !== undefined ? calculs.joursTrav : 0,
-        absencesJours: parseFloat(emp.absences_jours) || 0
+        absencesJours: parseFloat(emp.absences_jours) || 0,
+
+        // ── Lot 1 : champs déclarations (figés au moment de la génération) ──
+        brutImposable: calculs.brutImposable ?? null,
+        baseCnpsRetraite: calculs.baseCNPS ?? null,
+        baseCnpsPfAt: calculs.baseCNPS_PfAtAm ?? null,
+        cnEmployeur: calculs.patronal?.cnEmployeur ?? null,
+        ceEmployeur: calculs.patronal?.ceEmployeur ?? null,
+        fdfpTA: calculs.patronal?.fdfpTA ?? null,
+        fdfpFPC: calculs.patronal?.fdfpFPC ?? null,
+        tauxAtMp: calculs.patronal?.tauxAt ?? null,
+        // Connu à la génération : on le fige. 'expatrie' si la fiche le dit.
+        statutSalarie: String(emp.statut_salarie || '').toLowerCase().includes('expat') ? 'expatrie' : 'local',
+        typeSalarie: 'M', // le moteur mensualise tous les bulletins (base 26)
+        anneeNaissance: anneeNaissanceDepuis(emp.date_naissance || emp.annee_naissance),
+        dateEmbauche: emp.date_embauche || null,
+        dateDepart: emp.date_depart || emp.date_fin || null
     };
+}
+
+/** Année de naissance depuis une date ISO/FR ou une année déjà nue. */
+function anneeNaissanceDepuis(v) {
+    if (v === undefined || v === null || v === '') return null;
+    if (typeof v === 'number' && v > 1900 && v < 2100) return v;
+    const s = String(v);
+    const m = s.match(/(\d{4})/);
+    return m ? parseInt(m[1], 10) : null;
 }
 
 const MOIS_ETAT_PAIE = ['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
