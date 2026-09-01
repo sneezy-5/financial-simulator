@@ -526,11 +526,28 @@ const saisieSearchQuery = ref('')
 const saisieFilteredEmployees = computed(() => {
   if (!saisieSearchQuery.value) return saisieEmployees.value
   const q = saisieSearchQuery.value.toLowerCase()
-  return saisieEmployees.value.filter(e => 
-    (e.nom || '').toLowerCase().includes(q) || 
-    (e.prenom || '').toLowerCase().includes(q) || 
+  return saisieEmployees.value.filter(e =>
+    (e.nom || '').toLowerCase().includes(q) ||
+    (e.prenom || '').toLowerCase().includes(q) ||
     (e.matricule || '').toLowerCase().includes(q)
   )
+})
+
+// Initiales pour la pastille du salarié dans la grille de saisie.
+const saisieInitiales = (e) => (
+  ((e.nom || '').trim()[0] || '') + ((e.prenom || '').trim()[0] || '')
+).toUpperCase() || '?'
+
+// Totaux affichés en pied de grille (sur les lignes visibles).
+const saisieTotaux = computed(() => {
+  let hs = 0, abs = 0
+  for (const e of saisieFilteredEmployees.value) {
+    const g = saisieGrid.value[e.id]
+    if (!g) continue
+    hs += Number(g.heures_sup_nb) || 0
+    abs += Number(g.absences_jours) || 0
+  }
+  return { hs: Math.round(hs * 100) / 100, abs: Math.round(abs * 100) / 100 }
 })
 
 const loadSaisieGrid = async () => {
@@ -730,23 +747,23 @@ const statsHeuresSupSeries = computed(() => [{
 }])
 
 const statsChartOptionsBase = computed(() => ({
-  chart: { toolbar: { show: false }, fontFamily: 'inherit', foreColor: '#52514e' },
-  plotOptions: { bar: { borderRadius: 4, columnWidth: '55%' } },
+  chart: { toolbar: { show: false }, fontFamily: 'inherit', foreColor: '#64748b' },
+  plotOptions: { bar: { borderRadius: 6, columnWidth: '52%' } },
   dataLabels: { enabled: false },
-  grid: { borderColor: '#e1e0d9', strokeDashArray: 3 },
-  xaxis: { categories: statsPeriodLabels.value, axisBorder: { color: '#c3c2b7' }, axisTicks: { color: '#c3c2b7' } },
+  grid: { borderColor: '#e5e7eb', strokeDashArray: 3 },
+  xaxis: { categories: statsPeriodLabels.value, axisBorder: { color: '#e5e7eb' }, axisTicks: { color: '#e5e7eb' } },
   yaxis: { labels: { formatter: (v) => Math.round(v) } },
   tooltip: { theme: 'light' }
 }))
 
 const statsAbsencesOptions = computed(() => ({
   ...statsChartOptionsBase.value,
-  colors: ['#eb6834']
+  colors: ['#f43f5e']
 }))
 
 const statsHeuresSupOptions = computed(() => ({
   ...statsChartOptionsBase.value,
-  colors: ['#2a78d6']
+  colors: ['#0d9488']
 }))
 
 watch(statsSelectedMatricule, () => fetchEmployeeStats())
@@ -819,18 +836,18 @@ const companyMasseSalarialeSeries = computed(() => [
 ])
 
 const companyChartOptionsBase = computed(() => ({
-  chart: { toolbar: { show: false }, fontFamily: 'inherit', foreColor: '#52514e' },
-  plotOptions: { bar: { borderRadius: 4, columnWidth: '55%' } },
+  chart: { toolbar: { show: false }, fontFamily: 'inherit', foreColor: '#64748b' },
+  plotOptions: { bar: { borderRadius: 6, columnWidth: '52%' } },
   dataLabels: { enabled: false },
-  grid: { borderColor: '#e1e0d9', strokeDashArray: 3 },
-  xaxis: { categories: companyPeriodLabels.value, axisBorder: { color: '#c3c2b7' }, axisTicks: { color: '#c3c2b7' } },
+  grid: { borderColor: '#e5e7eb', strokeDashArray: 3 },
+  xaxis: { categories: companyPeriodLabels.value, axisBorder: { color: '#e5e7eb' }, axisTicks: { color: '#e5e7eb' } },
   yaxis: { labels: { formatter: (v) => Math.round(v) } },
   tooltip: { theme: 'light' }
 }))
 
 const companyMasseSalarialeOptions = computed(() => ({
   ...companyChartOptionsBase.value,
-  colors: ['#2a78d6', '#eb6834'],
+  colors: ['#0d9488', '#5eead4'],
   yaxis: { labels: { formatter: (v) => Math.round(v / 1000) + 'k' } }
 }))
 
@@ -841,7 +858,7 @@ const companyAbsenteismeSeries = computed(() => [{
 
 const companyAbsenteismeOptions = computed(() => ({
   ...companyChartOptionsBase.value,
-  colors: ['#eb6834'],
+  colors: ['#f43f5e'],
   yaxis: { labels: { formatter: (v) => Math.round(v) + '%' } },
   annotations: {
     yaxis: [{
@@ -862,7 +879,7 @@ const companyHeuresSupSeries = computed(() => [{
 
 const companyHeuresSupOptions = computed(() => ({
   ...companyChartOptionsBase.value,
-  colors: ['#2a78d6'],
+  colors: ['#0d9488'],
   yaxis: { labels: { formatter: (v) => Math.round(v * 10) / 10 + '%' } },
   annotations: {
     yaxis: [{
@@ -889,12 +906,12 @@ const companyByPosteDisplay = computed(() => {
 const companyByPosteSeries = computed(() => [{ name: 'Masse salariale', data: companyByPosteDisplay.value.map(p => p.masseSalariale) }])
 
 const companyByPosteOptions = computed(() => ({
-  chart: { toolbar: { show: false }, fontFamily: 'inherit', foreColor: '#52514e' },
-  plotOptions: { bar: { borderRadius: 4, horizontal: true } },
+  chart: { toolbar: { show: false }, fontFamily: 'inherit', foreColor: '#64748b' },
+  plotOptions: { bar: { borderRadius: 6, horizontal: true } },
   dataLabels: { enabled: false },
-  grid: { borderColor: '#e1e0d9', strokeDashArray: 3 },
+  grid: { borderColor: '#e5e7eb', strokeDashArray: 3 },
   xaxis: { categories: companyByPosteDisplay.value.map(p => p.poste), labels: { formatter: (v) => Math.round(v / 1000) + 'k' } },
-  colors: ['#2a78d6'],
+  colors: ['#0d9488'],
   tooltip: { theme: 'light' }
 }))
 
@@ -2004,117 +2021,134 @@ const activeModuleDetails = computed(() => {
       </div>
 
       <!-- ════ MODULE SAISIE MENSUELLE ════ -->
-      <div v-if="activeModule === 'saisie'" class="module-content hr-module-view animate-in">
-        <div class="import-intro" style="margin-bottom: 1.25rem;">
-          <div class="intro-icon-wrap" style="background: #fffbeb;">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <div v-if="activeModule === 'saisie'" class="module-content hr-module-view animate-in sm-module">
+        <div class="sm-head">
+          <div class="sm-head-left">
+            <span class="sm-head-icon">
+              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </span>
+            <div>
+              <h2 class="sm-title">Saisie Mensuelle</h2>
+              <p class="sm-sub">Heures supplémentaires et jours d'absence du mois, pour vos salariés déjà dans l'annuaire.</p>
+            </div>
           </div>
-          <div>
-            <strong>Saisie Mensuelle</strong>
-            <p>Renseignez les heures supplémentaires et jours d'absence du mois pour vos employés déjà enregistrés dans l'annuaire.</p>
-          </div>
+          <label class="sm-period">
+            <span>Période de paie</span>
+            <div class="sm-period-fields">
+              <select v-model.number="payrollMois" class="sm-select">
+                <option v-for="(m, idx) in moisNoms" :key="idx" :value="idx + 1">{{ m }}</option>
+              </select>
+              <input v-model.number="payrollAnnee" type="number" class="sm-year" aria-label="Année" />
+            </div>
+          </label>
         </div>
 
-        <div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
-          <div class="form-group" style="flex: 1; min-width: 160px;">
-            <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Mois de paie</label>
-            <select v-model.number="payrollMois" style="width: 100%; padding: 0.6rem 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0; box-sizing: border-box;">
-              <option v-for="(m, idx) in moisNoms" :key="idx" :value="idx + 1">{{ m }}</option>
-            </select>
-          </div>
-          <div class="form-group" style="flex: 1; min-width: 120px;">
-            <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Année</label>
-            <input v-model.number="payrollAnnee" type="number" style="width: 100%; padding: 0.6rem 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
-          </div>
-        </div>
+        <div v-if="saisieLoading" class="sm-empty">Chargement de l'annuaire…</div>
 
-        <div v-if="saisieLoading" class="admin-loading" style="padding: 2rem; text-align: center; color: #64748b;">
-          Chargement de l'annuaire...
-        </div>
-
-        <div v-else-if="saisieEmployees.length === 0" class="empty-state" style="padding: 2.5rem 1.5rem; text-align: center; background: #f8fafc; border-radius: 12px; border: 1px dashed #e2e8f0;">
-          <p style="color: #64748b; margin: 0 0 12px 0;">Votre annuaire est vide.</p>
-          <button @click="openModule('directory')" class="btn-next" style="display: inline-flex;">Aller à l'Annuaire Employés</button>
+        <div v-else-if="saisieEmployees.length === 0" class="sm-empty">
+          <p>Votre annuaire est vide.</p>
+          <button @click="openModule('directory')" class="sm-btn sm-btn-ghost">Aller à l'Annuaire des Employés →</button>
         </div>
 
         <div v-else>
-          <div class="local-directory-fast-option" style="margin-bottom: 20px; padding: 14px 16px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-            <div>
-              <strong style="color: #92400e; display: block; margin-bottom: 4px;">Vous avez un système de pointage ?</strong>
-              <p style="color: #78350f; font-size: 0.85rem; margin: 0;">
-                Importez directement une fiche de présence (matricule + jours travaillés/heures supp/absences) au lieu de saisir ligne par ligne.
-                <a href="/api/rh/download/modele-presence.xlsx" download style="color: #92400e; font-weight: 700;">Télécharger le modèle</a>
+          <div class="sm-shortcut">
+            <span class="sm-shortcut-icon">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </span>
+            <div class="sm-shortcut-text">
+              <strong>Vous avez un système de pointage&nbsp;?</strong>
+              <p>
+                Importez une fiche de présence (matricule + heures / absences) au lieu de saisir ligne par ligne.
+                <a href="/api/rh/download/modele-presence.xlsx" download>Télécharger le modèle</a>
               </p>
             </div>
-            <label style="background: #d97706; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; white-space: nowrap;">
-              {{ presenceImporting ? 'Import en cours...' : 'Importer une fiche de présence' }}
+            <label class="sm-btn sm-btn-soft">
+              {{ presenceImporting ? 'Import en cours…' : 'Importer une fiche' }}
               <input type="file" accept=".xlsx,.xls" @change="importPresenceFile" style="display: none;" :disabled="presenceImporting" />
             </label>
           </div>
-          <!-- Barre d'action épinglée : le bouton de génération et la recherche restent
-               visibles même quand la liste des employés est longue et défile. -->
-          <div class="saisie-actionbar">
-            <div class="saisie-actionbar-count">
-              <strong>{{ saisieFilteredEmployees.length }}</strong>
-              <template v-if="saisieSearchQuery"> / {{ saisieEmployees.length }}</template>
-              employé{{ saisieEmployees.length > 1 ? 's' : '' }}
+
+          <!-- Barre d'action épinglée : bouton de génération + recherche restent visibles au défilement. -->
+          <div class="sm-bar">
+            <span class="sm-bar-count">
+              <b>{{ saisieFilteredEmployees.length }}</b><template v-if="saisieSearchQuery"> / {{ saisieEmployees.length }}</template>
+              salarié{{ saisieEmployees.length > 1 ? 's' : '' }}
+            </span>
+            <div class="sm-bar-search">
+              <EmployeeSelect :employees="saisieEmployees" @select="(e) => saisieSearchQuery = e ? e.matricule : ''" placeholder="Rechercher un salarié…" />
+              <button v-if="saisieSearchQuery" @click="saisieSearchQuery = ''" class="sm-bar-clear">Afficher tout le monde</button>
             </div>
-            <div class="saisie-actionbar-search">
-              <EmployeeSelect :employees="saisieEmployees" @select="(e) => saisieSearchQuery = e ? e.matricule : ''" placeholder="Rechercher un employé..." />
-              <button v-if="saisieSearchQuery" @click="saisieSearchQuery = ''" class="saisie-clear-search">
-                Afficher tous les employés
-              </button>
-            </div>
-            <button class="btn-next saisie-generate-btn" :disabled="uploading" @click="generateFromSaisie">
-              <span v-if="uploading">Génération en cours...</span>
+            <button class="sm-btn sm-btn-primary sm-bar-gen" :disabled="uploading" @click="generateFromSaisie">
+              <span v-if="uploading">Génération…</span>
               <span v-else>Générer les bulletins →</span>
             </button>
           </div>
 
-          <div v-if="error" class="result-error" style="margin-top: 1rem;">
-            <p>{{ error }}</p>
-          </div>
-          <div v-if="result && result.success" class="billing-alert alert-success" style="margin-top: 1rem; padding: 0.85rem 1rem; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; color: #059669;">
+          <div v-if="error" class="sm-alert sm-alert-err">{{ error }}</div>
+          <div v-if="result && result.success" class="sm-alert sm-alert-ok">
             {{ result.message }}
-            <button type="button" :disabled="downloadingZip" @click="downloadZip(result.zipUrl)" style="display: block; margin-top: 0.5rem; font-weight: 700; background: none; border: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer;">{{ downloadingZip ? 'Téléchargement...' : 'Télécharger le ZIP (PDF + Excel)' }}</button>
+            <button type="button" class="sm-alert-link" :disabled="downloadingZip" @click="downloadZip(result.zipUrl)">
+              {{ downloadingZip ? 'Téléchargement…' : 'Télécharger le ZIP (PDF + Excel)' }}
+            </button>
           </div>
 
-          <div class="mapping-table-container saisie-grid-scroll">
-            <table class="mapping-table">
+          <div class="sm-grid-wrap">
+            <table class="sm-grid">
               <thead>
                 <tr>
-                  <th>Employé</th>
-                  <th>Heures Supp.</th>
-                  <th>Jours d'Absence</th>
-                  <th>Jours Travaillés <span style="font-weight: 400; color: #94a3b8;">(auto, modifiable)</span></th>
+                  <th>Salarié</th>
+                  <th class="sm-th-num">Heures supp.</th>
+                  <th class="sm-th-num">Jours d'absence</th>
+                  <th class="sm-th-num">Jours travaillés <span>auto</span></th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="emp in saisieFilteredEmployees" :key="emp.id">
                   <td>
-                    <strong>{{ emp.nom }} {{ emp.prenom }}</strong>
-                    <div style="font-size: 0.75rem; color: #64748b;">{{ emp.matricule || '-' }}</div>
+                    <div class="sm-emp">
+                      <span class="sm-emp-av">{{ saisieInitiales(emp) }}</span>
+                      <span class="sm-emp-id">
+                        <strong>{{ emp.nom }} {{ emp.prenom }}</strong>
+                        <span>{{ emp.matricule || '—' }}</span>
+                      </span>
+                    </div>
                   </td>
-                  <td><input v-model.number="saisieGrid[emp.id].heures_sup_nb" type="number" min="0" style="width: 90px; padding: 0.4rem 0.5rem; border-radius: 6px; border: 1px solid #e2e8f0;" /></td>
-                  <td><input v-model.number="saisieGrid[emp.id].absences_jours" type="number" min="0" max="26" style="width: 90px; padding: 0.4rem 0.5rem; border-radius: 6px; border: 1px solid #e2e8f0;" /></td>
-                  <td>
-                    <input
-                      :value="saisieJoursTravailles(emp.id)"
-                      @input="setSaisieJoursTravailles(emp.id, $event.target.value)"
-                      type="number" min="0" max="31"
-                      style="width: 90px; padding: 0.4rem 0.5rem; border-radius: 6px; border: 1px solid #e2e8f0; background: #f8fafc; font-weight: 700;"
-                      title="Calculé automatiquement (26 - absences), modifiable si besoin. Videz le champ pour revenir au calcul automatique."
-                    />
+                  <td class="sm-td-num">
+                    <span class="sm-field">
+                      <input v-model.number="saisieGrid[emp.id].heures_sup_nb" type="number" min="0" /><i>h</i>
+                    </span>
+                  </td>
+                  <td class="sm-td-num">
+                    <span class="sm-field">
+                      <input v-model.number="saisieGrid[emp.id].absences_jours" type="number" min="0" max="26" /><i>j</i>
+                    </span>
+                  </td>
+                  <td class="sm-td-num">
+                    <span class="sm-field sm-field-auto">
+                      <input
+                        :value="saisieJoursTravailles(emp.id)"
+                        @input="setSaisieJoursTravailles(emp.id, $event.target.value)"
+                        type="number" min="0" max="31"
+                        title="Calculé automatiquement (26 − absences), modifiable. Videz le champ pour revenir au calcul auto."
+                      /><i>j</i>
+                    </span>
                   </td>
                 </tr>
               </tbody>
+              <tfoot>
+                <tr>
+                  <td>Total — {{ saisieFilteredEmployees.length }} salarié{{ saisieFilteredEmployees.length > 1 ? 's' : '' }}</td>
+                  <td class="sm-td-num"><b>{{ saisieTotaux.hs }}</b> h</td>
+                  <td class="sm-td-num"><b>{{ saisieTotaux.abs }}</b> j</td>
+                  <td></td>
+                </tr>
+              </tfoot>
             </table>
           </div>
 
-          <div class="step-nav">
-            <div></div>
-            <button class="btn-next" :disabled="uploading" @click="generateFromSaisie">
-              <span v-if="uploading">Génération en cours...</span>
+          <div class="sm-foot">
+            <button class="sm-btn sm-btn-primary" :disabled="uploading" @click="generateFromSaisie">
+              <span v-if="uploading">Génération…</span>
               <span v-else>Générer les bulletins →</span>
             </button>
           </div>
@@ -2122,288 +2156,294 @@ const activeModuleDetails = computed(() => {
       </div>
 
       <!-- ════ MODULE STATISTIQUES EMPLOYÉ ════ -->
-      <div v-if="activeModule === 'stats'" class="module-content hr-module-view animate-in">
-        <div class="import-intro" style="margin-bottom: 1.25rem;">
-          <div class="intro-icon-wrap" style="background: #eff6ff;">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"><path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/></svg>
-          </div>
+      <div v-if="activeModule === 'stats'" class="module-content hr-module-view animate-in an-module">
+        <div class="an-head">
+          <span class="an-head-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/></svg>
+          </span>
           <div>
-            <strong>Statistiques Employé</strong>
-            <p>Absences, heures supplémentaires et rémunération sur l'année, à partir de l'historique de paie généré.</p>
+            <h2 class="an-title">Statistiques Employé</h2>
+            <p class="an-sub">Absences, heures supplémentaires et rémunération sur la période, à partir de l'historique de paie.</p>
           </div>
         </div>
 
-        <div v-if="statsEmployeesList.length === 0" class="empty-state" style="padding: 2.5rem 1.5rem; text-align: center; background: #f8fafc; border-radius: 12px; border: 1px dashed #e2e8f0;">
-          <p style="color: #64748b; margin: 0 0 12px 0;">Aucun employé avec matricule dans l'annuaire.</p>
-          <button @click="openModule('directory')" class="btn-next" style="display: inline-flex;">Aller à l'Annuaire Employés</button>
+        <div v-if="statsEmployeesList.length === 0" class="an-empty">
+          <p>Aucun salarié avec matricule dans l'annuaire.</p>
+          <button @click="openModule('directory')" class="an-btn an-btn-ghost">Aller à l'Annuaire des Employés →</button>
         </div>
 
         <div v-else>
-          <div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
-            <div class="form-group" style="flex: 4; min-width: 300px;">
-              <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Rechercher un employé</label>
-              <EmployeeSelect :employees="statsEmployeesList" @select="(e) => statsSelectedMatricule = e ? e.matricule : ''" placeholder="Nom, prénom ou matricule..." />
-              <div v-if="statsSelectedMatricule" style="margin-top: 0.25rem; font-size: 0.75rem; color: #10b981;">
-                Matricule sélectionné : {{ statsSelectedMatricule }}
+          <div class="an-filters">
+            <div class="an-filters-row">
+              <div class="an-field an-field-grow">
+                <label>Salarié</label>
+                <EmployeeSelect :employees="statsEmployeesList" @select="(e) => statsSelectedMatricule = e ? e.matricule : ''" placeholder="Nom, prénom ou matricule…" />
+                <span v-if="statsSelectedMatricule" class="an-field-hint">Matricule : {{ statsSelectedMatricule }}</span>
               </div>
-            </div>
-            <div class="form-group" style="flex: 3; min-width: 280px;">
-              <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Période</label>
-              <div style="display: flex; align-items: center; gap: 6px;">
-                <span style="font-size: 0.8rem; color: #64748b;">Du</span>
-                <select v-model.number="statsDebutMois" style="padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;">
-                  <option v-for="(m, i) in moisNoms" :key="i" :value="i + 1">{{ m }}</option>
-                </select>
-                <input v-model.number="statsDebutAnnee" type="number" style="width: 80px; padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;" />
-                <span style="font-size: 0.8rem; color: #64748b;">au</span>
-                <select v-model.number="statsFinMois" style="padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;">
-                  <option v-for="(m, i) in moisNoms" :key="i" :value="i + 1">{{ m }}</option>
-                </select>
-                <input v-model.number="statsFinAnnee" type="number" style="width: 80px; padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;" />
+              <div class="an-field">
+                <label>Période — du</label>
+                <div class="an-mm-yy">
+                  <select v-model.number="statsDebutMois" class="an-select">
+                    <option v-for="(m, i) in moisNoms" :key="i" :value="i + 1">{{ m }}</option>
+                  </select>
+                  <input v-model.number="statsDebutAnnee" type="number" class="an-year" aria-label="Année de début" />
+                </div>
+              </div>
+              <div class="an-field">
+                <label>au</label>
+                <div class="an-mm-yy">
+                  <select v-model.number="statsFinMois" class="an-select">
+                    <option v-for="(m, i) in moisNoms" :key="i" :value="i + 1">{{ m }}</option>
+                  </select>
+                  <input v-model.number="statsFinAnnee" type="number" class="an-year" aria-label="Année de fin" />
+                </div>
               </div>
             </div>
           </div>
 
-          <div v-if="statsLoading" class="admin-loading" style="padding: 2rem; text-align: center; color: #64748b;">
-            Chargement des statistiques...
-          </div>
+          <div v-if="statsLoading" class="an-loading">Chargement des statistiques…</div>
 
           <template v-else-if="statsData">
-            <div v-if="statsData.totals.moisAvecDonnees === 0" class="empty-state" style="padding: 2rem 1.5rem; text-align: center; background: #f8fafc; border-radius: 12px; border: 1px dashed #e2e8f0;">
-              <p style="color: #64748b; margin: 0;">Aucun bulletin généré pour cet employé sur la période sélectionnée.</p>
+            <div v-if="statsData.totals.moisAvecDonnees === 0" class="an-empty an-empty-sm">
+              <p>Aucun bulletin généré pour ce salarié sur la période sélectionnée.</p>
             </div>
 
             <template v-else>
-              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px;">
-                <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                  <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Jours d'absence (année)</div>
-                  <div style="font-size: 1.6rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ statsData.totals.totalAbsences }}</div>
+              <div class="an-kpis">
+                <div class="an-kpi">
+                  <span class="an-kpi-lbl">Jours d'absence</span>
+                  <span class="an-kpi-val">{{ statsData.totals.totalAbsences }}</span>
                 </div>
-                <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                  <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Heures supp. (année)</div>
-                  <div style="font-size: 1.6rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ statsData.totals.totalHeuresSup }}</div>
+                <div class="an-kpi">
+                  <span class="an-kpi-lbl">Heures supp.</span>
+                  <span class="an-kpi-val">{{ statsData.totals.totalHeuresSup }}</span>
                 </div>
-                <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                  <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Brut moyen mensuel</div>
-                  <div style="font-size: 1.6rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ fcfa(statsData.totals.brutMoyen) }}</div>
+                <div class="an-kpi">
+                  <span class="an-kpi-lbl">Brut moyen mensuel</span>
+                  <span class="an-kpi-val">{{ fcfa(statsData.totals.brutMoyen) }}</span>
                 </div>
-                <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                  <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Mois avec bulletin</div>
-                  <div style="font-size: 1.6rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ statsData.totals.moisAvecDonnees }} / 12</div>
+                <div class="an-kpi">
+                  <span class="an-kpi-lbl">Mois avec bulletin</span>
+                  <span class="an-kpi-val">{{ statsData.totals.moisAvecDonnees }} / 12</span>
                 </div>
               </div>
 
-              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px;">
-                <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                  <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Jours d'absence par mois</h4>
+              <div class="an-charts">
+                <div class="an-card">
+                  <h4 class="an-card-title">Jours d'absence par mois</h4>
                   <apexchart type="bar" height="240" :options="statsAbsencesOptions" :series="statsAbsencesSeries"></apexchart>
                 </div>
-                <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                  <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Heures supplémentaires par mois</h4>
+                <div class="an-card">
+                  <h4 class="an-card-title">Heures supplémentaires par mois</h4>
                   <apexchart type="bar" height="240" :options="statsHeuresSupOptions" :series="statsHeuresSupSeries"></apexchart>
                 </div>
               </div>
 
-              <div class="mapping-table-container" style="margin-top: 20px;">
-                <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Détail mensuel</h4>
-                <table class="mapping-table">
-                  <thead>
-                    <tr>
-                      <th>Mois</th>
-                      <th>Jours Travaillés</th>
-                      <th>Jours d'Absence</th>
-                      <th>Heures Supp.</th>
-                      <th>Brut</th>
-                      <th>Net</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="m in statsData.monthly" :key="m.mois">
-                      <td>{{ moisNoms[m.mois - 1] }} {{ m.annee }}</td>
-                      <td>{{ m.joursTravailles }}</td>
-                      <td>{{ m.absencesJours }}</td>
-                      <td>{{ m.heuresSupNb }}</td>
-                      <td>{{ fcfa(m.brutTotal) }}</td>
-                      <td>{{ fcfa(m.netAPayer) }}</td>
-                    </tr>
-                  </tbody>
-                </table>
+              <div class="an-panel">
+                <div class="an-panel-head"><h4>Détail mensuel</h4></div>
+                <div class="an-table-wrap">
+                  <table class="an-table">
+                    <thead>
+                      <tr>
+                        <th>Mois</th>
+                        <th class="an-th-num">Jours trav.</th>
+                        <th class="an-th-num">Absences</th>
+                        <th class="an-th-num">H. supp.</th>
+                        <th class="an-th-num">Brut</th>
+                        <th class="an-th-num">Net</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="m in statsData.monthly" :key="m.mois + '-' + m.annee">
+                        <td>{{ moisNoms[m.mois - 1] }} {{ m.annee }}</td>
+                        <td class="an-td-num">{{ m.joursTravailles }}</td>
+                        <td class="an-td-num">{{ m.absencesJours }}</td>
+                        <td class="an-td-num">{{ m.heuresSupNb }}</td>
+                        <td class="an-td-num">{{ fcfa(m.brutTotal) }}</td>
+                        <td class="an-td-num">{{ fcfa(m.netAPayer) }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </template>
           </template>
-          <div v-else class="empty-state" style="padding: 2rem 1.5rem; text-align: center; background: #f8fafc; border-radius: 12px; border: 1px dashed #e2e8f0;">
-            <p style="color: #64748b; margin: 0;">Aucun employé ne correspond à « {{ statsSearchQuery }} ».</p>
+          <div v-else class="an-empty an-empty-sm">
+            <p>Aucun salarié ne correspond à « {{ statsSearchQuery }} ».</p>
           </div>
         </div>
       </div>
 
       <!-- ════ MODULE ANALYTIQUE RH ENTREPRISE ════ -->
-      <div v-if="activeModule === 'analytics_entreprise'" class="module-content hr-module-view animate-in">
-        <div class="import-intro" style="margin-bottom: 1.25rem;">
-          <div class="intro-icon-wrap" style="background: #eef2ff;">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
-          </div>
+      <div v-if="activeModule === 'analytics_entreprise'" class="module-content hr-module-view animate-in an-module">
+        <div class="an-head">
+          <span class="an-head-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
+          </span>
           <div>
-            <strong>Analytique RH</strong>
-            <p>Masse salariale, charges patronales, absentéisme et heures supplémentaires — vue d'ensemble entreprise avec seuils d'alerte.</p>
+            <h2 class="an-title">Analytique RH</h2>
+            <p class="an-sub">Masse salariale, charges patronales, absentéisme et heures supplémentaires — vue d'ensemble, avec seuils d'alerte.</p>
           </div>
         </div>
 
-        <div style="display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; align-items: flex-end;">
-          <div class="form-group" style="flex: 3; min-width: 280px;">
-            <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Période</label>
-            <div style="display: flex; align-items: center; gap: 6px;">
-              <span style="font-size: 0.8rem; color: #64748b;">Du</span>
-              <select v-model.number="companyDebutMois" style="padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;">
-                <option v-for="(m, i) in moisNoms" :key="i" :value="i + 1">{{ m }}</option>
-              </select>
-              <input v-model.number="companyDebutAnnee" type="number" style="width: 80px; padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;" />
-              <span style="font-size: 0.8rem; color: #64748b;">au</span>
-              <select v-model.number="companyFinMois" style="padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;">
-                <option v-for="(m, i) in moisNoms" :key="i" :value="i + 1">{{ m }}</option>
-              </select>
-              <input v-model.number="companyFinAnnee" type="number" style="width: 80px; padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #e2e8f0;" />
+        <div class="an-filters">
+          <div class="an-filters-row">
+            <div class="an-field">
+              <label>Période — du</label>
+              <div class="an-mm-yy">
+                <select v-model.number="companyDebutMois" class="an-select">
+                  <option v-for="(m, i) in moisNoms" :key="i" :value="i + 1">{{ m }}</option>
+                </select>
+                <input v-model.number="companyDebutAnnee" type="number" class="an-year" aria-label="Année de début" />
+              </div>
+            </div>
+            <div class="an-field">
+              <label>au</label>
+              <div class="an-mm-yy">
+                <select v-model.number="companyFinMois" class="an-select">
+                  <option v-for="(m, i) in moisNoms" :key="i" :value="i + 1">{{ m }}</option>
+                </select>
+                <input v-model.number="companyFinAnnee" type="number" class="an-year" aria-label="Année de fin" />
+              </div>
             </div>
           </div>
-          <div class="form-group" style="min-width: 140px;">
-            <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">SLA Absentéisme (%)</label>
-            <input v-model.number="slaAbsenteisme" type="number" min="0" style="width: 100%; padding: 0.6rem 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
-          </div>
-          <div class="form-group" style="min-width: 160px;">
-            <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">SLA Heures Sup (% masse)</label>
-            <input v-model.number="slaHeuresSupRatio" type="number" min="0" style="width: 100%; padding: 0.6rem 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
-          </div>
-          <div class="form-group" style="min-width: 140px;">
-            <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Seuil Bradford</label>
-            <input v-model.number="slaBradford" type="number" min="0" style="width: 100%; padding: 0.6rem 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
+          <div class="an-filters-row an-filters-row-sla">
+            <div class="an-field an-field-sla">
+              <label>SLA absentéisme (%)</label>
+              <input v-model.number="slaAbsenteisme" type="number" min="0" class="an-input" />
+            </div>
+            <div class="an-field an-field-sla">
+              <label>SLA heures sup (% masse)</label>
+              <input v-model.number="slaHeuresSupRatio" type="number" min="0" class="an-input" />
+            </div>
+            <div class="an-field an-field-sla">
+              <label>Seuil Bradford</label>
+              <input v-model.number="slaBradford" type="number" min="0" class="an-input" />
+            </div>
           </div>
         </div>
 
-        <div v-if="companyAnalyticsLoading" class="admin-loading" style="padding: 2rem; text-align: center; color: #64748b;">
-          Chargement de l'analytique...
-        </div>
+        <div v-if="companyAnalyticsLoading" class="an-loading">Chargement de l'analytique…</div>
 
         <template v-else-if="companyAnalyticsData">
-          <div v-if="companyAnalyticsData.totals.moisAvecDonnees === 0" class="empty-state" style="padding: 2rem 1.5rem; text-align: center; background: #f8fafc; border-radius: 12px; border: 1px dashed #e2e8f0;">
-            <p style="color: #64748b; margin: 0;">Aucun bulletin généré sur la période sélectionnée.</p>
+          <div v-if="companyAnalyticsData.totals.moisAvecDonnees === 0" class="an-empty an-empty-sm">
+            <p>Aucun bulletin généré sur la période sélectionnée.</p>
           </div>
 
           <template v-else>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px;">
-              <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Masse salariale (brut, année)</div>
-                <div style="font-size: 1.4rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ fcfa(companyAnalyticsData.totals.masseSalarialeAnnuelle) }}</div>
+            <div class="an-kpis">
+              <div class="an-kpi">
+                <span class="an-kpi-lbl">Masse salariale (brut)</span>
+                <span class="an-kpi-val">{{ fcfa(companyAnalyticsData.totals.masseSalarialeAnnuelle) }}</span>
               </div>
-              <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Coût total employeur</div>
-                <div style="font-size: 1.4rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ fcfa(companyCoutTotalEmployeur) }}</div>
+              <div class="an-kpi">
+                <span class="an-kpi-lbl">Coût total employeur</span>
+                <span class="an-kpi-val">{{ fcfa(companyCoutTotalEmployeur) }}</span>
               </div>
-              <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Charges patronales</div>
-                <div style="font-size: 1.4rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ companyAnalyticsData.totals.ratioChargesPatronales }}%</div>
+              <div class="an-kpi">
+                <span class="an-kpi-lbl">Charges patronales</span>
+                <span class="an-kpi-val">{{ companyAnalyticsData.totals.ratioChargesPatronales }} %</span>
               </div>
-              <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase; display: flex; align-items: center; justify-content: space-between;">
-                  <span>Absentéisme moyen</span>
-                  <span v-if="companyAbsenteismeAlert" style="background: #fee2e2; color: #dc2626; padding: 0.1rem 0.4rem; border-radius: 9999px; font-weight: 800; font-size: 0.65rem;">Alerte</span>
-                </div>
-                <div style="font-size: 1.4rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ companyAnalyticsData.totals.tauxAbsenteismeMoyen }}%</div>
+              <div class="an-kpi" :class="{ 'an-kpi-alert': companyAbsenteismeAlert }">
+                <span class="an-kpi-lbl">Absentéisme moyen <span v-if="companyAbsenteismeAlert" class="an-badge">Alerte</span></span>
+                <span class="an-kpi-val">{{ companyAnalyticsData.totals.tauxAbsenteismeMoyen }} %</span>
               </div>
-              <div class="kpi-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase; display: flex; align-items: center; justify-content: space-between;">
-                  <span>Coût heures sup</span>
-                  <span v-if="companyHeuresSupAlert" style="background: #fee2e2; color: #dc2626; padding: 0.1rem 0.4rem; border-radius: 9999px; font-weight: 800; font-size: 0.65rem;">Alerte</span>
-                </div>
-                <div style="font-size: 1.4rem; font-weight: 800; color: #0f172a; margin-top: 4px;">{{ fcfa(companyAnalyticsData.totals.coutHeuresSupAnnuel) }}</div>
-                <div style="font-size: 0.7rem; color: #94a3b8; margin-top: 2px;">{{ companyHeuresSupRatioAnnuel }}% de la masse brute</div>
+              <div class="an-kpi" :class="{ 'an-kpi-alert': companyHeuresSupAlert }">
+                <span class="an-kpi-lbl">Coût heures sup <span v-if="companyHeuresSupAlert" class="an-badge">Alerte</span></span>
+                <span class="an-kpi-val">{{ fcfa(companyAnalyticsData.totals.coutHeuresSupAnnuel) }}</span>
+                <span class="an-kpi-sub">{{ companyHeuresSupRatioAnnuel }} % de la masse brute</span>
               </div>
             </div>
 
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px;">
-              <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Masse salariale par mois (brut / net)</h4>
+            <div class="an-charts">
+              <div class="an-card">
+                <h4 class="an-card-title">Masse salariale par mois (brut / net)</h4>
                 <apexchart type="bar" height="240" :options="companyMasseSalarialeOptions" :series="companyMasseSalarialeSeries"></apexchart>
               </div>
-              <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Taux d'absentéisme par mois</h4>
+              <div class="an-card">
+                <h4 class="an-card-title">Taux d'absentéisme par mois</h4>
                 <apexchart type="bar" height="240" :options="companyAbsenteismeOptions" :series="companyAbsenteismeSeries"></apexchart>
               </div>
-              <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Coût des heures sup par mois (% masse brute)</h4>
+              <div class="an-card">
+                <h4 class="an-card-title">Coût des heures sup par mois (% masse brute)</h4>
                 <apexchart type="bar" height="240" :options="companyHeuresSupOptions" :series="companyHeuresSupSeries"></apexchart>
               </div>
-              <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;">
-                <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Masse salariale par poste</h4>
+              <div class="an-card">
+                <h4 class="an-card-title">Masse salariale par poste</h4>
                 <apexchart type="bar" :height="Math.max(240, companyByPosteDisplay.length * 34)" :options="companyByPosteOptions" :series="companyByPosteSeries"></apexchart>
               </div>
             </div>
 
-            <div class="mapping-table-container" style="margin-top: 20px;">
-              <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #0f172a;">Détail par poste</h4>
-              <table class="mapping-table">
-                <thead>
-                  <tr>
-                    <th>Poste</th>
-                    <th>Effectif</th>
-                    <th>Masse salariale</th>
-                    <th>Salaire moyen</th>
-                    <th>Min</th>
-                    <th>Max</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="p in companyAnalyticsData.byPoste" :key="p.poste">
-                    <td>{{ p.poste }}</td>
-                    <td>{{ p.effectif }}</td>
-                    <td>{{ fcfa(p.masseSalariale) }}</td>
-                    <td>{{ fcfa(p.salaireMoyen) }}</td>
-                    <td>{{ fcfa(p.salaireMin) }}</td>
-                    <td>{{ fcfa(p.salaireMax) }}</td>
-                  </tr>
-                </tbody>
-              </table>
+            <div class="an-panel">
+              <div class="an-panel-head"><h4>Détail par poste</h4></div>
+              <div class="an-table-wrap">
+                <table class="an-table">
+                  <thead>
+                    <tr>
+                      <th>Poste</th>
+                      <th class="an-th-num">Effectif</th>
+                      <th class="an-th-num">Masse salariale</th>
+                      <th class="an-th-num">Salaire moyen</th>
+                      <th class="an-th-num">Min</th>
+                      <th class="an-th-num">Max</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="p in companyAnalyticsData.byPoste" :key="p.poste">
+                      <td>{{ p.poste }}</td>
+                      <td class="an-td-num">{{ p.effectif }}</td>
+                      <td class="an-td-num">{{ fcfa(p.masseSalariale) }}</td>
+                      <td class="an-td-num">{{ fcfa(p.salaireMoyen) }}</td>
+                      <td class="an-td-num">{{ fcfa(p.salaireMin) }}</td>
+                      <td class="an-td-num">{{ fcfa(p.salaireMax) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
 
-            <div class="mapping-table-container" style="margin-top: 20px;">
-              <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
-                <h4 style="margin: 0; font-size: 0.9rem; color: #0f172a;">
-                  Score Bradford (absentéisme chronique)
-                  <span title="Score = (nombre de mois avec au moins un jour d'absence)² × total de jours d'absence sur l'année. Approximation mensuelle : les données ne suivent pas les absences jour par jour, donc ce score est indicatif, pas une mesure clinique du Bradford Factor." style="cursor: help; color: #94a3b8; font-weight: 400; font-size: 0.75rem;">ⓘ</span>
+            <div class="an-panel">
+              <div class="an-panel-head">
+                <h4>
+                  Score Bradford <span class="an-muted">(absentéisme chronique)</span>
+                  <span class="an-info" title="Score = (nombre de mois avec au moins un jour d'absence)² × total de jours d'absence sur l'année. Approximation mensuelle : indicatif, pas une mesure clinique du Bradford Factor.">ⓘ</span>
                 </h4>
-                <input
-                  v-model="bradfordSearchQuery"
-                  type="text"
-                  placeholder="Rechercher un employé..."
-                  style="padding: 0.45rem 0.7rem; border-radius: 8px; border: 1px solid #e2e8f0; font-size: 0.825rem; min-width: 220px;"
-                />
+                <input v-model="bradfordSearchQuery" type="text" placeholder="Rechercher un salarié…" class="an-panel-search" />
               </div>
-              <table class="mapping-table">
-                <thead>
-                  <tr>
-                    <th>Employé</th>
-                    <th>Poste</th>
-                    <th>Jours d'absence</th>
-                    <th>Mois avec absence</th>
-                    <th>Score Bradford</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="e in bradfordFilteredEmployees" :key="e.matricule">
-                    <td><strong>{{ e.nom }} {{ e.prenom }}</strong><div style="font-size: 0.7rem; color: #64748b;">{{ e.matricule }}</div></td>
-                    <td>{{ e.poste }}</td>
-                    <td>{{ e.totalAbsenceDays }}</td>
-                    <td>{{ e.spellsCount }}</td>
-                    <td>{{ e.bradfordScore }}</td>
-                    <td>
-                      <span v-if="e.bradfordScore > slaBradford" style="background: #fee2e2; color: #dc2626; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 700; font-size: 0.7rem;">Alerte</span>
-                    </td>
-                  </tr>
-                  <tr v-if="bradfordFilteredEmployees.length === 0">
-                    <td colspan="6" style="text-align: center; color: #64748b; padding: 1.25rem;">Aucun employé ne correspond à la recherche.</td>
-                  </tr>
-                </tbody>
-              </table>
+              <div class="an-table-wrap">
+                <table class="an-table">
+                  <thead>
+                    <tr>
+                      <th>Salarié</th>
+                      <th>Poste</th>
+                      <th class="an-th-num">Jours d'absence</th>
+                      <th class="an-th-num">Mois avec absence</th>
+                      <th class="an-th-num">Score</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="e in bradfordFilteredEmployees" :key="e.matricule">
+                      <td>
+                        <div class="an-emp">
+                          <span class="an-emp-av">{{ (((e.nom || '')[0] || '') + ((e.prenom || '')[0] || '')).toUpperCase() || '?' }}</span>
+                          <span class="an-emp-id"><strong>{{ e.nom }} {{ e.prenom }}</strong><span>{{ e.matricule }}</span></span>
+                        </div>
+                      </td>
+                      <td>{{ e.poste }}</td>
+                      <td class="an-td-num">{{ e.totalAbsenceDays }}</td>
+                      <td class="an-td-num">{{ e.spellsCount }}</td>
+                      <td class="an-td-num">{{ e.bradfordScore }}</td>
+                      <td class="an-td-num">
+                        <span v-if="e.bradfordScore > slaBradford" class="an-badge">Alerte</span>
+                      </td>
+                    </tr>
+                    <tr v-if="bradfordFilteredEmployees.length === 0">
+                      <td colspan="6" class="an-table-empty">Aucun salarié ne correspond à la recherche.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </template>
         </template>
@@ -2563,7 +2603,7 @@ const activeModuleDetails = computed(() => {
 .fidelity-picker small { font-size: 0.72rem; color: #6b7280; line-height: 1.4; }
 
 .hr-wrapper {
-  background: #f4f4fa;
+  background: linear-gradient(165deg, #f3f9f7 0%, #edf3f6 60%, #f4f8f4 100%);
   border-radius: 16px;
   overflow: hidden;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.05);
@@ -3943,9 +3983,164 @@ const activeModuleDetails = computed(() => {
 }
 
 /* ══════════════════════════════════════════
-   SAISIE MENSUELLE — barre d'action épinglée + grille défilante
+   SAISIE MENSUELLE — refonte (accent menthe/teal, aligné landing)
 ══════════════════════════════════════════ */
-.saisie-actionbar {
+.sm-module {
+  --sm-accent: #0d9488;
+  --sm-accent-strong: #0f766e;
+  --sm-tint: #f0fdfa;
+  --sm-tint-line: #ccfbf1;
+  --sm-line: #e6e8ec;
+  --sm-ink: #0f172a;
+  --sm-muted: #64748b;
+}
+
+/* header */
+.sm-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+}
+.sm-head-left { display: flex; gap: 14px; align-items: flex-start; }
+.sm-head-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sm-accent-strong);
+  background: linear-gradient(140deg, #ccfbf1, #99f6e4);
+}
+/* .sm-module … : le préfixe .sm-module isole ces règles du menu Démarrer,
+   qui utilise déjà .sm-title / .sm-grid pour sa grille d'applications. */
+.sm-module .sm-title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--sm-ink);
+}
+.sm-sub {
+  margin: 0.25rem 0 0;
+  font-size: 0.9rem;
+  color: var(--sm-muted);
+  max-width: 460px;
+  line-height: 1.5;
+}
+.sm-period {
+  background: #fff;
+  border: 1px solid var(--sm-line);
+  border-radius: 14px;
+  padding: 0.7rem 0.9rem;
+}
+.sm-period > span {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+  margin-bottom: 0.4rem;
+}
+.sm-period-fields { display: flex; gap: 0.5rem; }
+.sm-select,
+.sm-year {
+  border: 1.5px solid #e2e8f0;
+  border-radius: 9px;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--sm-ink);
+  background: #fff;
+}
+.sm-select:focus,
+.sm-year:focus { outline: none; border-color: var(--sm-accent); box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.15); }
+.sm-year { width: 82px; }
+
+/* buttons */
+.sm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.88rem;
+  padding: 0.62rem 1.15rem;
+  border-radius: 10px;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+.sm-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.sm-btn-primary {
+  background: linear-gradient(135deg, #0d9488 0%, #0f766e 100%);
+  color: #fff;
+  box-shadow: 0 8px 20px -10px rgba(13, 148, 136, 0.6);
+}
+.sm-btn-primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 12px 26px -10px rgba(13, 148, 136, 0.7); }
+.sm-btn-soft {
+  background: var(--sm-tint);
+  color: var(--sm-accent-strong);
+  border: 1px solid var(--sm-tint-line);
+  white-space: nowrap;
+}
+.sm-btn-soft:hover { background: #ccfbf1; }
+.sm-btn-ghost {
+  background: #fff;
+  color: var(--sm-ink);
+  border: 1px solid #e2e8f0;
+}
+.sm-btn-ghost:hover { border-color: #cbd5e1; }
+
+/* empty state */
+.sm-empty {
+  padding: 3rem 1.5rem;
+  text-align: center;
+  background: #f8fafc;
+  border: 1px dashed #e2e8f0;
+  border-radius: 16px;
+  color: var(--sm-muted);
+}
+.sm-empty p { margin: 0 0 12px; }
+
+/* raccourci import pointage */
+.sm-shortcut {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  background: #f8fafc;
+  border: 1px solid var(--sm-line);
+  border-radius: 14px;
+  margin-bottom: 16px;
+}
+.sm-shortcut-icon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sm-accent-strong);
+  background: var(--sm-tint);
+}
+.sm-shortcut-text { flex: 1; min-width: 200px; }
+.sm-shortcut-text strong { display: block; color: var(--sm-ink); font-size: 0.9rem; margin-bottom: 2px; }
+.sm-shortcut-text p { margin: 0; font-size: 0.82rem; color: var(--sm-muted); line-height: 1.5; }
+.sm-shortcut-text a { color: var(--sm-accent-strong); font-weight: 700; text-decoration: none; }
+.sm-shortcut-text a:hover { text-decoration: underline; }
+
+/* barre d'action épinglée */
+.sm-bar {
   position: sticky;
   top: 0;
   z-index: 20;
@@ -3953,74 +4148,461 @@ const activeModuleDetails = computed(() => {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  margin-top: 0.5rem;
+  margin: 1rem 0 0.75rem;
   padding: 0.75rem 1rem;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+  background: #fff;
+  border: 1px solid var(--sm-line);
+  border-radius: 14px;
+  box-shadow: 0 10px 26px -14px rgba(15, 23, 42, 0.18);
 }
-.saisie-actionbar-count {
-  font-size: 0.85rem;
-  color: #475569;
+.sm-bar-count {
+  font-size: 0.82rem;
+  color: var(--sm-muted);
   white-space: nowrap;
+  background: #f1f5f9;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
 }
-.saisie-actionbar-count strong {
-  color: #0f172a;
-  font-size: 1rem;
-}
-.saisie-actionbar-search {
+.sm-bar-count b { color: var(--sm-ink); font-size: 0.95rem; margin-right: 1px; }
+.sm-bar-search {
   flex: 1;
   min-width: 200px;
-  max-width: 340px;
+  max-width: 320px;
   display: flex;
   flex-direction: column;
 }
-.saisie-clear-search {
+.sm-bar-clear {
   margin-top: 0.25rem;
-  font-size: 0.75rem;
-  color: #64748b;
+  align-self: flex-start;
   background: none;
   border: none;
   cursor: pointer;
+  font: inherit;
+  font-size: 0.74rem;
+  color: var(--sm-muted);
   text-decoration: underline;
-  align-self: flex-start;
 }
-.saisie-generate-btn {
-  margin-left: auto;
-  white-space: nowrap;
-}
+.sm-bar-gen { margin-left: auto; white-space: nowrap; }
 
-.mapping-table-container.saisie-grid-scroll {
-  overflow-y: auto;
-  overflow-x: auto;
-  max-height: 55vh;
-  margin-top: 0.75rem;
+/* alertes */
+.sm-alert {
+  margin-top: 0.9rem;
+  padding: 0.8rem 1rem;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  line-height: 1.5;
 }
-.saisie-grid-scroll thead th {
+.sm-alert-err { background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; }
+.sm-alert-ok { background: #ecfdf5; border: 1px solid #a7f3d0; color: #059669; }
+.sm-alert-link {
+  display: block;
+  margin-top: 0.4rem;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.sm-alert-link:disabled { opacity: 0.6; cursor: wait; }
+
+/* grille */
+.sm-grid-wrap {
+  margin-top: 0.85rem;
+  background: #fff;
+  border: 1px solid var(--sm-line);
+  border-radius: 16px;
+  overflow: auto;
+  max-height: 56vh;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+.sm-module .sm-grid {
+  width: 100%;
+  min-width: 460px;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.sm-grid thead th {
   position: sticky;
   top: 0;
   z-index: 2;
-  box-shadow: inset 0 -1px 0 #e2e8f0;
+  background: var(--sm-tint);
+  color: var(--sm-accent-strong);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: left;
+  padding: 0.8rem 1.1rem;
+  border-bottom: 1px solid var(--sm-tint-line);
+}
+.sm-grid thead th.sm-th-num { text-align: right; }
+.sm-grid thead th span {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #5eead4;
+  margin-left: 4px;
+}
+.sm-grid tbody td {
+  padding: 0.65rem 1.1rem;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: middle;
+}
+.sm-grid tbody tr:last-child td { border-bottom: none; }
+.sm-grid tbody tr:hover td { background: #f8fdfc; }
+.sm-td-num { text-align: right; white-space: nowrap; }
+
+.sm-emp { display: flex; align-items: center; gap: 0.7rem; }
+.sm-emp-av {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ccfbf1;
+  color: var(--sm-accent-strong);
+  font-weight: 800;
+  font-size: 0.78rem;
+}
+.sm-emp-id { display: flex; flex-direction: column; line-height: 1.25; }
+.sm-emp-id strong { font-size: 0.92rem; color: var(--sm-ink); }
+.sm-emp-id span { font-size: 0.74rem; color: #94a3b8; }
+
+.sm-field {
+  display: inline-flex;
+  align-items: center;
+  background: #fff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  padding-right: 0.55rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.sm-field:focus-within { border-color: var(--sm-accent); box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.15); }
+.sm-field input {
+  width: 58px;
+  border: none;
+  background: none;
+  outline: none;
+  padding: 0.5rem 0.3rem 0.5rem 0.65rem;
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.9rem;
+  text-align: right;
+  color: var(--sm-ink);
+}
+.sm-field i { font-style: normal; font-size: 0.76rem; font-weight: 600; color: #94a3b8; }
+.sm-field-auto { background: var(--sm-tint); border-color: var(--sm-tint-line); }
+.sm-field-auto input { color: var(--sm-accent-strong); }
+.sm-field-auto i { color: #5eead4; }
+
+.sm-grid tfoot td {
+  padding: 0.8rem 1.1rem;
+  background: #f8fafc;
+  border-top: 1px solid var(--sm-line);
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: var(--sm-muted);
+}
+.sm-grid tfoot td.sm-td-num b { color: var(--sm-ink); }
+
+.sm-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--sm-line);
 }
 
 @media (max-width: 640px) {
-  .saisie-actionbar {
-    gap: 8px;
-  }
-  .saisie-actionbar-search {
-    order: 3;
-    max-width: none;
-    width: 100%;
-  }
-  .saisie-generate-btn {
-    order: 2;
-    margin-left: 0;
-  }
-  .mapping-table-container.saisie-grid-scroll {
-    max-height: 60vh;
-  }
+  .sm-head { flex-direction: column; }
+  .sm-period { width: 100%; }
+  .sm-period-fields { display: grid; grid-template-columns: 1fr 82px; }
+  .sm-bar { gap: 8px; }
+  .sm-bar-count { order: 1; }
+  .sm-bar-gen { order: 2; margin-left: 0; flex: 1; }
+  .sm-bar-search { order: 3; max-width: none; width: 100%; }
+  .sm-grid-wrap { max-height: 62vh; }
+  .sm-foot .sm-btn { width: 100%; }
 }
+
+/* ══════════════════════════════════════════
+   ANALYTIQUE RH + STATISTIQUES EMPLOYÉ — refonte (même langage que Saisie)
+══════════════════════════════════════════ */
+.an-module {
+  --an-accent: #0d9488;
+  --an-accent-strong: #0f766e;
+  --an-tint: #f0fdfa;
+  --an-tint-line: #ccfbf1;
+  --an-line: #e6e8ec;
+  --an-ink: #0f172a;
+  --an-muted: #64748b;
+}
+
+/* header */
+.an-head { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 1.5rem; }
+.an-head-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--an-accent-strong);
+  background: linear-gradient(140deg, #ccfbf1, #99f6e4);
+}
+.an-title { margin: 0; font-size: 1.35rem; font-weight: 800; letter-spacing: -0.02em; color: var(--an-ink); }
+.an-sub { margin: 0.25rem 0 0; font-size: 0.9rem; color: var(--an-muted); max-width: 560px; line-height: 1.5; }
+
+/* filters card — champs étiquetés en colonnes (labels au-dessus, hauteurs égales) */
+.an-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.15rem 1.25rem;
+  background: #fff;
+  border: 1px solid var(--an-line);
+  border-radius: 16px;
+  margin-bottom: 1.5rem;
+}
+.an-filters-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 18px;
+  align-items: flex-start;
+}
+.an-filters-row-sla {
+  padding-top: 1rem;
+  border-top: 1px solid #f1f5f9;
+}
+.an-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  flex: 1 1 190px;
+  min-width: 0;
+}
+.an-field-grow { flex: 2 1 280px; }
+.an-field-sla { flex: 0 1 210px; }
+.an-field > label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+  min-height: 0.8rem;
+}
+.an-field-hint { font-size: 0.72rem; color: var(--an-accent); font-weight: 600; }
+.an-mm-yy { display: flex; gap: 6px; }
+.an-mm-yy .an-select { flex: 1; min-width: 0; }
+.an-select,
+.an-year,
+.an-input {
+  height: 40px;
+  box-sizing: border-box;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0 0.7rem;
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--an-ink);
+  background: #fff;
+}
+.an-input { width: 100%; }
+.an-year { width: 82px; flex-shrink: 0; }
+.an-select:focus,
+.an-year:focus,
+.an-input:focus { outline: none; border-color: var(--an-accent); box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.15); }
+
+@media (max-width: 560px) {
+  .an-field, .an-field-grow, .an-field-sla { flex: 1 1 100%; }
+}
+
+/* buttons / states */
+.an-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.88rem;
+  padding: 0.62rem 1.15rem;
+  border-radius: 10px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.an-btn-ghost { background: #fff; color: var(--an-ink); border: 1px solid #e2e8f0; }
+.an-btn-ghost:hover { border-color: #cbd5e1; }
+.an-loading { padding: 2rem; text-align: center; color: var(--an-muted); }
+.an-empty {
+  padding: 3rem 1.5rem;
+  text-align: center;
+  background: #f8fafc;
+  border: 1px dashed #e2e8f0;
+  border-radius: 16px;
+  color: var(--an-muted);
+}
+.an-empty p { margin: 0 0 12px; }
+.an-empty-sm { padding: 2rem 1.5rem; margin-top: 1rem; }
+.an-empty-sm p { margin: 0; }
+
+/* KPI cards */
+.an-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.an-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 18px;
+  background: #fff;
+  border: 1px solid var(--an-line);
+  border-radius: 16px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+.an-kpi::before {
+  content: '';
+  width: 26px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--an-accent);
+  margin-bottom: 4px;
+}
+.an-kpi-alert { border-color: #fecaca; background: #fff7f7; }
+.an-kpi-alert::before { background: #f43f5e; }
+.an-kpi-lbl {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--an-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.an-kpi-val { font-size: 1.5rem; font-weight: 800; letter-spacing: -0.02em; color: var(--an-ink); }
+.an-kpi-sub { font-size: 0.72rem; color: #94a3b8; }
+.an-badge {
+  background: #fee2e2;
+  color: #dc2626;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-weight: 800;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* chart cards */
+.an-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 16px;
+}
+.an-card {
+  background: #fff;
+  border: 1px solid var(--an-line);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+.an-card-title {
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--an-ink);
+}
+
+/* detail panels + tables */
+.an-panel {
+  margin-top: 20px;
+  background: #fff;
+  border: 1px solid var(--an-line);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+.an-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.an-panel-head h4 { margin: 0; font-size: 0.9rem; font-weight: 700; color: var(--an-ink); }
+.an-panel-head .an-muted { color: #94a3b8; font-weight: 400; }
+.an-info { cursor: help; color: #94a3b8; font-weight: 400; font-size: 0.75rem; }
+.an-panel-search {
+  border: 1.5px solid #e2e8f0;
+  border-radius: 9px;
+  padding: 0.45rem 0.7rem;
+  font: inherit;
+  font-size: 0.83rem;
+  min-width: 220px;
+}
+.an-panel-search:focus { outline: none; border-color: var(--an-accent); box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.15); }
+
+.an-table-wrap { overflow-x: auto; }
+.an-table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: 0.88rem; }
+.an-table thead th {
+  background: var(--an-tint);
+  color: var(--an-accent-strong);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: left;
+  padding: 0.75rem 1.1rem;
+  border-bottom: 1px solid var(--an-tint-line);
+  white-space: nowrap;
+}
+.an-table thead th.an-th-num { text-align: right; }
+.an-table tbody td {
+  padding: 0.7rem 1.1rem;
+  border-bottom: 1px solid #f1f5f9;
+  color: #334155;
+  vertical-align: middle;
+}
+.an-table tbody tr:last-child td { border-bottom: none; }
+.an-table tbody tr:hover td { background: #f8fdfc; }
+.an-td-num { text-align: right; white-space: nowrap; }
+.an-table-empty { text-align: center; color: var(--an-muted); padding: 1.5rem; }
+
+.an-emp { display: flex; align-items: center; gap: 0.7rem; }
+.an-emp-av {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ccfbf1;
+  color: var(--an-accent-strong);
+  font-weight: 800;
+  font-size: 0.74rem;
+}
+.an-emp-id { display: flex; flex-direction: column; line-height: 1.25; }
+.an-emp-id strong { font-size: 0.9rem; color: var(--an-ink); }
+.an-emp-id span { font-size: 0.72rem; color: #94a3b8; }
+
+@media (max-width: 640px) {
+  .an-charts { grid-template-columns: 1fr; }
+  .an-panel-search { min-width: 0; width: 100%; }
+}
+
 .mapping-table {
   width: 100%;
   border-collapse: collapse;

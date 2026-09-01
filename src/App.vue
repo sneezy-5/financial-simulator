@@ -12,6 +12,7 @@ import BillingModal from './components/BillingModal.vue'
 import ProfileModal from './components/ProfileModal.vue'
 import DesktopLicenseActivation from './components/DesktopLicenseActivation.vue'
 import LandingPage from '../enterprise-site/src/App.vue'
+import LegalPage from './components/LegalPage.vue'
 import { user, fetchMe, logout } from './services/auth'
 import { localDb } from './services/localDatabase.js'
 import { toastState, showToast } from './services/toast.js'
@@ -610,8 +611,15 @@ const showAdmin = ref(false)
 const showHR = ref(false)
 
 // ── Navigation Modules ──────────────────────────────────────
-// 'home' | 'loan' | 'tax' | 'hr' | 'landing'
+// 'home' | 'loan' | 'tax' | 'hr' | 'landing' | 'legal'
 const currentModule = ref('landing')
+
+// Document légal affiché quand currentModule === 'legal' : 'cgu' | 'confidentialite'
+const legalDoc = ref('cgu')
+const ouvrirLegal = (doc) => {
+  legalDoc.value = doc === 'confidentialite' ? 'confidentialite' : 'cgu'
+  naviguer('legal', true)
+}
 
 function syncUrlParams() {
   try {
@@ -716,7 +724,7 @@ function initDeeplink() {
       if (modLower === 'payslip' || modLower === 'bulletin') {
         naviguer('hr', true)
       } else {
-        const validModules = ['home', 'loan', 'tax', 'hr', 'outils_pro']
+        const validModules = ['home', 'loan', 'tax', 'hr', 'outils_pro', 'legal']
         if (validModules.includes(modLower)) {
           naviguer(modLower, true)
         }
@@ -946,9 +954,17 @@ const toggleNotifMenu = () => {
     </button>
 
     <!-- LANDING PAGE (Vient de enterprise-site) -->
-    <LandingPage 
-      v-if="currentModule === 'landing'" 
+    <LandingPage
+      v-if="currentModule === 'landing'"
       @login="naviguer('hr', true)"
+      @legal="ouvrirLegal"
+    />
+
+    <!-- PAGES LÉGALES (CGU, Confidentialité) -->
+    <LegalPage
+      v-else-if="currentModule === 'legal'"
+      :doc="legalDoc"
+      @retour="naviguer('landing', true)"
     />
 
     <!-- MODULE : Accueil Dashboard -->
@@ -966,7 +982,7 @@ const toggleNotifMenu = () => {
     <TaxCalculatorEntreprise v-else-if="!showAdmin && !showHR && currentModule === 'tax'" :country="currentCountry" @retour="currentModule = 'home'" />
     
     <!-- MODULE : Boîte à Outils Pro -->
-    <div v-else-if="!showAdmin && !showHR && currentModule === 'outils_pro'" class="animate-in" style="background: #f4f4fa; min-height: 100vh;">
+    <div v-else-if="!showAdmin && !showHR && currentModule === 'outils_pro'" class="animate-in" style="background: linear-gradient(165deg, #f3f9f7 0%, #edf3f6 60%, #f4f8f4 100%); min-height: 100vh;">
       <div style="padding: 1rem; background: white; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: 1rem; position: sticky; top: 0; z-index: 100;">
         <button @click="currentModule = 'home'" style="display: flex; align-items: center; gap: 0.5rem; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.5rem 1rem; cursor: pointer; font-weight: 600; color: #64748b;">
           ← Accueil
@@ -1103,7 +1119,7 @@ const toggleNotifMenu = () => {
           @require-billing="showBillingModal = true"
         />
       </div>
-      <div v-else style="min-height: calc(100vh - 60px); display: flex; align-items: center; justify-content: center; background: #f4f4fa;">
+      <div v-else style="min-height: calc(100vh - 60px); display: flex; align-items: center; justify-content: center; background: linear-gradient(165deg, #f3f9f7 0%, #edf3f6 60%, #f4f8f4 100%);">
          <!-- Espace vide, la modale de connexion s'affiche par-dessus -->
       </div>
     </div>

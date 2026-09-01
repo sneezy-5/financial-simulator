@@ -133,7 +133,17 @@
             />
           </div>
 
-          <button type="submit" :disabled="loading" class="auth-submit-btn">
+          <label v-if="!isLogin" class="auth-terms">
+            <input type="checkbox" v-model="acceptTerms" />
+            <span>
+              J'accepte les
+              <a :href="legalUrl" target="_blank" rel="noopener">Conditions d'utilisation</a>
+              et la
+              <a :href="legalUrl" target="_blank" rel="noopener">Politique de confidentialité</a>.
+            </span>
+          </label>
+
+          <button type="submit" :disabled="loading || (!isLogin && !acceptTerms)" class="auth-submit-btn">
             <span v-if="loading" class="spinner"></span>
             <span v-else>{{ isLogin ? 'Se connecter' : 'S\'inscrire gratuitement' }}</span>
           </button>
@@ -174,6 +184,8 @@ const otpCode = ref('')
 
 const email = ref('')
 const password = ref('')
+const acceptTerms = ref(false)
+const legalUrl = window.location.pathname + '?module=legal'
 const loading = ref(false)
 const errorMsg = ref('')
 const successMsg = ref('')
@@ -209,6 +221,10 @@ const handleSubmit = async () => {
         }
       }
     } else {
+      if (!acceptTerms.value) {
+        errorMsg.value = "Vous devez accepter les Conditions d'utilisation et la Politique de confidentialité pour créer un compte."
+        return
+      }
       await register(email.value, password.value)
       isOtpMode.value = true
       isLogin.value = false
@@ -484,6 +500,31 @@ const handleVerifyOtp = async () => {
   background: #ffffff;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
 }
+
+.auth-terms {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: #64748b;
+  cursor: pointer;
+  margin-top: 0.25rem;
+}
+.auth-terms input {
+  margin-top: 0.15rem;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  accent-color: #3b82f6;
+  cursor: pointer;
+}
+.auth-terms a {
+  color: #3b82f6;
+  font-weight: 600;
+  text-decoration: none;
+}
+.auth-terms a:hover { text-decoration: underline; }
 
 .auth-submit-btn {
   width: 100%;

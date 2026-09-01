@@ -197,6 +197,11 @@ const previewingStyle = ref(null)
 const settingDefaultStyle = ref(null)
 const showCanvasEditor = ref(false)
 
+// Modèle retenu par défaut (Classique quand rien n'est enregistré).
+const estModeleActif = (code) =>
+  user.value?.defaultBulletinStyle === code ||
+  (!user.value?.defaultBulletinStyle && code === 'classique')
+
 const previewBulletinStyle = async (code, rubriqueCodesDraft = null) => {
   previewingStyle.value = code
   try {
@@ -667,91 +672,107 @@ const saveScheduleSettings = async () => {
 
     <!-- TAB: TEMPLATES -->
     <div v-if="activeTab === 'templates'">
-      <div style="margin-bottom: 28px;">
-        <h3 style="margin: 0 0 4px; color: #0f172a;">Modèles de bulletin ONDA</h3>
-        <p style="color: #64748b; font-size: 0.85rem; margin: 0 0 14px;">
-          Deux mises en page intégrées, sans rien à importer. Comparez-les puis choisissez celle utilisée par défaut pour tous vos bulletins.
-        </p>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; max-width: 1080px;">
-          <div v-for="style in BULLETIN_STYLES" :key="style.code" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;" :style="{ borderColor: user?.defaultBulletinStyle === style.code || (!user?.defaultBulletinStyle && style.code === 'classique') ? '#3b82f6' : '#e2e8f0' }">
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-              <strong style="color: #0f172a;">{{ style.nom }}</strong>
-              <span v-if="user?.defaultBulletinStyle === style.code || (!user?.defaultBulletinStyle && style.code === 'classique')" style="background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; padding: 1px 8px; border-radius: 10px; font-size: 0.7rem; font-weight: 700;">Par défaut</span>
-            </div>
-            <p style="color: #64748b; font-size: 0.8rem; margin: 0 0 12px; line-height: 1.4;">{{ style.description }}</p>
-            <div style="display: flex; gap: 8px;">
-              <button v-if="style.code === 'surMesure'" @click="showCanvasEditor = true" style="flex: 1; background: #eef2ff; border: 1px solid #c7d2fe; color: #4338ca; padding: 8px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 700;">
-                Concevoir avec l'IA
-              </button>
-              <button @click="previewBulletinStyle(style.code)" :disabled="previewingStyle === style.code" style="flex: 1; background: #f1f5f9; border: 1px solid #e2e8f0; color: #334155; padding: 8px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 600;">
-                {{ previewingStyle === style.code ? 'Génération…' : 'Aperçu (PDF)' }}
-              </button>
-              <button
-                v-if="!(user?.defaultBulletinStyle === style.code || (!user?.defaultBulletinStyle && style.code === 'classique'))"
-                @click="setDefaultBulletinStyle(style.code)" :disabled="settingDefaultStyle === style.code"
-                style="flex: 1; background: #2563eb; border: none; color: white; padding: 8px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 600;">
-                {{ settingDefaultStyle === style.code ? '...' : 'Définir par défaut' }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div style="margin-bottom: 28px;">
-        <h3 style="margin: 0 0 4px; color: #0f172a;">Numérotation des rubriques</h3>
-        <p style="color: #64748b; font-size: 0.85rem; margin: 0 0 14px; max-width: 760px;">
-          Chaque logiciel de paie a ses propres codes devant chaque ligne (« 10 » ou « 502 » face à « Salaire de base ») — il n'existe pas de standard commun. Redéfinissez ici ceux que vous voulez retrouver ; les autres gardent leur valeur ONDA par défaut. S'applique à tous les modèles ci-dessus.
-        </p>
-        <div v-for="groupe in groupesRubriques" :key="groupe.nom" style="margin-bottom: 16px;">
-          <div style="font-size: 0.78rem; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 6px;">{{ groupe.nom }}</div>
-          <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px 16px; max-width: 1080px;">
-            <div v-for="r in groupe.items" :key="r.cle" style="display: flex; align-items: center; gap: 8px;">
-              <span style="flex: 1; font-size: 0.82rem; color: #334155;">{{ r.libelle }}</span>
-              <input v-model="codesRubriquesForm[r.cle]" type="text" :placeholder="codesRubriquesDefaut[r.cle]" style="width: 64px; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid #e2e8f0; font-size: 0.82rem; text-align: center;" />
-            </div>
-          </div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 10px; margin-top: 6px;">
-          <button @click="enregistrerCodesRubriques" :disabled="savingCodes" style="background: #2563eb; border: none; color: white; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-weight: 700; font-size: 0.85rem;">
-            {{ savingCodes ? 'Enregistrement…' : 'Enregistrer la numérotation' }}
-          </button>
-          <button @click="reinitialiserFormulaireCodes" style="background: white; border: 1px solid #e2e8f0; color: #475569; padding: 9px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.85rem;">
-            Annuler mes modifications
-          </button>
-          <select v-model="stylePourApercuCodes" style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 10px; font-size: 0.82rem; margin-left: auto;">
-            <option v-for="style in BULLETIN_STYLES" :key="style.code" :value="style.code">{{ style.nom }}</option>
-          </select>
-          <button @click="previewBulletinStyle(stylePourApercuCodes, codesRubriquesForm)" :disabled="previewingStyle === stylePourApercuCodes" style="background: #f1f5f9; border: 1px solid #e2e8f0; color: #334155; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.82rem;">
-            {{ previewingStyle === stylePourApercuCodes ? 'Génération…' : 'Aperçu avec ces codes' }}
-          </button>
-        </div>
-      </div>
-
-      <div style="margin-bottom: 28px;">
-        <h3 style="margin: 0 0 4px; color: #0f172a;">Couleur du modèle « Personnalisé »</h3>
-        <p style="color: #64748b; font-size: 0.85rem; margin: 0 0 14px; max-width: 760px;">
-          Le modèle « Personnalisé » reprend la mise en page du modèle Classique mais dans la couleur de votre choix, plutôt qu'une couleur figée comme les autres modèles. Choisissez-la ici, elle s'applique immédiatement au prochain bulletin généré avec ce style.
-        </p>
-        <div style="display: flex; align-items: center; gap: 12px;">
-          <input v-model="bulletinCouleurForm" type="color" style="width: 48px; height: 40px; padding: 2px; border-radius: 8px; border: 1px solid #e2e8f0; cursor: pointer;" />
-          <span style="font-size: 0.82rem; color: #334155; font-family: monospace;">{{ bulletinCouleurForm }}</span>
-          <button @click="enregistrerBulletinCouleur" :disabled="savingCouleur" style="background: #2563eb; border: none; color: white; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-weight: 700; font-size: 0.85rem;">
-            {{ savingCouleur ? 'Enregistrement…' : 'Enregistrer la couleur' }}
-          </button>
-          <button @click="previewBulletinStyle('personnalise')" :disabled="previewingStyle === 'personnalise'" style="background: #f1f5f9; border: 1px solid #e2e8f0; color: #334155; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.82rem;">
-            {{ previewingStyle === 'personnalise' ? 'Génération…' : 'Aperçu avec cette couleur' }}
-          </button>
-        </div>
-      </div>
-
-      <div class="templates-tab-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h3 style="margin: 0; color: #0f172a;">Vos modèles personnalisés</h3>
-        <div style="display: flex; gap: 10px;">
-          <button @click="showPdfWizard = true" style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 700; box-shadow: 0 4px 12px rgba(239,68,68,0.25);" title="Bulletin de paie en PDF : la mise en page est reproduite à l'identique">+ Modèle Bulletin (PDF)</button>
+      <!-- 0 · Importer un modèle (Word / Excel / PDF) -->
+      <div class="templates-tab-header" style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 24px;">
+        <h3 style="margin: 0; color: #0f172a;">Importer un modèle</h3>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
           <button @click="showOfficeWizard = true" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 700; box-shadow: 0 4px 12px rgba(16,185,129,0.25);" title="Word ou Excel : votre mise en page est conservée telle quelle">+ Modèle Word / Excel</button>
+          <button @click="showPdfWizard = true" style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 700; box-shadow: 0 4px 12px rgba(239,68,68,0.25);" title="Bulletin de paie en PDF : la mise en page est reproduite à l'identique">+ Modèle Bulletin (PDF)</button>
         </div>
       </div>
-      
+
+      <!-- 1 · Choix du modèle -->
+      <section class="sp-block">
+        <div class="sp-block-head">
+          <h3>Modèle de bulletin</h3>
+          <p>Mises en page intégrées, sans rien à importer. Sélectionnez celle appliquée par défaut à tous vos bulletins ; « Aperçu » ouvre un PDF d'exemple.</p>
+        </div>
+
+        <div class="sp-model-list">
+          <label
+            v-for="style in BULLETIN_STYLES" :key="style.code"
+            class="sp-model-row" :class="{ 'is-active': estModeleActif(style.code) }">
+            <input
+              type="radio" name="bulletin-style" :value="style.code"
+              :checked="estModeleActif(style.code)"
+              :disabled="settingDefaultStyle === style.code"
+              @change="setDefaultBulletinStyle(style.code)" />
+            <span class="sp-model-dot" aria-hidden="true"></span>
+            <span class="sp-model-main">
+              <span class="sp-model-name">
+                {{ style.nom }}
+                <span v-if="estModeleActif(style.code)" class="sp-badge">Par défaut</span>
+                <span v-if="settingDefaultStyle === style.code" class="sp-model-saving">enregistrement…</span>
+              </span>
+              <span class="sp-model-desc">{{ style.description }}</span>
+            </span>
+            <button
+              type="button" class="sp-btn sp-btn-ghost sp-model-preview"
+              :disabled="previewingStyle === style.code"
+              @click.prevent="previewBulletinStyle(style.code)">
+              {{ previewingStyle === style.code ? 'Génération…' : 'Aperçu' }}
+            </button>
+          </label>
+        </div>
+
+        <!-- Couleur : n'apparaît que si le modèle actif est « Personnalisé » -->
+        <div v-if="estModeleActif('personnalise')" class="sp-color-box">
+          <div class="sp-color-txt">
+            <strong>Couleur de ce modèle</strong>
+            <p>« Personnalisé » reprend la structure du modèle Classique dans la teinte de votre choix.</p>
+          </div>
+          <div class="sp-color-ctrls">
+            <input v-model="bulletinCouleurForm" type="color" class="sp-color-input" aria-label="Couleur du bulletin" />
+            <code>{{ bulletinCouleurForm }}</code>
+            <button class="sp-btn sp-btn-primary" :disabled="savingCouleur" @click="enregistrerBulletinCouleur">
+              {{ savingCouleur ? 'Enregistrement…' : 'Enregistrer' }}
+            </button>
+            <button class="sp-btn sp-btn-ghost" :disabled="previewingStyle === 'personnalise'" @click="previewBulletinStyle('personnalise')">
+              {{ previewingStyle === 'personnalise' ? 'Génération…' : 'Aperçu' }}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2 · Numérotation des rubriques (repliable) -->
+      <details class="sp-block sp-collapse" open>
+        <summary class="sp-summary">
+          <div class="sp-block-head">
+            <h3>Numérotation des rubriques <span class="sp-chip">avancé</span></h3>
+            <p>Les codes affichés devant chaque ligne du bulletin (« 10 », « 502 »…). Redéfinissez ceux que vous voulez ; les autres gardent la valeur ONDA. S'applique à tous les modèles.</p>
+          </div>
+          <svg class="sp-chev" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </summary>
+
+        <div class="sp-collapse-body">
+          <div v-for="groupe in groupesRubriques" :key="groupe.nom" class="sp-rub-group">
+            <div class="sp-rub-group-title">{{ groupe.nom }}</div>
+            <div class="sp-rub-grid">
+              <label v-for="r in groupe.items" :key="r.cle" class="sp-rub-field">
+                <span>{{ r.libelle }}</span>
+                <input v-model="codesRubriquesForm[r.cle]" type="text" maxlength="6" :placeholder="codesRubriquesDefaut[r.cle]" />
+              </label>
+            </div>
+          </div>
+
+          <div class="sp-rub-bar">
+            <button class="sp-btn sp-btn-primary" :disabled="savingCodes" @click="enregistrerCodesRubriques">
+              {{ savingCodes ? 'Enregistrement…' : 'Enregistrer' }}
+            </button>
+            <button class="sp-btn sp-btn-ghost" @click="reinitialiserFormulaireCodes">Annuler</button>
+            <div class="sp-rub-preview">
+              <select v-model="stylePourApercuCodes" class="sp-select">
+                <option v-for="style in BULLETIN_STYLES" :key="style.code" :value="style.code">{{ style.nom }}</option>
+              </select>
+              <button class="sp-btn sp-btn-ghost" :disabled="previewingStyle === stylePourApercuCodes" @click="previewBulletinStyle(stylePourApercuCodes, codesRubriquesForm)">
+                {{ previewingStyle === stylePourApercuCodes ? 'Génération…' : 'Aperçu avec ces codes' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <h3 class="sp-mine-title">Vos modèles importés</h3>
       <div v-if="templates.length === 0" style="padding: 60px 20px; text-align: center; background: #f8fafc; border-radius: 16px; border: 1px dashed #e2e8f0;">
         <h3 style="color: #0f172a; margin-bottom: 8px;">Aucun modèle personnalisé</h3>
         <p style="color: #64748b; font-size: 0.9rem;">Le système utilise le modèle par défaut (généré dynamiquement).</p>
@@ -931,6 +952,152 @@ const saveScheduleSettings = async () => {
 </template>
 
 <style scoped>
+/* ── Onglet « Modèles PDF » : choix du modèle + numérotation ── */
+.sp-block { max-width: 1080px; margin-bottom: 26px; }
+.sp-mine-title { max-width: 1080px; margin: 6px 0 16px; color: #0f172a; font-size: 1rem; }
+.sp-block-head h3 { margin: 0 0 4px; color: #0f172a; font-size: 1rem; }
+.sp-block-head p { margin: 0; color: #64748b; font-size: 0.85rem; line-height: 1.5; max-width: 780px; }
+
+.sp-model-list {
+  margin-top: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+}
+.sp-model-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #eef2f6;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.sp-model-row:last-child { border-bottom: none; }
+.sp-model-row:hover { background: #f8fafc; }
+.sp-model-row.is-active { background: #eff6ff; }
+.sp-model-row input[type="radio"] { position: absolute; opacity: 0; pointer-events: none; }
+.sp-model-dot {
+  flex-shrink: 0;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 2px solid #cbd5e1;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.sp-model-row.is-active .sp-model-dot {
+  border-color: #2563eb;
+  box-shadow: inset 0 0 0 4px #2563eb;
+}
+.sp-model-main { flex: 1; min-width: 0; }
+.sp-model-name {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-weight: 700; color: #0f172a; font-size: 0.9rem;
+}
+.sp-model-desc {
+  display: block; margin-top: 2px;
+  color: #64748b; font-size: 0.8rem; line-height: 1.4;
+}
+.sp-badge {
+  background: #dbeafe; color: #1d4ed8;
+  border-radius: 999px; padding: 1px 8px;
+  font-size: 0.68rem; font-weight: 800; letter-spacing: 0.02em;
+}
+.sp-model-saving { font-size: 0.72rem; font-weight: 600; color: #94a3b8; }
+.sp-model-preview { flex-shrink: 0; }
+
+/* Boutons partagés */
+.sp-btn {
+  font: inherit; font-size: 0.82rem; font-weight: 700;
+  padding: 8px 14px; border-radius: 8px; cursor: pointer;
+  border: 1px solid transparent; transition: all 0.14s;
+}
+.sp-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.sp-btn-primary { background: #2563eb; color: #fff; }
+.sp-btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+.sp-btn-ghost { background: #fff; border-color: #e2e8f0; color: #334155; }
+.sp-btn-ghost:hover:not(:disabled) { background: #f1f5f9; }
+
+/* Encart couleur (modèle Personnalisé) */
+.sp-color-box {
+  margin-top: 12px;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 14px 16px;
+  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px;
+}
+.sp-color-txt { flex: 1; min-width: 220px; }
+.sp-color-txt strong { display: block; color: #0f172a; font-size: 0.88rem; }
+.sp-color-txt p { margin: 2px 0 0; color: #64748b; font-size: 0.8rem; line-height: 1.4; }
+.sp-color-ctrls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sp-color-input {
+  width: 46px; height: 38px; padding: 2px;
+  border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer;
+}
+.sp-color-ctrls code { font-size: 0.8rem; color: #334155; }
+
+/* Numérotation des rubriques — repliable */
+.sp-collapse {
+  border: 1px solid #e2e8f0; border-radius: 12px; background: #fff;
+  padding: 4px 16px 0;
+}
+.sp-summary {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 14px 0; cursor: pointer; list-style: none;
+}
+.sp-summary::-webkit-details-marker { display: none; }
+.sp-summary .sp-block-head { flex: 1; }
+.sp-chev {
+  flex-shrink: 0; margin-top: 2px; color: #94a3b8;
+  transition: transform 0.2s ease;
+}
+.sp-collapse[open] .sp-chev { transform: rotate(180deg); }
+.sp-chip {
+  background: #f1f5f9; color: #64748b;
+  border-radius: 999px; padding: 1px 8px;
+  font-size: 0.66rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;
+}
+.sp-collapse-body { padding: 4px 0 18px; }
+.sp-rub-group { margin-bottom: 16px; }
+.sp-rub-group-title {
+  font-size: 0.72rem; font-weight: 800; color: #64748b;
+  text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;
+}
+.sp-rub-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px 18px;
+}
+.sp-rub-field {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 0.82rem; color: #334155;
+}
+.sp-rub-field span { flex: 1; min-width: 0; }
+.sp-rub-field input {
+  width: 62px; flex-shrink: 0;
+  padding: 0.4rem 0.45rem; text-align: center;
+  border: 1.5px solid #e2e8f0; border-radius: 7px;
+  font: inherit; font-size: 0.82rem; font-weight: 600; color: #0f172a;
+}
+.sp-rub-field input:focus {
+  outline: none; border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+.sp-rub-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid #eef2f6;
+}
+.sp-rub-preview { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.sp-select {
+  border: 1px solid #e2e8f0; border-radius: 8px;
+  padding: 8px 10px; font: inherit; font-size: 0.82rem; color: #334155; background: #fff;
+}
+
+@media (max-width: 560px) {
+  .sp-model-preview { padding: 6px 10px; }
+  .sp-rub-preview { margin-left: 0; width: 100%; }
+  .sp-rub-preview .sp-select { flex: 1; }
+}
+
 .wizard-overlay {
   position: fixed; inset: 0; background: rgba(15, 23, 42, 0.35);
   backdrop-filter: blur(4px); display: flex; align-items: center;

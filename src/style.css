@@ -22,11 +22,11 @@
   --danger: #f43f5e;
   /* Rose 500 - Plus moderne que Red */
 
-  --bg-body: #f4f4fa;
-  /* Off-white légèrement lavande — moins clinique que le blanc pur, aligné landing */
+  --bg-body: #f1f7f5;
+  /* Off-white teinté menthe — reprend la nuance du dégradé de la landing */
   --bg-card: #ffffff;
-  --bg-input: #eeeef7;
-  /* Lavande très pâle */
+  --bg-input: #ecf3f1;
+  /* Menthe très pâle */
 
   --text-dark: #0f172a;
   /* Slate 900 */
@@ -79,7 +79,7 @@ body {
 
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  background: linear-gradient(175deg, #f6f6fc 0%, #eff0f8 58%, #f4f3fb 100%);
+  background: linear-gradient(165deg, #f3f9f7 0%, #edf4f7 55%, #f4f8f4 100%);
   color: var(--text-body);
   min-height: 100vh;
   line-height: 1.6;
