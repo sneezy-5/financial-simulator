@@ -1,0 +1,136 @@
+---
+import { Image } from 'astro:assets';
+import type { Lang } from '../../consts';
+import { SITE, LINKS, CV } from '../../consts';
+import { useT, localePath } from '../../i18n/ui';
+import { ABOUT } from '../../data/about';
+import Base from '../../layouts/Base.astro';
+import Social from '../Social.astro';
+import portrait from '../../assets/portrait.jpg';
+
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = useT(lang);
+const about = ABOUT[lang];
+const cv = CV[lang];
+
+const description = about.short;
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'AboutPage',
+  inLanguage: lang,
+  mainEntity: {
+    '@type': 'Person',
+    name: SITE.author,
+    description: about.short,
+    address: { '@type': 'PostalAddress', addressLocality: SITE.location },
+  },
+};
+---
+
+<Base
+  lang={lang}
+  title={`${t('about.title')} — ${SITE.author.replace(/[⟨⟩]/g, '')}`}
+  description={description}
+  alternates={{ fr: localePath('fr', 'about'), en: localePath('en', 'about') }}
+  active="about"
+  jsonLd={jsonLd}
+>
+  <section class="section">
+    <div class="page about-head">
+      <div class="stack" style="--flow: 1.1rem;">
+        <h1>{t('about.title')}</h1>
+        {about.long.map((p) => <p>{p}</p>)}
+        <div class="cta">
+          {cv && <a class="btn" href={cv} target="_blank" rel="noopener">{t('about.downloadCv')}</a>}
+          <a class="btn" href={localePath(lang, 'contact')}>{t('nav.contact')}</a>
+        </div>
+        <Social lang={lang} variant="row" />
+      </div>
+      <Image
+        class="portrait"
+        src={portrait}
+        alt={SITE.author.replace(/[⟨⟩]/g, '')}
+        widths={[260, 420, 560]}
+        sizes="(max-width: 780px) 45vw, 260px"
+      />
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="page">
+      <h2>{t('about.skills')}</h2>
+      <div class="skills">
+        {about.skills.map((g) => (
+          <div class="skill-group">
+            <h3>{g.group}</h3>
+            <ul>{g.items.map((i) => <li class="tag">{i}</li>)}</ul>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="page">
+      <h2>{t('about.timeline')}</h2>
+      <ol class="timeline">
+        {about.timeline.map((e) => (
+          <li>
+            <span class="tl-period">{e.period}</span>
+            <div>
+              <h3>{e.title}</h3>
+              <p class="muted">{e.body}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .about-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 260px;
+    gap: clamp(1.5rem, 5vw, 3rem);
+    align-items: start;
+  }
+  .about-head .stack { max-width: 42rem; }
+  .portrait {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 4 / 5;
+    object-fit: cover;
+    border-radius: var(--r-lg);
+    border: 1px solid var(--line);
+  }
+  @media (max-width: 780px) {
+    .about-head { grid-template-columns: 1fr; }
+    .portrait { max-width: 220px; order: -1; }
+  }
+  .cta { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.5rem; }
+
+  .skills {
+    display: grid;
+    gap: 1.5rem;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+    margin-top: 1.5rem;
+  }
+  .skill-group h3 { font-size: 1rem; margin-bottom: 0.7rem; }
+  .skill-group ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
+  .timeline { list-style: none; padding: 0; margin-top: 1.5rem; }
+  .timeline li {
+    display: grid;
+    grid-template-columns: 8rem 1fr;
+    gap: 1.5rem;
+    padding: 1.2rem 0;
+  }
+  .timeline li + li { border-top: 1px solid var(--line); }
+  .tl-period { color: var(--text-faint); font-size: 0.9rem; }
+  .timeline h3 { font-size: 1.05rem; }
+  @media (max-width: 560px) {
+    .timeline li { grid-template-columns: 1fr; gap: 0.35rem; }
+  }
+</style>

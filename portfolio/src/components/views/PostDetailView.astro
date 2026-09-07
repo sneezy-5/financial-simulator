@@ -1,0 +1,83 @@
+---
+import { render } from 'astro:content';
+import type { Lang } from '../../consts';
+import { SITE } from '../../consts';
+import { useT, localePath } from '../../i18n/ui';
+import type { Post } from '../../lib/content';
+import Base from '../../layouts/Base.astro';
+
+interface Props { lang: Lang; entry: Post; hasAlt: boolean }
+const { lang, entry, hasAlt } = Astro.props;
+const t = useT(lang);
+const { Content } = await render(entry);
+const d = entry.data;
+
+const other: Lang = lang === 'fr' ? 'en' : 'fr';
+const alternates: Partial<Record<Lang, string>> = { [lang]: localePath(lang, 'blog', d.key) };
+if (hasAlt) alternates[other] = localePath(other, 'blog', d.key);
+
+const fmtDate = (dt: Date) =>
+  dt.toLocaleDateString(lang === 'fr' ? 'fr-FR' : 'en-GB', { year: 'numeric', month: 'long', day: 'numeric' });
+
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'BlogPosting',
+    headline: d.title,
+    description: d.description,
+    inLanguage: lang,
+    datePublished: d.published.toISOString(),
+    dateModified: (d.updated ?? d.published).toISOString(),
+    url: new URL(localePath(lang, 'blog', d.key), SITE.url).href,
+    author: { '@type': 'Person', name: SITE.author, url: SITE.url },
+    publisher: { '@type': 'Person', name: SITE.author },
+    ...(d.tags.length ? { keywords: d.tags.join(', ') } : {}),
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: t('blog.title'), item: new URL(localePath(lang, 'blog'), SITE.url).href },
+      { '@type': 'ListItem', position: 2, name: d.title },
+    ],
+  },
+];
+---
+
+<Base
+  lang={lang}
+  title={`${d.title} — ${SITE.author.replace(/[⟨⟩]/g, '')}`}
+  description={d.description}
+  alternates={alternates}
+  active="blog"
+  ogType="article"
+  jsonLd={jsonLd}
+>
+  <article class="section">
+    <div class="page">
+      <a class="back" href={localePath(lang, 'blog')}>&larr; {t('blog.back')}</a>
+      <header class="ph stack" style="--flow: 0.6rem;">
+        <h1>{d.title}</h1>
+        <p class="dates muted">
+          {t('blog.published')} <time datetime={d.published.toISOString()}>{fmtDate(d.published)}</time>
+          {d.updated && <> &middot; {t('blog.updated')} <time datetime={d.updated.toISOString()}>{fmtDate(d.updated)}</time></>}
+        </p>
+        {d.tags.length > 0 && <p class="tags">{d.tags.map((tg) => <span class="tag">{tg}</span>)}</p>}
+      </header>
+
+      <div class="prose">
+        <Content />
+      </div>
+    </div>
+  </article>
+</Base>
+
+<style>
+  .back { display: inline-block; margin-bottom: 1.75rem; color: var(--text-soft); text-decoration: none; font-size: 0.95rem; }
+  .back:hover { color: var(--text); }
+  .ph { max-width: var(--w-prose); }
+  .ph h1 { font-size: clamp(1.7rem, 4.5vw, 2.4rem); font-family: var(--font-serif); font-weight: 500; }
+  .dates { font-size: 0.9rem; }
+  .tags { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+  .prose { margin-top: 2.25rem; }
+</style>

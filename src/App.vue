@@ -743,7 +743,7 @@ function initDeeplink() {
 }
 
 const hrActiveModuleTitle = computed(() => {
-  if (!hrActiveModule.value) return 'Espace RH ONDA'
+  if (!hrActiveModule.value) return 'EONDA RH'
   if (hrActiveModule.value === 'simulation') {
     return hrActiveType.value === 'conges' ? 'Calcul de Congés' : 'Simuler un Bulletin'
   }
@@ -1022,8 +1022,7 @@ const toggleNotifMenu = () => {
           <!-- Center Title (Mobile Optimized) -->
           <div class="hr-header-center">
              <div class="hr-app-badge">
-               <svg v-if="!hrActiveModule" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-               <svg v-else xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
+               <img src="/logo.png" alt="" class="hr-app-badge-logo" />
                <span>{{ hrActiveModuleTitle }}</span>
              </div>
           </div>
@@ -1031,21 +1030,19 @@ const toggleNotifMenu = () => {
           <!-- Right Action (User Auth & Billing & Profile) -->
           <div class="hr-header-right">
              <template v-if="!isSimulatorMode">
-               <div v-if="user" style="display: flex; align-items: center; gap: 0.6rem; background: rgba(255, 255, 255, 0.7); padding: 0.35rem; border-radius: 9999px; border: 1px solid rgba(226, 232, 240, 0.8); backdrop-filter: blur(8px);">
-                 <button v-if="showInstallBanner" @click="installApp" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.85rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 4px 10px rgba(16,185,129,0.25);" title="Installer ONDA RH Pro sur votre appareil">
+               <div v-if="user" style="display: flex; align-items: center; gap: 0.35rem;">
+                 <button v-if="showInstallBanner" @click="installApp" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.4rem 0.9rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 4px 10px rgba(16,185,129,0.25); margin-right: 0.35rem;" title="Installer ONDA RH Pro sur votre appareil">
                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                    Installer
                  </button>
-                 <button @click="showBillingModal = true" style="background: #ffffff; color: #0f172a; border: 1px solid #e2e8f0; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.85rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 2px 5px rgba(0,0,0,0.02); transition: all 0.2s;" title="Gérer mon abonnement">
+                 <button class="hdr-ghost-btn" @click="showBillingModal = true" title="Gérer mon abonnement">
                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: #f59e0b;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
                    {{ !user.subscriptionTier ? "S'abonner" : user.subscriptionIsTrial ? 'Essai' : user.subscriptionTier === 'pro' ? 'Pro' : user.subscriptionTier === 'starter' ? 'Starter' : user.subscriptionTier }}
                  </button>
-                 
-                 <div style="width: 1px; height: 16px; background: #cbd5e1; margin: 0 0.1rem;"></div>
-                 
+
                  <!-- Notification Bell -->
                  <div style="position: relative;">
-                   <button class="notif-btn" @click="toggleNotifMenu" style="background: transparent; color: #475569; border: none; padding: 0.35rem 0.5rem; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; position: relative; transition: all 0.2s;" title="Notifications">
+                   <button class="notif-btn" @click="toggleNotifMenu" title="Notifications">
                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
                      <span v-if="hrAlerts.length > 0" style="position: absolute; top: -2px; right: -2px; background: #ef4444; color: white; border-radius: 9999px; font-size: 0.6rem; font-weight: 800; padding: 0.1rem 0.35rem; border: 2px solid white; box-sizing: content-box; display: flex; align-items: center; justify-content: center; min-width: 10px;">{{ hrAlerts.length }}</span>
                    </button>
@@ -1054,7 +1051,7 @@ const toggleNotifMenu = () => {
                    <div v-if="showNotifMenu" style="position: absolute; top: 120%; right: -50px; width: 320px; background: white; border-radius: 12px; box-shadow: 0 10px 40px -10px rgba(0,0,0,0.2); border: 1px solid #e2e8f0; z-index: 1000; overflow: hidden; animation: slideDown 0.2s ease-out forwards; transform-origin: top center;">
                      <div style="padding: 1rem; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; background: #f8fafc;">
                        <h4 style="margin: 0; font-size: 0.9rem; font-weight: 800; color: #0f172a;">Notifications</h4>
-                       <span style="background: #eef2ff; color: #4f46e5; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 800; font-size: 0.65rem;">{{ hrAlerts.length }} NOUVELLE(S)</span>
+                       <span style="background: #d1fae5; color: #059669; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 800; font-size: 0.65rem;">{{ hrAlerts.length }} NOUVELLE(S)</span>
                      </div>
                      <div style="max-height: 350px; overflow-y: auto; padding: 0;">
                        <div v-if="hrAlerts.length === 0" style="padding: 2rem; text-align: center; color: #64748b; font-size: 0.85rem;">
@@ -1069,24 +1066,23 @@ const toggleNotifMenu = () => {
                        </div>
                      </div>
                      <div style="padding: 0.75rem; text-align: center; border-top: 1px solid #f1f5f9; background: #f8fafc;">
-                       <button @click="showNotifMenu = false; if(isHRApp){hrActiveModule = 'dashboard'}" style="background: transparent; border: none; color: #4f46e5; font-size: 0.75rem; font-weight: 700; cursor: pointer;">Tout voir dans le tableau de bord →</button>
+                       <button @click="showNotifMenu = false; if(isHRApp){hrActiveModule = 'dashboard'}" style="background: transparent; border: none; color: #059669; font-size: 0.75rem; font-weight: 700; cursor: pointer;">Tout voir dans le tableau de bord →</button>
                      </div>
                    </div>
                  </div>
                  
-                 <button @click="showProfileModal = true" style="background: transparent; color: #0f172a; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.2rem 0.4rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.4rem; transition: background 0.2s;" title="Mon Profil Client (Cliquer pour éditer)">
-                   <span style="width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #4f46e5 0%, #ec4899 100%); color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 800; box-shadow: 0 2px 5px rgba(79, 70, 229, 0.3);">
+                 <button class="hdr-profile-btn" @click="showProfileModal = true" title="Mon Profil Client (Cliquer pour éditer)">
+                   <span style="width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #059669 0%, #ec4899 100%); color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 800; box-shadow: 0 2px 5px rgba(5, 150, 105, 0.3); flex-shrink: 0;">
                      {{ (user.name || user.companyName || user.email || 'U').substring(0, 1).toUpperCase() }}
                    </span>
                    <span style="max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #0f172a; font-weight: 800;">
                      {{ user.companyName || user.name || user.email }}
                    </span>
+                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><polyline points="6 9 12 15 18 9"></polyline></svg>
                  </button>
-                 
-                 <div style="width: 1px; height: 16px; background: #cbd5e1; margin: 0 0.1rem;"></div>
-                 
-                 <button @click="() => { logout(); naviguer('landing'); }" style="background: transparent; color: #ef4444; border: none; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.75rem; border-radius: 9999px; cursor: pointer; transition: all 0.2s;" title="Se déconnecter" onmouseover="this.style.background='#fee2e2'" onmouseout="this.style.background='transparent'">
-                   Quitter
+
+                 <button class="hdr-icon-btn hdr-icon-btn-danger" @click="() => { logout(); naviguer('landing'); }" title="Se déconnecter">
+                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
                  </button>
                </div>
                <div v-else-if="!isDesktop">
@@ -2039,40 +2035,113 @@ const toggleNotifMenu = () => {
   justify-content: center;
 }
 
-@keyframes badgePulse {
-  0% { transform: scale(1); box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
-  50% { transform: scale(1.02); box-shadow: 0 4px 12px rgba(37, 99, 235, 0.1); }
-  100% { transform: scale(1); box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
-}
-
 .hr-app-badge {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   background: #ffffff;
-  padding: 0.5rem 1.25rem;
+  padding: 0.4rem 1.25rem 0.4rem 0.6rem;
   border-radius: 30px;
   border: 1px solid #e2e8f0;
   color: #0f172a;
   font-weight: 800;
   font-size: 1rem;
+  letter-spacing: -0.01em;
   box-shadow: 0 1px 3px rgba(0,0,0,0.02);
   transition: all 0.3s ease;
 }
 
 .hr-app-badge:hover {
-  border-color: #3b82f6;
-  background: #f0f9ff;
+  border-color: #10b981;
+  background: #ecfdf5;
 }
 
-.hr-app-badge svg {
-  color: #2563eb;
-  filter: drop-shadow(0 0 8px rgba(37, 99, 235, 0.3));
+.hr-app-badge-logo {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #ecfdf5 0%, #fef3c7 100%);
+  border: 1px solid #d1fae5;
+  padding: 3px;
+  flex-shrink: 0;
 }
 
 .hr-header-right {
   display: flex;
   justify-content: flex-end;
+}
+
+/* Boutons du header inspirés des apps type Linear/Notion : pas de fond
+   par défaut, juste un hover discret — au lieu de la pilule compacte
+   avec séparateurs verticaux utilisée avant. */
+.hdr-ghost-btn {
+  background: transparent;
+  color: #334155;
+  border: none;
+  font-weight: 700;
+  font-size: 0.75rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: background 0.15s ease;
+}
+.hdr-ghost-btn:hover {
+  background: #f1f5f9;
+}
+
+.notif-btn {
+  background: transparent;
+  color: #475569;
+  border: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: background 0.15s ease;
+}
+.notif-btn:hover {
+  background: #f1f5f9;
+}
+
+.hdr-profile-btn {
+  background: transparent;
+  border: none;
+  padding: 0.3rem 0.5rem 0.3rem 0.3rem;
+  border-radius: 9999px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  transition: background 0.15s ease;
+}
+.hdr-profile-btn:hover {
+  background: #f1f5f9;
+}
+
+.hdr-icon-btn {
+  background: transparent;
+  border: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  transition: all 0.15s ease;
+}
+.hdr-icon-btn-danger:hover {
+  background: #fee2e2;
+  color: #ef4444;
 }
 
 .hr-user-avatar {
@@ -2558,7 +2627,7 @@ const toggleNotifMenu = () => {
   gap: 8px;
 }
 .pwa-btn-install {
-  background: #2563eb;
+  background: #059669;
   color: white;
   border: none;
   padding: 8px 14px;
@@ -2569,7 +2638,7 @@ const toggleNotifMenu = () => {
   transition: background 0.2s;
 }
 .pwa-btn-install:hover {
-  background: #1d4ed8;
+  background: #047857;
 }
 .pwa-btn-close {
   background: transparent;
@@ -2623,7 +2692,7 @@ const toggleNotifMenu = () => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  background: #4f46e5;
+  background: #059669;
   color: white;
   border: none;
   font-weight: 700;
@@ -2631,14 +2700,14 @@ const toggleNotifMenu = () => {
   padding: 0.75rem 1.25rem;
   border-radius: 9999px;
   cursor: pointer;
-  box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4);
+  box-shadow: 0 4px 15px rgba(5, 150, 105, 0.4);
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .global-install-btn:hover {
-  background: #4338ca;
+  background: #047857;
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(79, 70, 229, 0.5);
+  box-shadow: 0 6px 20px rgba(4, 120, 87, 0.5);
 }
 </style>
 

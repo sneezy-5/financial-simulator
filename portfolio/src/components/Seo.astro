@@ -1,0 +1,48 @@
+---
+import { SITE } from '../consts';
+import type { Lang } from '../consts';
+
+interface Props {
+  lang: Lang;
+  title: string;
+  description: string;
+  /** { fr: '/chemin', en: '/en/chemin' } — chemins absolus depuis la racine. */
+  alternates: Partial<Record<Lang, string>>;
+  ogImage?: string;
+  ogType?: 'website' | 'article' | 'profile';
+  noindex?: boolean;
+}
+
+const { lang, title, description, alternates, ogImage, ogType = 'website', noindex = false } = Astro.props;
+
+const base = SITE.url.replace(/\/$/, '');
+const withSlash = (p: string) => (p.endsWith('/') ? p : p + '/');
+const canonical = new URL(withSlash(Astro.url.pathname), base + '/').href;
+const image = new URL(ogImage ?? '/og-default.png', base + '/').href;
+
+const alt = Object.entries(alternates).map(([l, path]) => ({
+  lang: l as Lang,
+  href: new URL(withSlash(path), base + '/').href,
+}));
+const xDefault = alternates.fr ?? Object.values(alternates)[0];
+---
+
+<title>{title}</title>
+<meta name="description" content={description} />
+<link rel="canonical" href={canonical} />
+{noindex && <meta name="robots" content="noindex, nofollow" />}
+
+{alt.map((a) => <link rel="alternate" hreflang={a.lang} href={a.href} />)}
+{xDefault && <link rel="alternate" hreflang="x-default" href={new URL(withSlash(xDefault), base + '/').href} />}
+
+<meta property="og:type" content={ogType} />
+<meta property="og:site_name" content={SITE.author} />
+<meta property="og:locale" content={lang === 'fr' ? 'fr_FR' : 'en_US'} />
+<meta property="og:title" content={title} />
+<meta property="og:description" content={description} />
+<meta property="og:url" content={canonical} />
+<meta property="og:image" content={image} />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content={title} />
+<meta name="twitter:description" content={description} />
+<meta name="twitter:image" content={image} />

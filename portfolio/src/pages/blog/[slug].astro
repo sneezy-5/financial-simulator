@@ -1,0 +1,11 @@
+---
+import PostDetailView from '../../components/views/PostDetailView.astro';
+import { slugPaths } from '../../lib/paths';
+
+export async function getStaticPaths() {
+  return slugPaths('posts', 'fr');
+}
+
+const { entry, hasAlt } = Astro.props;
+---
+<PostDetailView lang="fr" entry={entry} hasAlt={hasAlt} />

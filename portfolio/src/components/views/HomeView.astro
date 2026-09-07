@@ -1,0 +1,183 @@
+---
+import { Image } from 'astro:assets';
+import type { Lang } from '../../consts';
+import { SITE, LINKS, META } from '../../consts';
+import { useT, localePath, homePath } from '../../i18n/ui';
+import { getProjects, getPosts } from '../../lib/content';
+import { ABOUT } from '../../data/about';
+import Base from '../../layouts/Base.astro';
+import ProjectCard from '../ProjectCard.astro';
+import Social from '../Social.astro';
+import portrait from '../../assets/portrait.jpg';
+
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = useT(lang);
+
+const projects = await getProjects(lang);
+const featured = projects.filter((p) => p.data.featured).slice(0, 3);
+const shown = featured.length ? featured : projects.slice(0, 3);
+const posts = (await getPosts(lang)).slice(0, 3);
+const about = ABOUT[lang];
+
+const sameAs = [LINKS.linkedin, LINKS.github].filter((u) => u && !u.includes('⟨'));
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'Person',
+    name: SITE.author,
+    url: SITE.url,
+    image: new URL(portrait.src, SITE.url).href,
+    jobTitle: t('home.heroKicker'),
+    address: { '@type': 'PostalAddress', addressLocality: SITE.location },
+    ...(sameAs.length ? { sameAs } : {}),
+    knowsAbout: ['Payroll software', 'Tax compliance', 'Web development', 'Fintech', 'West Africa'],
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name: SITE.author,
+    url: SITE.url,
+    inLanguage: lang,
+  },
+];
+
+const fmtDate = (d: Date) =>
+  d.toLocaleDateString(lang === 'fr' ? 'fr-FR' : 'en-GB', { year: 'numeric', month: 'long', day: 'numeric' });
+---
+
+<Base
+  lang={lang}
+  title={META[lang].title}
+  description={META[lang].description}
+  alternates={{ fr: '/', en: '/en/' }}
+  active={null}
+  ogType="profile"
+  jsonLd={jsonLd}
+>
+  <section class="section hero-sec">
+    <div class="page hero-grid">
+      <div class="stack" style="--flow: 1.25rem;">
+        <p class="eyebrow">{t('home.heroKicker')}</p>
+        <h1 class="hero-title">{t('home.heroTitle')}</h1>
+        <p class="lead">{t('home.heroLead')}</p>
+        <div class="hero-cta">
+          <a class="btn btn--primary" href={localePath(lang, 'projects')}>{t('home.ctaProjects')}</a>
+          <a class="btn" href={localePath(lang, 'contact')}>{t('home.ctaContact')}</a>
+        </div>
+        <Social lang={lang} variant="row" />
+      </div>
+      <Image
+        class="portrait"
+        src={portrait}
+        alt={SITE.author.replace(/[⟨⟩]/g, '')}
+        widths={[280, 440, 640]}
+        sizes="(max-width: 780px) 55vw, 300px"
+        loading="eager"
+      />
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="page">
+      <div class="sec-head">
+        <h2>{t('home.projectsTitle')}</h2>
+        <a class="sec-more" href={localePath(lang, 'projects')}>{t('home.allProjects')} &rarr;</a>
+      </div>
+      <p class="lead" style="margin-bottom: 1.75rem;">{t('home.projectsLead')}</p>
+      <div class="grid">
+        {shown.map((p) => <ProjectCard lang={lang} project={p} />)}
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="page stack" style="--flow: 1rem; max-width: 46rem;">
+      <h2>{t('home.aboutTitle')}</h2>
+      <p class="lead">{about.short}</p>
+      <p><a href={localePath(lang, 'about')}>{t('home.aboutMore')} &rarr;</a></p>
+    </div>
+  </section>
+
+  {posts.length > 0 && (
+    <section class="section">
+      <div class="page">
+        <div class="sec-head">
+          <h2>{t('home.blogTitle')}</h2>
+          <a class="sec-more" href={localePath(lang, 'blog')}>{t('home.blogMore')} &rarr;</a>
+        </div>
+        <ul class="post-list">
+          {posts.map((post) => (
+            <li>
+              <a href={localePath(lang, 'blog', post.data.key)}>
+                <span class="post-title">{post.data.title}</span>
+                <time datetime={post.data.published.toISOString()}>{fmtDate(post.data.published)}</time>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  )}
+</Base>
+
+<style>
+  .hero-sec { padding-top: clamp(2.5rem, 8vw, 5.5rem); }
+  .hero-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: clamp(1.5rem, 5vw, 3.5rem);
+    align-items: center;
+  }
+  .hero-grid .stack { max-width: 42rem; }
+  .hero-title {
+    font-size: clamp(1.9rem, 5.5vw, 3.1rem);
+    font-family: var(--font-serif);
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+  .hero-cta { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.5rem; }
+  .portrait {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 4 / 5;
+    object-fit: cover;
+    border-radius: var(--r-lg);
+    border: 1px solid var(--line);
+  }
+  @media (max-width: 780px) {
+    .hero-grid { grid-template-columns: 1fr; }
+    .portrait { max-width: 240px; order: -1; }
+  }
+
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+  }
+  .sec-head h2 { font-size: 1.5rem; }
+  .sec-more { font-size: 0.95rem; color: var(--text-soft); text-decoration: none; white-space: nowrap; }
+  .sec-more:hover { color: var(--text); }
+
+  .grid {
+    display: grid;
+    gap: 1.1rem;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  }
+
+  .post-list { list-style: none; padding: 0; margin-top: 1.5rem; }
+  .post-list li + li { border-top: 1px solid var(--line); }
+  .post-list a {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.9rem 0;
+    text-decoration: none;
+    align-items: baseline;
+  }
+  .post-title { font-weight: 500; }
+  .post-list time { color: var(--text-faint); font-size: 0.9rem; flex-shrink: 0; }
+  .post-list a:hover .post-title { text-decoration: underline; text-underline-offset: 3px; }
+</style>

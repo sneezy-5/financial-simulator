@@ -1,6 +1,27 @@
 <template>
   <div v-if="show" class="auth-modal-overlay" @click.self="$emit('close')">
     <div class="auth-modal-card">
+      <!-- Panneau visuel -->
+      <div class="auth-modal-visual">
+        <img src="/dashboard.png" alt="" class="auth-visual-bg" />
+        <div class="auth-visual-overlay"></div>
+        <div class="auth-visual-content">
+          <div class="auth-visual-brand">
+            <img src="/logo.png" alt="" class="auth-visual-logo" />
+            <span>EONDA <b>RH</b></span>
+          </div>
+          <div class="auth-visual-text">
+            <h3>La paie. Enfin pensée pour votre entreprise.</h3>
+            <ul>
+              <li><span class="auth-visual-check">✓</span> 100% conforme CNPS, ITS &amp; FDFP</li>
+              <li><span class="auth-visual-check">✓</span> Bulletins générés en quelques secondes</li>
+              <li><span class="auth-visual-check">✓</span> Vos données restent sur votre poste</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="auth-modal-main">
       <!-- Header -->
       <div class="auth-modal-header">
         <div class="auth-header-title">
@@ -159,8 +180,9 @@
             <button type="button" @click="isLogin = true" class="auth-link">Se connecter</button>
           </span>
         </div>
-        
 
+
+      </div>
       </div>
     </div>
   </div>
@@ -339,17 +361,130 @@ const handleVerifyOtp = async () => {
   border-radius: 1rem;
   box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
   width: 100%;
-  max-width: 440px;
+  max-width: 1020px;
   overflow: hidden;
   border: 1px solid #e2e8f0;
   animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   color: #0f172a;
+  display: flex;
+  align-items: stretch;
+}
+
+.auth-modal-main {
+  flex: 1 1 55%;
+  min-width: 0;
+}
+
+.auth-modal-visual {
+  position: relative;
+  flex: 1 1 45%;
+  min-width: 0;
+  overflow: hidden;
+  background: #042817;
+}
+
+.auth-visual-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+}
+
+.auth-visual-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(4, 40, 23, 0.35) 0%, rgba(4, 30, 18, 0.65) 55%, rgba(3, 20, 12, 0.92) 100%);
+}
+
+.auth-visual-content {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  padding: 2.25rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  color: #ffffff;
+}
+
+.auth-visual-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-weight: 800;
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+}
+
+.auth-visual-brand b {
+  color: #fbbf24;
+}
+
+.auth-visual-logo {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 3px;
+}
+
+.auth-visual-text h3 {
+  margin: 0 0 1.1rem 0;
+  font-size: 1.55rem;
+  font-weight: 800;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: #ffffff;
+}
+
+.auth-visual-text ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.auth-visual-text li {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.auth-visual-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: rgba(16, 185, 129, 0.25);
+  color: #34d399;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+@media (max-width: 760px) {
+  .auth-modal-card {
+    max-width: 440px;
+  }
+
+  .auth-modal-visual {
+    display: none;
+  }
 }
 
 .auth-modal-header {
   background: #ffffff;
   border-bottom: 1px solid #e2e8f0;
-  padding: 1.25rem 1.5rem;
+  padding: 1.5rem 2rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -366,12 +501,12 @@ const handleVerifyOtp = async () => {
   width: 36px;
   height: 36px;
   border-radius: 0.5rem;
-  background: #eff6ff;
+  background: #d1fae5;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #3b82f6;
-  border: 1px solid #dbeafe;
+  color: #059669;
+  border: 1px solid #a7f3d0;
 }
 
 .auth-modal-header h2 {
@@ -402,7 +537,7 @@ const handleVerifyOtp = async () => {
 }
 
 .auth-modal-body {
-  padding: 1.75rem 1.5rem;
+  padding: 2.25rem 2rem;
 }
 
 .auth-subtitle {
@@ -470,7 +605,7 @@ const handleVerifyOtp = async () => {
 .forgot-link {
   background: none;
   border: none;
-  color: #3b82f6;
+  color: #059669;
   font-size: 0.775rem;
   font-weight: 600;
   cursor: pointer;
@@ -479,7 +614,7 @@ const handleVerifyOtp = async () => {
 
 .forgot-link:hover {
   text-decoration: underline;
-  color: #2563eb;
+  color: #047857;
 }
 
 .auth-input {
@@ -496,9 +631,9 @@ const handleVerifyOtp = async () => {
 }
 
 .auth-input:focus {
-  border-color: #3b82f6;
+  border-color: #10b981;
   background: #ffffff;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
 }
 
 .auth-terms {
@@ -516,11 +651,11 @@ const handleVerifyOtp = async () => {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
-  accent-color: #3b82f6;
+  accent-color: #059669;
   cursor: pointer;
 }
 .auth-terms a {
-  color: #3b82f6;
+  color: #059669;
   font-weight: 600;
   text-decoration: none;
 }
@@ -530,14 +665,14 @@ const handleVerifyOtp = async () => {
   width: 100%;
   margin-top: 0.5rem;
   padding: 0.875rem 1.25rem;
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
   color: #ffffff;
   border: none;
   border-radius: 0.625rem;
   font-size: 1rem;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
+  box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
   transition: all 0.2s ease;
   display: flex;
   align-items: center;
@@ -546,9 +681,9 @@ const handleVerifyOtp = async () => {
 }
 
 .auth-submit-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  background: linear-gradient(135deg, #047857 0%, #065f46 100%);
   transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.35);
+  box-shadow: 0 6px 16px rgba(4, 120, 87, 0.35);
 }
 
 .auth-submit-btn:disabled {
@@ -566,7 +701,7 @@ const handleVerifyOtp = async () => {
 .auth-link {
   background: none;
   border: none;
-  color: #3b82f6;
+  color: #059669;
   font-weight: 700;
   cursor: pointer;
   padding: 0;
@@ -574,7 +709,7 @@ const handleVerifyOtp = async () => {
 }
 
 .auth-link:hover {
-  color: #2563eb;
+  color: #047857;
 }
 
 .bonus-badge {

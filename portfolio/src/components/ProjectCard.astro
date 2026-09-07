@@ -1,0 +1,68 @@
+---
+import type { Lang } from '../consts';
+import { useT, localePath } from '../i18n/ui';
+import type { Project } from '../lib/content';
+
+interface Props { lang: Lang; project: Project }
+const { lang, project } = Astro.props;
+const t = useT(lang);
+const { title, summary, role, stack, year, key } = project.data;
+const href = localePath(lang, 'projects', key);
+---
+
+<article class="card">
+  <a class="card-link" href={href} aria-label={title}></a>
+  <div class="card-head">
+    <h3>{title}</h3>
+    <span class="muted year">{year}</span>
+  </div>
+  <p class="card-sum">{summary}</p>
+  <p class="card-role"><span class="eyebrow">{t('project.role')}</span> {role}</p>
+  <ul class="card-stack">
+    {stack.slice(0, 5).map((s) => <li class="tag">{s}</li>)}
+  </ul>
+</article>
+
+<style>
+  .card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 1.4rem;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .card:hover {
+    border-color: var(--text-faint);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow);
+  }
+  .card-link {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+  }
+  .card-link:focus-visible { outline-offset: -2px; }
+  .card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+  }
+  .card-head h3 { font-size: 1.15rem; }
+  .year { font-size: 0.85rem; flex-shrink: 0; }
+  .card-sum { color: var(--text-soft); }
+  .card-role { font-size: 0.92rem; }
+  .card-role .eyebrow { margin-right: 0.4rem; }
+  .card-stack {
+    list-style: none;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: auto;
+  }
+</style>

@@ -1177,8 +1177,8 @@ const modules = computed(() => {
     description: "Vue d'ensemble RH, KPIs, et alertes sur les congés et expirations de contrats.",
     icon: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>',
     isPro: true,
-    color: '#f59e0b',
-    gradient: 'linear-gradient(135deg, #78350f 0%, #f59e0b 100%)',
+    color: '#d97706',
+    gradient: 'linear-gradient(135deg, #78350f 0%, #d97706 100%)',
     badge: 'Pro'
   },
   {
@@ -1188,8 +1188,8 @@ const modules = computed(() => {
     description: `Calculez et générez un bulletin de paie mensuel standard conforme au droit du travail (${countryRules.value.name}).`,
     icon: `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>`,
     isPro: false,
-    color: '#2563eb',
-    gradient: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)',
+    color: '#059669',
+    gradient: 'linear-gradient(135deg, #064e3b 0%, #059669 100%)',
     badge: 'Gratuit',
     steps: ['Entreprise', 'Employé', 'Salaire', 'Paiement']
   },
@@ -1200,8 +1200,8 @@ const modules = computed(() => {
     description: `Calculez l'allocation et les indemnités de congés payés de vos employés (${countryRules.value.name}).`,
     icon: `<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="m9 16 2 2 4-4"/>`,
     isPro: false,
-    color: '#0d9488',
-    gradient: 'linear-gradient(135deg, #115e59 0%, #0d9488 100%)',
+    color: '#14b8a6',
+    gradient: 'linear-gradient(135deg, #115e59 0%, #14b8a6 100%)',
     badge: 'Gratuit',
     steps: ['Entreprise', 'Employé', 'Congés', 'Calcul']
   },
@@ -1212,8 +1212,8 @@ const modules = computed(() => {
     description: `Importez votre fichier Excel pour générer les bulletins (${countryRules.value.name}) de tous vos employés.`,
     icon: `<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h2"/><path d="M8 17h2"/><path d="M14 13h2"/><path d="M14 17h2"/>`,
     isPro: true,
-    color: '#059669',
-    gradient: 'linear-gradient(135deg, #064e3b 0%, #059669 100%)',
+    color: '#0ea5e9',
+    gradient: 'linear-gradient(135deg, #0369a1 0%, #0ea5e9 100%)',
     badge: 'Pro',
     steps: ['Données', 'Mapping', 'Modèle', 'Génération']
   },
@@ -1224,8 +1224,8 @@ const modules = computed(() => {
     description: `Renseignez rapidement les heures supplémentaires et jours d'absence du mois pour les employés de votre annuaire.`,
     icon: `<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>`,
     isPro: true,
-    color: '#f59e0b',
-    gradient: 'linear-gradient(135deg, #78350f 0%, #f59e0b 100%)',
+    color: '#0891b2',
+    gradient: 'linear-gradient(135deg, #164e63 0%, #0891b2 100%)',
     badge: 'Pro',
     steps: ['Grille', 'Génération']
   },
@@ -1260,8 +1260,8 @@ const modules = computed(() => {
     description: `Calculez l'indemnité de fin de contrat selon le Code du Travail (${countryRules.value.name}).`,
     icon: `<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>`,
     isPro: false,
-    color: '#d97706',
-    gradient: 'linear-gradient(135deg, #78350f 0%, #d97706 100%)',
+    color: '#0d9488',
+    gradient: 'linear-gradient(135deg, #115e59 0%, #0d9488 100%)',
     badge: 'Gratuit',
     steps: ['Entreprise', 'Employé', 'Calcul']
   },
@@ -1272,8 +1272,8 @@ const modules = computed(() => {
     description: `Stockez vos employés et historiques 100% en local sur votre appareil (IndexedDB / Offline-First).`,
     icon: `<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>`,
     isPro: true,
-    color: '#7c3aed',
-    gradient: 'linear-gradient(135deg, #3b0764 0%, #7c3aed 100%)',
+    color: '#6d28d9',
+    gradient: 'linear-gradient(135deg, #3b0764 0%, #6d28d9 100%)',
     badge: 'Pro',
     steps: ['Base Locale', 'PWA Offline', 'Sauvegarde']
   },
@@ -1284,8 +1284,8 @@ const modules = computed(() => {
     description: `Gérez vos employés, importez depuis Excel et modifiez les salaires individuellement.`,
     icon: `<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>`,
     isPro: true,
-    color: '#0ea5e9',
-    gradient: 'linear-gradient(135deg, #0369a1 0%, #0ea5e9 100%)',
+    color: '#9333ea',
+    gradient: 'linear-gradient(135deg, #581c87 0%, #9333ea 100%)',
     badge: 'Pro',
     steps: ['Liste', 'Import Excel', 'Édition']
   },
@@ -1308,8 +1308,8 @@ const modules = computed(() => {
     description: `Générez en quelques secondes tous vos documents RH : attestations, contrats CDI/CDD, lettres d'avertissement, licenciements — pré-remplis depuis l'annuaire.`,
     icon: `<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>`,
     isPro: true,
-    color: '#7c3aed',
-    gradient: 'linear-gradient(135deg, #312e81 0%, #7c3aed 100%)',
+    color: '#e11d48',
+    gradient: 'linear-gradient(135deg, #4c0519 0%, #e11d48 100%)',
     badge: 'Pro',
     steps: ['Document', 'Employé', 'Génération']
   },
@@ -1320,8 +1320,8 @@ const modules = computed(() => {
     description: `Calendrier mensuel des absences, soldes de congés annuels par employé et suivi des types d'absence.`,
     icon: `<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="m9 16 2 2 4-4"/>`,
     isPro: true,
-    color: '#2563eb',
-    gradient: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)',
+    color: '#f97316',
+    gradient: 'linear-gradient(135deg, #7c2d12 0%, #f97316 100%)',
     badge: 'Pro',
     steps: ['Calendrier', 'Soldes']
   },
@@ -1332,8 +1332,8 @@ const modules = computed(() => {
     description: `Suivez les contrats de vos employés et recevez des alertes automatiques à J-30, J-15 et J-7 avant l'expiration des CDD.`,
     icon: `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/>`,
     isPro: true,
-    color: '#059669',
-    gradient: 'linear-gradient(135deg, #064e3b 0%, #059669 100%)',
+    color: '#7c3aed',
+    gradient: 'linear-gradient(135deg, #3b0764 0%, #7c3aed 100%)',
     badge: 'Pro',
     steps: ['Contrats', 'Alertes']
   },
@@ -1344,8 +1344,8 @@ const modules = computed(() => {
     description: `Générez les bordereaux CNPS et la liste nominative à partir de vos périodes de paie, en PDF ou Excel, prêts à reporter sur e-CNPS.`,
     icon: `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/><line x1="9" y1="11" x2="13" y2="11"/>`,
     isPro: true,
-    color: '#0d9488',
-    gradient: 'linear-gradient(135deg, #134e4a 0%, #0d9488 100%)',
+    color: '#f59e0b',
+    gradient: 'linear-gradient(135deg, #78350f 0%, #f59e0b 100%)',
     badge: 'Pro',
     steps: ['Période', 'Génération']
   }
@@ -1373,6 +1373,7 @@ const activeModuleDetails = computed(() => {
     <div class="bg-shape shape-1" style="z-index: 1;"></div>
     <div class="bg-shape shape-2" style="z-index: 1;"></div>
     <div class="bg-shape shape-3" style="z-index: 1;"></div>
+    <div class="bg-shape shape-4" style="z-index: 1;"></div>
 
     <!-- ═══ BUREAU (Desktop) ═══ -->
     <div v-if="!activeModule" class="desktop-bg animate-in" @click="isStartMenuOpen = false">
@@ -1410,7 +1411,7 @@ const activeModuleDetails = computed(() => {
 
           <div class="workspace-card">
             <div class="workspace-header">
-              <div class="user-avatar" :style="{ background: isPro ? 'linear-gradient(135deg, #38bdf8 0%, #818cf8 100%)' : '#475569' }">
+              <div class="user-avatar" :style="{ background: isPro ? 'linear-gradient(135deg, #34d399 0%, #059669 100%)' : '#475569' }">
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
               </div>
               <div class="workspace-info">
@@ -1464,7 +1465,7 @@ const activeModuleDetails = computed(() => {
           </div>
 
           <a v-if="ENTERPRISE_SALES_ENABLED" :href="enterpriseUrl" style="display: block; margin-top: 1.15rem; padding: 0.75rem 0.9rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; text-decoration: none; transition: all 0.2s;">
-            <div style="font-size: 0.72rem; font-weight: 800; color: #4f46e5; text-transform: uppercase; letter-spacing: 0.03em;">Version Entreprise</div>
+            <div style="font-size: 0.72rem; font-weight: 800; color: #059669; text-transform: uppercase; letter-spacing: 0.03em;">Version Entreprise</div>
             <div style="font-size: 0.775rem; color: #475569; margin-top: 0.2rem;">Logiciel complet installable, licence unique →</div>
           </a>
         </div>
@@ -1753,8 +1754,8 @@ const activeModuleDetails = computed(() => {
         <!-- Étape 3: Modèle de bulletin & Auto-Mapping -->
         <div v-if="importStep === 3" class="import-step-content animate-in">
           <div class="import-intro">
-            <div class="intro-icon-wrap" style="background: #eff6ff;">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <div class="intro-icon-wrap" style="background: #f0f9ff;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0284c7" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
             </div>
             <div>
               <strong>Modèle de bulletin personnalisé <span class="optional-badge">Optionnel</span></strong>
@@ -2672,21 +2673,21 @@ const activeModuleDetails = computed(() => {
 .bg-shape {
   position: absolute;
   filter: blur(100px);
-  opacity: 0.6;
+  opacity: 0.85;
   border-radius: 50%;
   animation: floatShape 25s infinite ease-in-out alternate;
 }
 .shape-1 {
   width: 500px;
   height: 500px;
-  background: rgba(56, 189, 248, 0.15); /* Sky blue */
+  background: rgba(16, 185, 129, 0.22); /* Emerald */
   top: -150px;
   left: -150px;
 }
 .shape-2 {
   width: 600px;
   height: 600px;
-  background: rgba(129, 140, 248, 0.15); /* Indigo */
+  background: rgba(245, 158, 11, 0.16); /* Amber */
   bottom: -200px;
   right: -150px;
   animation-delay: -6s;
@@ -2694,10 +2695,18 @@ const activeModuleDetails = computed(() => {
 .shape-3 {
   width: 400px;
   height: 400px;
-  background: rgba(167, 139, 250, 0.1); /* Violet */
+  background: rgba(14, 165, 233, 0.14); /* Sky */
   top: 30%;
   left: 40%;
   animation-delay: -12s;
+}
+.shape-4 {
+  width: 550px;
+  height: 550px;
+  background: rgba(234, 88, 12, 0.13); /* Orange */
+  bottom: -180px;
+  left: -180px;
+  animation-delay: -18s;
 }
 
 @keyframes floatShape {
@@ -2712,7 +2721,7 @@ const activeModuleDetails = computed(() => {
   grid-template-columns: 1fr 340px;
   gap: 2.5rem;
   width: 100%;
-  max-width: 1200px;
+  max-width: 1400px;
   min-height: min-content;
   z-index: 2;
   align-items: start;
@@ -2747,7 +2756,7 @@ const activeModuleDetails = computed(() => {
 /* Desktop Shortcuts Grid */
 .desktop-shortcuts {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   grid-auto-rows: min-content;
   align-content: start;
   gap: 1.25rem;
@@ -2863,7 +2872,7 @@ const activeModuleDetails = computed(() => {
 
 .calendar-date {
   font-size: 1rem;
-  color: #3b82f6;
+  color: #10b981;
   font-weight: 600;
   margin-top: 0.5rem;
 }
@@ -2891,7 +2900,7 @@ const activeModuleDetails = computed(() => {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
+  background: linear-gradient(135deg, #34d399 0%, #059669 100%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3130,7 +3139,7 @@ const activeModuleDetails = computed(() => {
   border-radius: 4px;
   background: transparent;
   border: none;
-  color: #3b82f6;
+  color: #059669;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3166,7 +3175,7 @@ const activeModuleDetails = computed(() => {
   font-size: 0.8rem;
   font-weight: 500;
   cursor: pointer;
-  border-bottom: 2px solid #3b82f6;
+  border-bottom: 2px solid #059669;
 }
 
 .taskbar-app-icon {
@@ -3867,8 +3876,8 @@ const activeModuleDetails = computed(() => {
 .builtin-style-picker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; font-size: 0.85rem; color: #475569; }
 .builtin-style-picker select { border: 1px solid #e2e8f0; border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.85rem; color: #334155; background: white; }
 .template-zone { border: 1.5px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
-.template-empty { display: flex; align-items: center; gap: 0.5rem; padding: 0.75rem 1rem; background: #f8fafc; cursor: pointer; color: #2563eb; font-weight: 600; font-size: 0.875rem; position: relative; transition: background 0.2s; }
-.template-empty:hover { background: #eff6ff; }
+.template-empty { display: flex; align-items: center; gap: 0.5rem; padding: 0.75rem 1rem; background: #f8fafc; cursor: pointer; color: #059669; font-weight: 600; font-size: 0.875rem; position: relative; transition: background 0.2s; }
+.template-empty:hover { background: #ecfdf5; }
 .template-empty input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .template-filled { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 1rem; background: #f0f7ff; }
 .word-icon { width: 28px; height: 28px; background: #2b579a; color: white; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 0.8rem; }
@@ -3898,7 +3907,7 @@ const activeModuleDetails = computed(() => {
 .mode-badge { background: rgba(255,255,255,0.2); padding: 0.15rem 0.6rem; border-radius: 20px; font-size: 0.75rem; }
 .flex-center { display: flex; align-items: center; justify-content: center; }
 .gap-2 { gap: 0.5rem; }
-.result-icon.spin svg { animation: spin 2s linear infinite; color: #3b82f6; }
+.result-icon.spin svg { animation: spin 2s linear infinite; color: #059669; }
 @keyframes spin { 100% { transform: rotate(360deg); } }
 
 /* MAPPING UI */
@@ -3967,8 +3976,8 @@ const activeModuleDetails = computed(() => {
 .header-tag {
   display: inline-block;
   padding: 0.2rem 0.5rem;
-  background: #e0e7ff;
-  color: #3730a3;
+  background: #d1fae5;
+  color: #065f46;
   font-size: 0.72rem;
   font-weight: 600;
   border-radius: 4px;
@@ -4639,8 +4648,8 @@ const activeModuleDetails = computed(() => {
 }
 .mapping-select:focus {
   outline: none;
-  border-color: #2563eb;
-  box-shadow: 0 0 0 2px rgba(37,99,235,0.1);
+  border-color: #10b981;
+  box-shadow: 0 0 0 2px rgba(16,185,129,0.1);
 }
 .required-asterisk {
   color: #ef4444;

@@ -1,0 +1,79 @@
+---
+import '../styles/global.css';
+import type { Lang } from '../consts';
+import { META } from '../consts';
+import Seo from '../components/Seo.astro';
+import JsonLd from '../components/JsonLd.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+
+interface Props {
+  lang: Lang;
+  title?: string;
+  description?: string;
+  /** chemins équivalents par langue : { fr: '/x', en: '/en/x' } */
+  alternates: Partial<Record<Lang, string>>;
+  active?: 'projects' | 'about' | 'blog' | 'contact' | null;
+  ogImage?: string;
+  ogType?: 'website' | 'article' | 'profile';
+  jsonLd?: Record<string, unknown> | Record<string, unknown>[];
+  noindex?: boolean;
+}
+
+const {
+  lang,
+  title = META[Astro.props.lang].title,
+  description = META[Astro.props.lang].description,
+  alternates,
+  active = null,
+  ogImage,
+  ogType,
+  jsonLd,
+  noindex = false,
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta name="generator" content={Astro.generator} />
+
+    <script is:inline>
+      (function () {
+        try {
+          var t = localStorage.getItem('theme');
+          if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+        } catch (e) {}
+      })();
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap"
+    />
+
+    <Seo
+      lang={lang}
+      title={title}
+      description={description}
+      alternates={alternates}
+      ogImage={ogImage}
+      ogType={ogType}
+      noindex={noindex}
+    />
+    {jsonLd && <JsonLd data={jsonLd} />}
+  </head>
+
+  <body>
+    <Header lang={lang} active={active} alternates={alternates} />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer lang={lang} />
+  </body>
+</html>

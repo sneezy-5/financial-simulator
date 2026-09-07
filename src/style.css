@@ -2,16 +2,16 @@
    SIMULATEUR DE PRÊT - DESIGN SYSTEM PROFESSIONNEL
    ═══════════════════════════════════════════════════════════════════ */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap');
 
 :root {
-  /* Modern Fintech Palette */
-  --primary: #4f46e5;
-  /* Indigo 600 */
-  --primary-light: #e0e7ff;
-  /* Indigo 100 */
-  --primary-dark: #4338ca;
-  /* Indigo 700 */
+  /* Palette alignée sur la landing Eonda RH (emerald/amber) */
+  --primary: #059669;
+  /* Emerald 600 */
+  --primary-light: #d1fae5;
+  /* Emerald 100 */
+  --primary-dark: #047857;
+  /* Emerald 700 */
 
   --success: #10b981;
   /* Emerald 500 */
@@ -39,8 +39,8 @@
 
   --border: #e2e8f0;
   /* Slate 200 */
-  --border-focus: #6366f1;
-  /* Indigo 500 */
+  --border-focus: #10b981;
+  /* Emerald 500 */
 
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.08);
@@ -128,6 +128,7 @@ h2,
 h3,
 h4 {
   color: var(--text-dark);
+  font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   font-weight: 700;
   line-height: 1.3;
 }
@@ -199,7 +200,7 @@ select:focus {
   outline: none;
   border-color: var(--border-focus);
   background: var(--bg-card);
-  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.1);
 }
 
 input::placeholder {
@@ -254,13 +255,13 @@ input[type="range"]::-webkit-slider-thumb:hover {
 .btn-primary {
   background: var(--primary);
   color: white;
-  box-shadow: 0 4px 14px 0 rgba(37, 99, 235, 0.4);
+  box-shadow: 0 4px 14px 0 rgba(5, 150, 105, 0.4);
 }
 
 .btn-primary:hover {
   background: var(--primary-dark);
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px 0 rgba(37, 99, 235, 0.5);
+  box-shadow: 0 6px 20px 0 rgba(4, 120, 87, 0.5);
 }
 
 .btn-primary:disabled {
@@ -318,7 +319,7 @@ input[type="range"]::-webkit-slider-thumb:hover {
 .bank-card.selected {
   border-color: var(--primary);
   background: #eff6ff;
-  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.1);
 }
 
 .bank-card img {
@@ -727,7 +728,7 @@ input[type="range"].styled-slider::-webkit-slider-thumb {
 
 input[type="range"].styled-slider::-webkit-slider-thumb:hover {
   transform: scale(1.1);
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+  box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
 }
 
 input[type="range"].styled-slider::-webkit-slider-thumb:active {
@@ -1923,7 +1924,7 @@ input[type="range"].styled-slider.orange::-webkit-slider-thumb {
   justify-content: center;
   font-size: 1.5rem;
   flex-shrink: 0;
-  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+  box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
 }
 
 .pret-selected-info {

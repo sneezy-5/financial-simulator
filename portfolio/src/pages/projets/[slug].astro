@@ -1,0 +1,11 @@
+---
+import ProjectDetailView from '../../components/views/ProjectDetailView.astro';
+import { slugPaths } from '../../lib/paths';
+
+export async function getStaticPaths() {
+  return slugPaths('projects', 'fr');
+}
+
+const { entry, hasAlt } = Astro.props;
+---
+<ProjectDetailView lang="fr" entry={entry} hasAlt={hasAlt} />

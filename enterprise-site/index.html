@@ -5,41 +5,118 @@
   <meta charset="UTF-8" />
   <link rel="icon" type="image/png" href="/logo.png" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="ONDA — plateforme d'outils financiers pour la Côte d'Ivoire, le Bénin et le Togo : paie & gestion RH, simulation de crédit, fiscalité PME et rentabilité. Conforme au droit local, accessible depuis le navigateur." />
+  <meta name="description" content="Eonda RH — logiciel de paie et de gestion RH conforme au Code du Travail ivoirien : bulletins de paie, cotisations CNPS, ITS &amp; IGR, déclarations FDFP, congés, contrats CDD/CDI. Démarrage gratuit." />
   <link rel="canonical" href="https://eonda.online/" />
 
   <meta property="og:type" content="website" />
-  <meta property="og:site_name" content="ONDA" />
-  <meta property="og:title" content="ONDA — Vos décisions financières, au clair" />
-  <meta property="og:description" content="Paie & gestion RH, simulation de crédit, fiscalité PME et rentabilité — une plateforme, conforme au droit d'ici (CI · Bénin · Togo)." />
+  <meta property="og:site_name" content="Eonda RH" />
+  <meta property="og:title" content="Eonda RH — Logiciel de Paie & RH en Côte d'Ivoire" />
+  <meta property="og:description" content="Bulletins réglementaires, congés légaux, contrats et déclarations e-CNPS : l'écosystème RH intuitif pensé pour les directeurs RH, comptables et PME en Côte d'Ivoire." />
   <meta property="og:url" content="https://eonda.online/" />
   <meta property="og:image" content="https://eonda.online/dashboard.png" />
   <meta property="og:locale" content="fr_FR" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="ONDA — Vos décisions financières, au clair" />
-  <meta name="twitter:description" content="Paie & RH, crédit, fiscalité PME et rentabilité — une plateforme conforme au droit d'ici." />
+  <meta name="twitter:title" content="Eonda RH — Logiciel de Paie & RH en Côte d'Ivoire" />
+  <meta name="twitter:description" content="Paie, CNPS, ITS, FDFP et congés — la solution RH conforme, pensée pour la Côte d'Ivoire." />
   <meta name="twitter:image" content="https://eonda.online/dashboard.png" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
-    rel="stylesheet">
-  <title>ONDA — Paie & RH, Crédit, Fiscalité PME | Côte d'Ivoire, Bénin, Togo</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
+  <title>Eonda RH • Logiciel de Paie & RH en Côte d'Ivoire</title>
 
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
-    "name": "ONDA",
+    "name": "Eonda RH",
     "applicationCategory": "BusinessApplication",
     "operatingSystem": "Web",
-    "description": "Plateforme d'outils financiers et de paie pour l'Afrique de l'Ouest : paie & gestion RH, simulation de crédit, fiscalité PME et outils de rentabilité.",
+    "description": "Logiciel de paie et de gestion RH conforme au droit du travail ivoirien : bulletins, CNPS, ITS, IGR, FDFP, congés, contrats et déclarations sociales.",
     "url": "https://eonda.online/",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "XOF" },
-    "areaServed": ["CI", "BJ", "TG"]
+    "areaServed": ["CI"]
   }
   </script>
+
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "primary": "#004226",
+            "primary-container": "#0F5B38",
+            "primary-fixed": "#10B981",
+            "primary-fixed-dim": "#8FD6A9",
+            "brand-emerald-dark": "#0A3D25",
+            "brand-emerald-light": "#DCFCE7",
+            "brand-amber": "#F59E0B",
+            "brand-amber-light": "#FEF3C7",
+            "brand-orange": "#EA580C",
+            "brand-orange-light": "#FFEDD5",
+            "tertiary": "#00412F",
+            "tertiary-container": "#005B43",
+            "surface-mint": "#F0FDF4",
+            "surface-cream": "#FDFBF7",
+            "surface-canvas": "#F8FAFC",
+            "surface-container-lowest": "#FFFFFF",
+            "surface-container-low": "#F8FAFC",
+            "surface-container": "#F1F5F9",
+            "surface-container-high": "#E2E8F0",
+            "surface-container-highest": "#CBD5E1",
+            "footer-dark": "#07120E",
+            "on-surface": "#0F172A",
+            "on-surface-variant": "#475569",
+            "outline": "#94A3B8",
+            "outline-variant": "#CBD5E1"
+          },
+          fontFamily: {
+            "headline-xl": ["'Plus Jakarta Sans'", "sans-serif"],
+            "headline-lg": ["'Plus Jakarta Sans'", "sans-serif"],
+            "headline-md": ["'Plus Jakarta Sans'", "sans-serif"],
+            "headline-sm": ["'Plus Jakarta Sans'", "sans-serif"],
+            "display-hero": ["'Plus Jakarta Sans'", "sans-serif"],
+            "label-caps": ["'Plus Jakarta Sans'", "sans-serif"],
+            "body-lg": ["'Inter'", "sans-serif"],
+            "body-md": ["'Inter'", "sans-serif"],
+            "body-sm": ["'Inter'", "sans-serif"],
+            "code-cell": ["'JetBrains Mono'", "monospace"]
+          },
+          boxShadow: {
+            "airtable": "0 20px 45px -12px rgba(15, 91, 56, 0.12), 0 8px 16px -6px rgba(0, 0, 0, 0.06)",
+            "airtable-hover": "0 25px 50px -12px rgba(15, 91, 56, 0.18), 0 12px 24px -8px rgba(0, 0, 0, 0.08)",
+            "float": "0 18px 38px -10px rgba(0, 0, 0, 0.15), 0 8px 16px -8px rgba(0, 0, 0, 0.1)"
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    @layer base {
+      html, body {
+        margin: 0;
+        padding: 0;
+        scroll-behavior: smooth;
+      }
+    }
+    .hero-glow-mesh {
+      background:
+        radial-gradient(circle at 18% 15%, rgba(16, 185, 129, 0.28) 0%, transparent 45%),
+        radial-gradient(circle at 82% 18%, rgba(245, 158, 11, 0.24) 0%, transparent 42%),
+        radial-gradient(circle at 50% 48%, rgba(15, 91, 56, 0.15) 0%, transparent 55%),
+        radial-gradient(circle at 75% 75%, rgba(14, 165, 233, 0.18) 0%, transparent 50%),
+        radial-gradient(circle at 25% 85%, rgba(234, 88, 12, 0.14) 0%, transparent 45%);
+    }
+    .glass-card {
+      background: rgba(255, 255, 255, 0.88);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid rgba(255, 255, 255, 0.8);
+    }
+  </style>
 </head>
 
 <body>

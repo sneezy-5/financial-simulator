@@ -1,0 +1,57 @@
+---
+import type { Lang } from '../../consts';
+import { SITE } from '../../consts';
+import { useT, localePath } from '../../i18n/ui';
+import { getProjects } from '../../lib/content';
+import Base from '../../layouts/Base.astro';
+import ProjectCard from '../ProjectCard.astro';
+
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = useT(lang);
+const projects = await getProjects(lang);
+
+const title = `${t('projects.title')} — ${SITE.author.replace(/[⟨⟩]/g, '')}`;
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'CollectionPage',
+  name: t('projects.title'),
+  inLanguage: lang,
+  hasPart: projects.map((p) => ({
+    '@type': 'CreativeWork',
+    name: p.data.title,
+    abstract: p.data.summary,
+    url: new URL(localePath(lang, 'projects', p.data.key), SITE.url).href,
+  })),
+};
+---
+
+<Base
+  lang={lang}
+  title={title}
+  description={t('projects.lead')}
+  alternates={{ fr: localePath('fr', 'projects'), en: localePath('en', 'projects') }}
+  active="projects"
+  jsonLd={jsonLd}
+>
+  <section class="section">
+    <div class="page stack" style="--flow: 0.75rem; max-width: 46rem;">
+      <h1>{t('projects.title')}</h1>
+      <p class="lead">{t('projects.lead')}</p>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="page grid">
+      {projects.map((p) => <ProjectCard lang={lang} project={p} />)}
+    </div>
+  </section>
+</Base>
+
+<style>
+  .grid {
+    display: grid;
+    gap: 1.1rem;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  }
+</style>

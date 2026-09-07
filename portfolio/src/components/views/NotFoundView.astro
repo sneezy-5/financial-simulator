@@ -1,0 +1,26 @@
+---
+import type { Lang } from '../../consts';
+import { useT, homePath } from '../../i18n/ui';
+import Base from '../../layouts/Base.astro';
+
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = useT(lang);
+---
+
+<Base
+  lang={lang}
+  title={`${t('404.title')} — 404`}
+  description={t('404.lead')}
+  alternates={{ fr: '/', en: '/en/' }}
+  noindex
+>
+  <section class="section" style="text-align: center;">
+    <div class="page stack" style="--flow: 1rem;">
+      <p class="eyebrow">404</p>
+      <h1>{t('404.title')}</h1>
+      <p class="lead" style="margin-inline: auto;">{t('404.lead')}</p>
+      <p><a class="btn btn--primary" href={homePath(lang)}>{t('404.home')}</a></p>
+    </div>
+  </section>
+</Base>

@@ -1,0 +1,69 @@
+---
+import type { Lang } from '../../consts';
+import { SITE, LINKS, hasLink } from '../../consts';
+import { useT, localePath } from '../../i18n/ui';
+import Base from '../../layouts/Base.astro';
+import Social from '../Social.astro';
+
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = useT(lang);
+
+const rows = [
+  hasLink(LINKS.email) ? { label: 'Email', value: LINKS.email, href: `mailto:${LINKS.email}` } : null,
+  hasLink(LINKS.linkedin) ? { label: 'LinkedIn', value: LINKS.linkedin.replace(/^https?:\/\//, ''), href: LINKS.linkedin } : null,
+  hasLink(LINKS.github) ? { label: 'GitHub', value: LINKS.github.replace(/^https?:\/\//, ''), href: LINKS.github } : null,
+  hasLink(LINKS.whatsapp) ? { label: 'WhatsApp', value: LINKS.whatsapp.replace('https://wa.me/', '+'), href: LINKS.whatsapp } : null,
+].filter(Boolean) as { label: string; value: string; href: string }[];
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'ContactPage',
+  inLanguage: lang,
+  mainEntity: { '@type': 'Person', name: SITE.author, email: LINKS.email },
+};
+---
+
+<Base
+  lang={lang}
+  title={`${t('contact.title')} — ${SITE.author.replace(/[⟨⟩]/g, '')}`}
+  description={t('contact.lead')}
+  alternates={{ fr: localePath('fr', 'contact'), en: localePath('en', 'contact') }}
+  active="contact"
+  jsonLd={jsonLd}
+>
+  <section class="section">
+    <div class="page stack" style="--flow: 1rem; max-width: 42rem;">
+      <h1>{t('contact.title')}</h1>
+      <p class="lead">{t('contact.lead')}</p>
+
+      <Social lang={lang} variant="row" />
+
+      <ul class="rows">
+        {rows.map((r) => (
+          <li>
+            <span class="r-label">{r.label}</span>
+            <a href={r.href} target={r.href.startsWith('mailto:') ? undefined : '_blank'} rel="noopener">{r.value}</a>
+          </li>
+        ))}
+      </ul>
+
+      {LINKS.email && (
+        <p><a class="btn btn--primary" href={`mailto:${LINKS.email}`}>{t('contact.emailCta')}</a></p>
+      )}
+    </div>
+  </section>
+</Base>
+
+<style>
+  .rows { list-style: none; padding: 0; margin-top: 0.5rem; }
+  .rows li {
+    display: grid;
+    grid-template-columns: 7rem 1fr;
+    gap: 1rem;
+    padding: 0.85rem 0;
+  }
+  .rows li + li { border-top: 1px solid var(--line); }
+  .r-label { color: var(--text-faint); font-size: 0.9rem; }
+  .rows a { word-break: break-all; }
+</style>
