@@ -30,7 +30,7 @@ const modules = computed(() => [
     sous: 'Banques & Prêts',
     description: `Simulateur de mensualités, TEG et capacité d'emprunt.`,
     avantages: ['Mensualité', 'Taux & TEG', 'Scoring'],
-    couleur: '#38bdf8',
+    couleur: '#0ea5e9',
     icon: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21v-8.25M15.75 21v-8.25M8.25 21v-8.25M3 9l9-6 9 6m-1.5 12V10.332A48.36 48.36 0 0 0 12 9.75c-2.551 0-5.056.2-7.5.582V21M3 21h18M12 6.75h.008v.008H12V6.75Z"/></svg>`,
   },
   {
@@ -40,7 +40,7 @@ const modules = computed(() => [
     sous: `Bulletin & Cotisations`,
     description: `Calculs de salaire net, impôts ITS et cotisations sociales.`,
     avantages: ['Calcul Net', 'ITS & CNSS', 'Expatriés'],
-    couleur: '#c084fc',
+    couleur: '#10b981',
     icon: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z"/></svg>`,
   },
   {
@@ -50,7 +50,7 @@ const modules = computed(() => [
     sous: `Impôts Entreprise`,
     description: `Comparatif d'impôts et aide au choix de régime fiscal.`,
     avantages: ['Impôt PME', 'Choix du Régime', 'TPS & Réel'],
-    couleur: '#34d399',
+    couleur: '#f59e0b',
     icon: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-.1-.664m-5.8 0A2.251 2.251 0 0 1 13.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25ZM6.75 12h.008v.008H6.75V12Zm0 3h.008v.008H6.75V15Zm0 3h.008v.008H6.75V18Z"/></svg>`,
   },
   {
@@ -60,8 +60,18 @@ const modules = computed(() => [
     sous: 'Marge & Rentabilité',
     description: `Détermination du point mort, des prix et de la marge brute.`,
     avantages: ['Prix de Vente', 'Marge Brute', 'Point Mort'],
-    couleur: '#60a5fa',
+    couleur: '#f43f5e',
     icon: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l5.654-4.654m5.896-2.613l.617-.923a2.25 2.25 0 00-.933-3.26 2.25 2.25 0 01-2.206-2.22V5.25A2.25 2.25 0 009 3H5.25A2.25 2.25 0 003 5.25v3.75A2.25 2.25 0 005.25 11.25h2.206c.98 0 1.815.7 2.004 1.66l.047.234c.11.55.421 1.04.869 1.38z"/></svg>`,
+  },
+  {
+    id: 'analyse_financiere',
+    pilier: 'PILIER 5',
+    titre: 'Analyse Financière',
+    sous: 'Bilan OHADA & Ratios',
+    description: `26 ratios financiers et score de financement bancaire à partir de votre Bilan et Compte de Résultat.`,
+    avantages: ['26 Ratios', 'Score Bancaire', 'Fiche PDF'],
+    couleur: '#0d9488',
+    icon: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z"/></svg>`,
   }
 ])
 </script>
@@ -85,12 +95,12 @@ const modules = computed(() => [
           <CountrySelector :country="props.country" @change-country="(c) => emit('country-changed', c)" />
           
           <div v-if="user && !isSimulatorMode" style="display: flex; align-items: center; gap: 0.5rem;">
-            <button @click="emit('require-billing')" style="background: #e0e7ff; color: #3730a3; border: 1px solid #c7d2fe; font-weight: 800; font-size: 0.75rem; padding: 0.35rem 0.75rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; transition: all 0.2s;" title="Gérer mon abonnement">
+            <button @click="emit('require-billing')" style="background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; font-weight: 800; font-size: 0.75rem; padding: 0.35rem 0.75rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; transition: all 0.2s;" title="Gérer mon abonnement">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: #f59e0b;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
               {{ !user.subscriptionTier ? "S'abonner" : user.subscriptionIsTrial ? 'Essai' : user.subscriptionTier === 'pro' ? 'Pro' : user.subscriptionTier === 'starter' ? 'Starter' : user.subscriptionTier }}
             </button>
             <button @click="emit('open-profile')" style="background: #ffffff; color: #0f172a; border: 1px solid #cbd5e1; font-weight: 700; font-size: 0.75rem; padding: 0.35rem 0.8rem; border-radius: 9999px; cursor: pointer; display: flex; align-items: center; gap: 0.4rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08);" title="Mon Profil Client (Cliquer pour éditer)">
-              <span style="width: 20px; height: 20px; border-radius: 50%; background: #4f46e5; color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 800;">
+              <span style="width: 20px; height: 20px; border-radius: 50%; background: #059669; color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 800;">
                 {{ (user.name || user.companyName || user.email || 'U').substring(0, 1).toUpperCase() }}
               </span>
               <span style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #0f172a; font-weight: 700;">
@@ -135,7 +145,7 @@ const modules = computed(() => [
     <!-- Modules Grid -->
     <div class="modules-section">
       <div class="modules-header">
-        <h2>4 PILIERS FINANCIERS — {{ countryRules.name.toUpperCase() }}</h2>
+        <h2>{{ modules.length }} PILIERS FINANCIERS — {{ countryRules.name.toUpperCase() }}</h2>
         <div class="header-line"></div>
       </div>
 
@@ -144,17 +154,18 @@ const modules = computed(() => [
           v-for="m in modules"
           :key="m.id"
           class="module-card"
+          :style="{ '--m-color': m.couleur }"
           @click="emit('navigate', m.id)"
         >
           <div class="module-left">
-            <div class="module-icon-wrap">
+            <div class="module-icon-wrap" :style="{ background: m.couleur }">
               <span v-html="m.icon" class="module-icon-svg"></span>
             </div>
           </div>
-          
+
           <div class="module-right">
             <div class="module-meta">
-              <span class="module-sous">{{ m.sous }}</span>
+              <span class="module-sous" :style="{ color: m.couleur }">{{ m.sous }}</span>
               <span class="pilier-tag">{{ m.pilier }}</span>
             </div>
             
@@ -176,7 +187,7 @@ const modules = computed(() => [
     </div>
 
     <div v-if="ENTERPRISE_SALES_ENABLED" style="text-align: center; padding: 1.5rem 1rem 2.5rem;">
-      <a :href="enterpriseUrl" style="font-size: 0.85rem; font-weight: 600; color: #4f46e5; text-decoration: none;">
+      <a :href="enterpriseUrl" style="font-size: 0.85rem; font-weight: 600; color: #059669; text-decoration: none;">
         Vous êtes une entreprise ? Découvrez la version installable →
       </a>
     </div>
@@ -186,7 +197,11 @@ const modules = computed(() => [
 <style scoped>
 .home-page {
   min-height: 100vh;
-  background: #f8fafc;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(16, 185, 129, 0.10) 0%, transparent 40%),
+    radial-gradient(circle at 90% 15%, rgba(245, 158, 11, 0.08) 0%, transparent 38%),
+    radial-gradient(circle at 50% 100%, rgba(14, 165, 233, 0.07) 0%, transparent 45%),
+    #f8fafc;
   padding-bottom: 5rem;
   color: #0f172a;
 }
@@ -252,7 +267,7 @@ const modules = computed(() => [
 .logo-badge-lite {
   font-size: 0.65rem;
   font-weight: 800;
-  background: #2563eb;
+  background: #059669;
   color: white;
   padding: 1px 6px;
   border-radius: 6px;
@@ -327,9 +342,9 @@ const modules = computed(() => [
 .region-pill {
   font-size: 0.68rem;
   font-weight: 800;
-  background: #eff6ff;
-  color: #2563eb;
-  border: 1px solid #bfdbfe;
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #a7f3d0;
   padding: 0.15rem 0.6rem;
   border-radius: 12px;
 }
@@ -397,16 +412,16 @@ const modules = computed(() => [
 
 /* High contrast accent for SMIG without harsh green */
 .smig-chip {
-  background: #eff6ff;
-  border-color: #bfdbfe;
+  background: #ecfdf5;
+  border-color: #a7f3d0;
 }
 
 .smig-chip .chip-label {
-  color: #2563eb;
+  color: #059669;
 }
 
 .smig-chip .chip-val {
-  color: #1d4ed8;
+  color: #047857;
 }
 
 /* Intro Section */
@@ -504,7 +519,7 @@ const modules = computed(() => [
 .module-card:hover {
   transform: translateY(-4px) scale(1.01);
   box-shadow: 0 20px 35px rgba(0, 0, 0, 0.1);
-  border-color: #cbd5e1;
+  border-color: var(--m-color, #cbd5e1);
   background: #f8fafc;
 }
 
@@ -519,9 +534,13 @@ const modules = computed(() => [
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #eff6ff;
-  color: #3b82f6;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+  color: #ffffff;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
+  transition: transform 0.25s ease;
+}
+
+.module-card:hover .module-icon-wrap {
+  transform: scale(1.08);
 }
 
 .module-icon-svg {

@@ -2633,3 +2633,18 @@ input[type="range"].styled-slider.orange::-webkit-slider-thumb {
 .key-stat-card.highlight-rate .value {
   color: #059669 !important;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   IMPRESSION — utilitaire global : masque tout élément marqué .no-print
+   pendant l'aperçu/impression, quel que soit le composant qui le porte
+   (Vue scoped styles ne traversent pas les composants, donc cette règle
+   doit rester ici plutôt que dans un <style scoped> local).
+   ═══════════════════════════════════════════════════════════════════ */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  html, body, .page-bg-wash {
+    background: #fff !important;
+  }
+}

@@ -11,7 +11,9 @@ import AuthModal from './components/AuthModal.vue'
 import BillingModal from './components/BillingModal.vue'
 import ProfileModal from './components/ProfileModal.vue'
 import DesktopLicenseActivation from './components/DesktopLicenseActivation.vue'
-import LandingPage from '../enterprise-site/src/App.vue'
+import ScoreGauge from './components/finance/ScoreGauge.vue'
+import AnalyseFinanciereOHADA from './components/finance/AnalyseFinanciereOHADA.vue'
+import LandingPage from '../enterprise-site/src/RhLanding.vue'
 import LegalPage from './components/LegalPage.vue'
 import { user, fetchMe, logout } from './services/auth'
 import { localDb } from './services/localDatabase.js'
@@ -724,7 +726,7 @@ function initDeeplink() {
       if (modLower === 'payslip' || modLower === 'bulletin') {
         naviguer('hr', true)
       } else {
-        const validModules = ['home', 'loan', 'tax', 'hr', 'outils_pro', 'legal']
+        const validModules = ['home', 'loan', 'tax', 'hr', 'outils_pro', 'analyse_financiere', 'legal']
         if (validModules.includes(modLower)) {
           naviguer(modLower, true)
         }
@@ -996,6 +998,23 @@ const toggleNotifMenu = () => {
         </div>
         <!-- Note: resultats et params sont null ici en mode autonome -->
         <TaxOutilsFinanciers :resultats="null" :params="{ ca: 0, secteur: 'commerce' }" />
+      </div>
+    </div>
+
+    <!-- MODULE : Analyse Financière OHADA/SYSCOHADA -->
+    <div v-else-if="!showAdmin && !showHR && currentModule === 'analyse_financiere'" class="animate-in page-bg-wash" style="background: linear-gradient(165deg, #f3f9f7 0%, #edf3f6 60%, #f4f8f4 100%); min-height: 100vh;">
+      <div class="no-print" style="padding: 1rem; background: white; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: 1rem; position: sticky; top: 0; z-index: 100;">
+        <button @click="currentModule = 'home'" style="display: flex; align-items: center; gap: 0.5rem; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.5rem 1rem; cursor: pointer; font-weight: 600; color: #64748b;">
+          ← Accueil
+        </button>
+        <h2 style="margin: 0; font-size: 1.1rem; font-weight: 800; color: #0f172a;">Analyse Financière OHADA/SYSCOHADA</h2>
+      </div>
+      <div style="max-width: 1200px; margin: 2rem auto; padding: 0 1rem 3rem;">
+        <div class="no-print" style="margin-bottom: 2rem; text-align: center;">
+          <h1 style="font-size: 1.5rem; font-weight: 800; color: #0f172a; margin-bottom: 0.5rem;">Bilan, ratios et score de financement</h1>
+          <p style="color: #64748b;">Saisissez votre Bilan et Compte de Résultat pour obtenir 26 ratios financiers et un verdict d'éligibilité bancaire.</p>
+        </div>
+        <AnalyseFinanciereOHADA />
       </div>
     </div>
     
@@ -1874,16 +1893,10 @@ const toggleNotifMenu = () => {
             💡 Ce score évalue votre <strong>profil d'emprunteur</strong> sur 100 points. Plus il est élevé, plus vos chances d'obtenir le prêt sont grandes. Un score <strong>≥ 60</strong> est généralement requis.
           </p>
           <div style="display: flex; gap: 2rem; align-items: center;">
-            <div style="position: relative; width: 100px; height: 100px; flex-shrink: 0;">
-              <svg viewBox="0 0 100 100" style="transform: rotate(-90deg);">
-                <circle cx="50" cy="50" r="45" fill="none" stroke="#e2e8f0" stroke-width="10"/>
-                <circle cx="50" cy="50" r="45" fill="none" :stroke="scoring.couleur === 'success' ? '#22c55e' : scoring.couleur === 'primary' ? '#3b82f6' : scoring.couleur === 'warning' ? '#f59e0b' : '#ef4444'" stroke-width="10" stroke-linecap="round" :stroke-dasharray="283" :stroke-dashoffset="283 - (283 * scoring.score / 100)" style="transition: 1s"/>
-              </svg>
-              <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-                <span class="text-xl font-bold">{{ scoring.score }}</span>
-                <span class="text-xs text-muted">/100</span>
-              </div>
-            </div>
+            <ScoreGauge
+              :score="scoring.score"
+              :color="scoring.couleur === 'success' ? '#22c55e' : scoring.couleur === 'primary' ? '#3b82f6' : scoring.couleur === 'warning' ? '#f59e0b' : '#ef4444'"
+            />
             <div style="flex: 1;">
               <div class="mb-2 font-bold" :class="'text-' + scoring.couleur">{{ scoring.niveau }}</div>
               <div style="display: grid; gap: 0.4rem;">
