@@ -6,7 +6,6 @@
 // de backend non plus).
 // ═══════════════════════════════════════════════════════════════════════
 
-import * as XLSX from 'xlsx'
 import {
   BILAN_ACTIF_STRUCTURE, BILAN_PASSIF_STRUCTURE, CR_STRUCTURE,
   totalActifImmobilise, totalActifCirculant, totalTresorerieActif, totalGeneralActif,
@@ -14,6 +13,15 @@ import {
   calculerSoldesIntermediaires, verifierEquilibreBilan, FAMILLES,
   creerBilanVide, creerCRVide,
 } from './financialAnalysisService.js'
+
+// `xlsx` est une grosse dépendance (codepages inclus) : chargée à la demande
+// (chunk séparé) plutôt qu'au démarrage de l'app, pour ne pas alourdir le
+// bundle principal pour les utilisateurs qui ne touchent jamais cet outil.
+let XLSX = null
+async function chargerXLSX() {
+  if (!XLSX) XLSX = await import('xlsx')
+  return XLSX
+}
 
 const LABEL_NIVEAU_SCORE = {
   'eligible': 'Éligible au financement',
@@ -144,7 +152,8 @@ function feuilleRatios(ratios) {
  * Génère et télécharge le classeur Excel complet (4 feuilles).
  * @param {{nom, bilanN, bilanN1, crN, crN1, ratios, scoreFinancement}} data
  */
-export function exporterClasseurExcel({ nom, bilanN, bilanN1, crN, crN1, ratios, scoreFinancement }) {
+export async function exporterClasseurExcel({ nom, bilanN, bilanN1, crN, crN1, ratios, scoreFinancement }) {
+  await chargerXLSX()
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, feuilleResume(nom, scoreFinancement), 'Résumé')
   XLSX.utils.book_append_sheet(wb, feuilleBilan(bilanN, bilanN1), 'Bilan')
@@ -174,7 +183,8 @@ function feuilleInstructions() {
 
 /** Génère et télécharge un modèle vierge (mêmes libellés que l'export, sans les
  *  lignes calculées — totaux, équilibre, soldes intermédiaires) à remplir puis réimporter. */
-export function genererModeleImport() {
+export async function genererModeleImport() {
+  await chargerXLSX()
   const bilanVide = creerBilanVide()
   const crVide = creerCRVide()
   const wb = XLSX.utils.book_new()
@@ -233,7 +243,7 @@ function lireFichierArrayBuffer(file) {
  * @returns {Promise<{bilanN, bilanN1, crN, crN1, postesReconnus:number, postesTotal:number, postesNonReconnus:string[]}>}
  */
 export async function importerClasseurExcel(file) {
-  const buffer = await lireFichierArrayBuffer(file)
+  const [buffer] = await Promise.all([lireFichierArrayBuffer(file), chargerXLSX()])
   const wb = XLSX.read(buffer, { type: 'array' })
 
   const bilanN = creerBilanVide()
