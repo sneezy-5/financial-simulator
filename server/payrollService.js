@@ -1435,6 +1435,7 @@ function generatePdfDefinitionLavandiere(employee, calc, companyInfo = {}) {
     const periodeFin = `${dernierJour}/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
 
     const { congesAcquis, congesReste, congesPris, jCP } = calculateCongesCounters(employee, calc, annee, moisNum);
+    const cumuls = calculateCumuls(employee, calc, annee);
 
     const box = (contenu, opts = {}) => ({
         table: { widths: ['*'], body: [[{ stack: contenu, margin: opts.margin || [6, 5] }]] },
@@ -1665,6 +1666,7 @@ function generatePdfDefinitionADArchitecture(employee, calc, companyInfo = {}) {
     const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
     const annee = parseInt(employee.annee || new Date().getFullYear());
     const { congesAcquis, congesReste, congesPris } = calculateCongesCounters(employee, calc, annee, moisNum);
+    const cumuls = calculateCumuls(employee, calc, annee);
     const dernierJour = new Date(annee, moisNum, 0).getDate();
     const periodeDebut = `01/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
     const periodeFin = `${dernierJour}/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
@@ -1844,6 +1846,7 @@ function generatePdfDefinitionTcmLogistic(employee, calc, companyInfo = {}) {
     const periodeFin = `${dernierJour}/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
 
     const { congesAcquis: congesAcquisTCM, congesReste: congesResteTCM, congesPris: congesPrisTCM } = calculateCongesCounters(employee, calc, annee, moisNum);
+    const cumuls = calculateCumuls(employee, calc, annee);
 
     const box = (contenu, opts = {}) => ({
         table: { widths: ['*'], body: [[{ stack: contenu, margin: opts.margin || [6, 5] }]] },
