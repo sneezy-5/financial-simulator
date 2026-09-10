@@ -18,6 +18,23 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+try {
+    const srcImg = 'C:\\Users\\HP\\.gemini\\antigravity-ide\\brain\\166aee7a-971c-472b-9579-0aac54a19666\\hr_testimonial_manager_1789050919760.jpg';
+    const destPublic = path.join(__dirname, '..', 'public', 'temoignage-rh.jpg');
+    const destEntPublic = path.join(__dirname, '..', 'enterprise-site', 'public', 'temoignage-rh.jpg');
+    if (fs.existsSync(srcImg)) {
+        fs.copyFileSync(srcImg, destPublic);
+        if (fs.existsSync(path.dirname(destEntPublic))) fs.copyFileSync(srcImg, destEntPublic);
+    }
+    const srcVideo = path.join(__dirname, '..', 'public', 'onda-demo.mp4');
+    const destEntVideo = path.join(__dirname, '..', 'enterprise-site', 'public', 'onda-demo.mp4');
+    if (fs.existsSync(srcVideo) && fs.existsSync(path.dirname(destEntVideo))) {
+        fs.copyFileSync(srcVideo, destEntVideo);
+    }
+} catch (e) {
+    console.warn('Asset copy note:', e.message);
+}
+
 const crypto = require('crypto');
 const bodyParser = require('body-parser');
 const http = require('http');
@@ -2111,7 +2128,101 @@ app.post('/api/rh/generate-single-payslip', authMiddleware, async (req, res) => 
             return res.status(404).json({ error: "Utilisateur non trouvé" });
         }
 
+        // ── Enrichissement avec les congés réellement pris (depuis la BDD des absences)
+        // On charge toutes les absences de type 'annuel' pour cet employé et on
+        // cumule les jours depuis date_dernier_conge (ou début d'année si absent).
+        // C'est ce total qui alimente congesPris dans calculateCongesCounters().
+        let empRecord = null;
+        try {
+            const employeeId = employee.employee_id || employee.id || null;
+            if (employeeId) {
+                const { Op } = require('sequelize');
+                const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+                const anneeNum = parseInt(employee.annee || new Date().getFullYear());
+
+                empRecord = await Employee.findOne({ where: { id: employeeId, userId: req.user.id } });
+                if (empRecord) {
+                    const clientEmp = employeVersClient(empRecord);
+                    employee = { ...clientEmp, ...employee };
+                }
+
+                // Borne de départ : date_dernier_conge ou 1er janvier de l'année
+                let dateRef = null;
+                if (employee.date_dernier_conge) {
+                    dateRef = new Date(employee.date_dernier_conge);
+                } else {
+                    const debutAnnee = new Date(anneeNum, 0, 1);
+                    const dateEmb = employee.date_embauche ? new Date(employee.date_embauche) : null;
+                    dateRef = (dateEmb && dateEmb > debutAnnee) ? dateEmb : debutAnnee;
+                }
+                const dateRefStr = dateRef.toISOString().slice(0, 10);
+
+                // Borne de fin : dernier jour du mois du bulletin (inclus)
+                const dernierJourMois = new Date(anneeNum, moisNum, 0).getDate();
+                const dateFinBulletin = `${anneeNum}-${String(moisNum).padStart(2,'0')}-${String(dernierJourMois).padStart(2,'0')}`;
+
+                const absAnnuelles = await Absence.findAll({
+                    where: {
+                        userId: req.user.id,
+                        employeeId: employeeId,
+                        type: 'annuel',
+                        dateDebut: { [Op.gte]: dateRefStr },
+                        dateFin:   { [Op.lte]: dateFinBulletin }
+                    }
+                });
+                const totalJoursPris = absAnnuelles.reduce((sum, a) => sum + (parseFloat(a.jours) || 0), 0);
+                employee.absences_prises_total = totalJoursPris;
+                console.log(`🗓 Congés pris depuis ${dateRefStr} : ${totalJoursPris}j pour employé ${employeeId}`);
+            }
+        } catch (absQueryErr) {
+            console.warn('⚠️ Impossible de charger les absences annuelles pour le compteur congés :', absQueryErr.message);
+        }
+
         const calculs = payrollService.calculateSinglePayroll(employee);
+
+        // ── Mise à jour automatique des cumuls annuels de paie ──
+        if (empRecord) {
+            try {
+                const anneeNum = parseInt(employee.annee || new Date().getFullYear());
+                const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+                const anneeKey = String(anneeNum);
+                const currentCumuls = { ...(empRecord.cumulsPaie || {}) };
+                const anneeCumuls = { ...(currentCumuls[anneeKey] || {
+                    cumul_brut: empRecord.cumulBrutInitial || 0,
+                    cumul_brut_imposable: empRecord.cumulNetImposableInitial || 0,
+                    cumul_net_imposable: empRecord.cumulNetImposableInitial || 0,
+                    cumul_net: empRecord.cumulNetInitial || 0,
+                    cumul_cnps: empRecord.cumulCnpsSalInitial || 0,
+                    cumul_its: empRecord.cumulItsInitial || 0,
+                    cumul_cmu: empRecord.cumulCmuInitial || 0,
+                    cumul_charges_sal: (empRecord.cumulCnpsSalInitial || 0) + (empRecord.cumulItsInitial || 0) + (empRecord.cumulCmuInitial || 0),
+                    cumul_charges_pat: empRecord.cumulChargesPatInitial || 0,
+                    cumul_jours: empRecord.cumulJoursInitial || 0,
+                    cumul_heures_sup: empRecord.cumulHeuresSupInitial || 0
+                }) };
+
+                anneeCumuls.cumul_brut = Math.round(((anneeCumuls.cumul_brut || 0) + (calculs.gainsTotaux || 0)) * 100) / 100;
+                anneeCumuls.cumul_brut_imposable = Math.round(((anneeCumuls.cumul_brut_imposable || 0) + (calculs.brutImposable || 0)) * 100) / 100;
+                anneeCumuls.cumul_net_imposable = anneeCumuls.cumul_brut_imposable;
+                anneeCumuls.cumul_net = Math.round(((anneeCumuls.cumul_net || 0) + (calculs.netAPayer || 0)) * 100) / 100;
+                anneeCumuls.cumul_cnps = Math.round(((anneeCumuls.cumul_cnps || 0) + (calculs.salarial?.cnps || 0)) * 100) / 100;
+                anneeCumuls.cumul_its = Math.round(((anneeCumuls.cumul_its || 0) + (calculs.salarial?.its || 0)) * 100) / 100;
+                anneeCumuls.cumul_cmu = Math.round(((anneeCumuls.cumul_cmu || 0) + (calculs.salarial?.cmu || 0)) * 100) / 100;
+                anneeCumuls.cumul_charges_sal = Math.round(((anneeCumuls.cumul_charges_sal || 0) + (calculs.salarial?.total || 0)) * 100) / 100;
+                anneeCumuls.cumul_charges_pat = Math.round(((anneeCumuls.cumul_charges_pat || 0) + (calculs.patronal?.grandTotal || calculs.patronal?.totalSocial || 0)) * 100) / 100;
+                anneeCumuls.cumul_jours = Math.round(((anneeCumuls.cumul_jours || 0) + (calculs.joursTrav || 0)) * 10) / 10;
+                anneeCumuls.cumul_heures_sup = Math.round(((anneeCumuls.cumul_heures_sup || 0) + (calculs.nbHeuresSup || 0)) * 10) / 10;
+                anneeCumuls.derniere_periode = `${String(moisNum).padStart(2, '0')}/${anneeNum}`;
+
+                currentCumuls[anneeKey] = anneeCumuls;
+                empRecord.cumulsPaie = currentCumuls;
+                await empRecord.save();
+                console.log(`📊 Cumuls de paie incrémentés pour ${empRecord.nom} (${anneeKey}) : Brut = ${anneeCumuls.cumul_brut} F`);
+            } catch (cumulErr) {
+                console.warn('⚠️ Erreur mise à jour cumuls employé :', cumulErr.message);
+            }
+        }
+
         const companyInfo = {
             // Le formulaire de saisie prime ; le profil enregistré dans Paramètres
             // ne sert que de repli pour ce que ce formulaire ne fournit pas.
@@ -2619,13 +2730,24 @@ app.get('/api/billing/plans', async (req, res) => {
 const CHAMPS_EMPLOYE_SNAKE_VERS_CAMEL = {
     date_embauche: 'dateEmbauche',
     date_naissance: 'dateNaissance',
+    date_dernier_conge: 'dateDernierConge',
     numero_cnps: 'numeroCnps',
     situation_matrimoniale: 'situationMatrimoniale',
     nombre_enfants: 'nombreEnfants',
     salaire_net: 'salaireNet',
     salaire_base: 'salaireBase',
     statut_salarie: 'statutSalarie',
-    categorie_professionnelle: 'categorieProfessionnelle'
+    categorie_professionnelle: 'categorieProfessionnelle',
+    cumul_brut_initial: 'cumulBrutInitial',
+    cumul_net_imposable_initial: 'cumulNetImposableInitial',
+    cumul_net_initial: 'cumulNetInitial',
+    cumul_cnps_sal_initial: 'cumulCnpsSalInitial',
+    cumul_its_initial: 'cumulItsInitial',
+    cumul_cmu_initial: 'cumulCmuInitial',
+    cumul_charges_pat_initial: 'cumulChargesPatInitial',
+    cumul_heures_sup_initial: 'cumulHeuresSupInitial',
+    cumul_jours_initial: 'cumulJoursInitial',
+    cumuls_paie: 'cumulsPaie'
 };
 const CHAMPS_EMPLOYE_CAMEL_VERS_SNAKE = Object.fromEntries(
     Object.entries(CHAMPS_EMPLOYE_SNAKE_VERS_CAMEL).map(([snake, camel]) => [camel, snake])
@@ -2637,7 +2759,7 @@ function employeVersModele(corps) {
     }
     return sortie;
 }
-const CHAMPS_EMPLOYE_DATE = new Set(['date_embauche', 'date_naissance']);
+const CHAMPS_EMPLOYE_DATE = new Set(['date_embauche', 'date_naissance', 'date_dernier_conge']);
 function employeVersClient(emp) {
     const source = emp.toJSON ? emp.toJSON() : emp;
     const sortie = { ...source };

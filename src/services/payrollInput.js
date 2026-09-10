@@ -138,6 +138,7 @@ export function buildPayrollInput(employee, contract, monthly = {}, period = {})
     // ── Rémunération et poste : contrat ──
     poste: contract?.poste || employee.poste || '',
     date_embauche: contract?.dateDebut || employee.dateEmbauche || '',
+    date_dernier_conge: employee.date_dernier_conge || employee.dateDernierConge || '',
     type_contrat: contract?.type || '',
     salaire_base: salaireBase,
     sursalaire: num(contract?.sursalaire),
@@ -163,6 +164,18 @@ export function buildPayrollInput(employee, contract, monthly = {}, period = {})
     opposition: num(monthly.opposition),
     ...(monthly.jours_travailles !== undefined && monthly.jours_travailles !== ''
       ? { jours_travailles: num(monthly.jours_travailles) } : {}),
+
+    // ── Cumuls annuels antérieurs (paramètres / fiche) ──
+    cumul_brut_initial: num(employee.cumul_brut_initial ?? employee.cumulBrutInitial),
+    cumul_net_imposable_initial: num(employee.cumul_net_imposable_initial ?? employee.cumulNetImposableInitial),
+    cumul_net_initial: num(employee.cumul_net_initial ?? employee.cumulNetInitial),
+    cumul_cnps_sal_initial: num(employee.cumul_cnps_sal_initial ?? employee.cumulCnpsSalInitial),
+    cumul_its_initial: num(employee.cumul_its_initial ?? employee.cumulItsInitial),
+    cumul_cmu_initial: num(employee.cumul_cmu_initial ?? employee.cumulCmuInitial),
+    cumul_charges_pat_initial: num(employee.cumul_charges_pat_initial ?? employee.cumulChargesPatInitial),
+    cumul_heures_sup_initial: num(employee.cumul_heures_sup_initial ?? employee.cumulHeuresSupInitial),
+    cumul_jours_initial: num(employee.cumul_jours_initial ?? employee.cumulJoursInitial),
+    cumuls_paie: employee.cumuls_paie || employee.cumulsPaie || {},
 
     // ── Traçabilité ──
     _contratId: contract?.id || null,

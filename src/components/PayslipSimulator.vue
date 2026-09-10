@@ -53,7 +53,7 @@ const emp = ref({
   absences_jours: 0,      // Jours d'absence (déduits automatiquement)
   heures_sup_nb: 0,       // Nombre d'heures supplémentaires
   heures_sup_coef: 1.15,  // Coefficient de majoration (1.15 = +15%, 1.50 = +50%...)
-  jours_conges_pris: 0,   // Jours de congés payés pris ce mois
+  // jours_conges_pris supprimé : calculé automatiquement depuis date_dernier_conge
   // Rémunération de base
   salaire_base: 0,
   sursalaire: 0,
@@ -74,6 +74,8 @@ const emp = ref({
   auto_anciennete: true,
   auto_conges: props.initialType === 'conges',
   date_dernier_conge: '',
+  prise_conges_mode: 'total', // 'total' | 'partiel'
+  jours_conges_partiels: null,
   taux_at: 0.02,
   ayants_droit_cmu: 0,
   // Période
@@ -381,6 +383,7 @@ const selectEmployeeCustom = (e) => {
 
   emp.value.poste = contrat?.poste || e.poste || ''
   emp.value.date_embauche = contrat?.dateDebut || e.date_embauche || ''
+  emp.value.date_dernier_conge = e.date_dernier_conge || e.dateDernierConge || ''
   emp.value.type_contrat = (contrat?.type || e.type_contrat || 'CDI')
   emp.value.salaire_base = contrat && contrat.salaireDeBase !== '' && contrat.salaireDeBase != null
     ? (+contrat.salaireDeBase || 0)
@@ -403,6 +406,16 @@ const selectEmployeeCustom = (e) => {
     emp.value.prime_transport = e.prime_transport !== undefined ? e.prime_transport : 30000
     emp.value.prime_logement = e.prime_logement || 0
   }
+  emp.value.cumul_brut_initial = e.cumul_brut_initial ?? e.cumulBrutInitial ?? 0
+  emp.value.cumul_net_imposable_initial = e.cumul_net_imposable_initial ?? e.cumulNetImposableInitial ?? 0
+  emp.value.cumul_net_initial = e.cumul_net_initial ?? e.cumulNetInitial ?? 0
+  emp.value.cumul_cnps_sal_initial = e.cumul_cnps_sal_initial ?? e.cumulCnpsSalInitial ?? 0
+  emp.value.cumul_its_initial = e.cumul_its_initial ?? e.cumulItsInitial ?? 0
+  emp.value.cumul_cmu_initial = e.cumul_cmu_initial ?? e.cumulCmuInitial ?? 0
+  emp.value.cumul_charges_pat_initial = e.cumul_charges_pat_initial ?? e.cumulChargesPatInitial ?? 0
+  emp.value.cumul_jours_initial = e.cumul_jours_initial ?? e.cumulJoursInitial ?? 0
+  emp.value.cumul_heures_sup_initial = e.cumul_heures_sup_initial ?? e.cumulHeuresSupInitial ?? 0
+  emp.value.cumuls_paie = e.cumuls_paie || e.cumulsPaie || {}
 }
 
 
@@ -410,9 +423,51 @@ const livePreviewHtml = computed(() => {
   if (!activePreviewHtml.value) return ''
 
   const c = calc.value || {}
+  const totalAcq = c.totalCongesAcquis || 0
+  const jPris = c.joursCP || 0
+  const jReste = Math.max(0, Math.round((totalAcq - jPris) * 10) / 10)
+
+  // Calcul des cumuls annuels pour l'aperçu
+  const anneeKey = String(emp.value.annee || new Date().getFullYear())
+  const cHist = (emp.value.cumuls_paie && emp.value.cumuls_paie[anneeKey]) || {}
+  const brutInit = parseFloat(emp.value.cumul_brut_initial ?? cHist.cumul_brut_initial ?? cHist.cumul_brut ?? 0) || 0
+  const netImpInit = parseFloat(emp.value.cumul_net_imposable_initial ?? cHist.cumul_net_imposable_initial ?? cHist.cumul_net_imposable ?? 0) || 0
+  const netInit = parseFloat(emp.value.cumul_net_initial ?? cHist.cumul_net_initial ?? cHist.cumul_net ?? 0) || 0
+  const cnpsInit = parseFloat(emp.value.cumul_cnps_sal_initial ?? cHist.cumul_cnps_sal_initial ?? cHist.cumul_cnps ?? 0) || 0
+  const itsInit = parseFloat(emp.value.cumul_its_initial ?? cHist.cumul_its_initial ?? cHist.cumul_its ?? 0) || 0
+  const cmuInit = parseFloat(emp.value.cumul_cmu_initial ?? cHist.cumul_cmu_initial ?? cHist.cumul_cmu ?? 0) || 0
+  const patInit = parseFloat(emp.value.cumul_charges_pat_initial ?? cHist.cumul_charges_pat_initial ?? cHist.cumul_charges_pat ?? 0) || 0
+  const jrsInit = parseFloat(emp.value.cumul_jours_initial ?? cHist.cumul_jours_initial ?? cHist.cumul_jours ?? 0) || 0
+  const hsInit = parseFloat(emp.value.cumul_heures_sup_initial ?? cHist.cumul_heures_sup_initial ?? cHist.cumul_heures_sup ?? 0) || 0
+
+  const cumul_brut = Math.round((brutInit + (c.gainsTotaux || 0)) * 100) / 100
+  const cumul_net_imposable = Math.round((netImpInit + (c.brutImposable || 0)) * 100) / 100
+  const cumul_net = Math.round((netInit + (c.netAPayer || 0)) * 100) / 100
+  const cumul_cnps = Math.round((cnpsInit + (c.salarial?.cnps || 0)) * 100) / 100
+  const cumul_its = Math.round((itsInit + (c.salarial?.its || 0)) * 100) / 100
+  const cumul_cmu = Math.round((cmuInit + (c.salarial?.cmu || 0)) * 100) / 100
+  const cumul_charges_pat = Math.round((patInit + (c.patronal?.grandTotal || 0)) * 100) / 100
+  const cumul_jours = Math.round((jrsInit + (c.joursTrav || 0)) * 10) / 10
+  const cumul_heures_sup = Math.round((hsInit + (c.nbHeuresSup || 0)) * 10) / 10
+
   const viewData = {
     ...emp.value,
     ...c,
+    conges_acquis: totalAcq,
+    conges_pris: jPris,
+    conges_reste: jReste,
+    jours_conges_pris: jPris,
+    cumul_brut,
+    cumul_brut_imposable: cumul_net_imposable,
+    cumul_net_imposable,
+    cumul_net,
+    cumul_net_a_payer: cumul_net,
+    cumul_cnps,
+    cumul_its,
+    cumul_cmu,
+    cumul_charges_pat,
+    cumul_jours,
+    cumul_heures_sup,
     date_jour: new Date().toLocaleDateString(),
     nom_entreprise: (emp.value.nom_entreprise || 'ENTREPRISE').toUpperCase()
   }
@@ -515,21 +570,18 @@ const calc = computed(() => {
   const salaireBaseMensuel = +emp.value.salaire_base || 0
   const joursDansLeMois = 30 
   
-  // -- CALCUL AUTO CONGÉS --
-  let joursConges = +emp.value.jours_conges_pris || 0
+  // -- CALCUL CONGÉS : 100% automatique depuis date_dernier_conge --
+  // Aucune saisie manuelle : le module de congé calcule tout.
+  let joursConges = 0
   let diffMoisConge = 0
-  if (emp.value.bulletin_type === 'conges' || emp.value.auto_conges) {
-    const dateRef = emp.value.date_dernier_conge || emp.value.date_embauche
-    if (dateRef) {
-      const dRef = new Date(dateRef)
-      const dNow = new Date(emp.value.annee, emp.value.mois - 1, 1)
-      diffMoisConge = (dNow.getFullYear() - dRef.getFullYear()) * 12 + (dNow.getMonth() - dRef.getMonth())
-      if (diffMoisConge > 0 && emp.value.auto_conges) {
-        joursConges = Math.min(30, Math.floor(diffMoisConge * 2.2))
-      }
+  const dateRef = emp.value.date_dernier_conge || emp.value.date_embauche
+  if (dateRef) {
+    const dRef = new Date(dateRef)
+    const dNow = new Date(emp.value.annee, emp.value.mois - 1, 1)
+    diffMoisConge = (dNow.getFullYear() - dRef.getFullYear()) * 12 + (dNow.getMonth() - dRef.getMonth())
+    if (diffMoisConge > 0 && (emp.value.bulletin_type === 'conges' || emp.value.auto_conges)) {
+      joursConges = Math.min(30, Math.floor(diffMoisConge * 2.2))
     }
-  } else {
-    joursConges = 0 // Pas de congés en bulletin habituel sauf si forcé
   }
   const joursAbsences = +emp.value.absences_jours || 0
   const joursBasePaie = +emp.value.jours_travailles || 26
@@ -736,6 +788,63 @@ const generatePDF = async () => {
     const blob = await response.blob()
     downloadUrl.value = URL.createObjectURL(blob)
     generated.value = true
+
+    // ── Traçabilité automatique dans le tableau des absences ──
+    // Quand un bulletin de congé est généré, on crée automatiquement
+    // une entrée de type 'annuel' dans CongesManager (calendrier + soldes).
+    if (emp.value.bulletin_type === 'conges' || emp.value.auto_conges) {
+      try {
+        const nowMois = Number(emp.value.mois) || (new Date().getMonth() + 1)
+        const nowAnnee = Number(emp.value.annee) || new Date().getFullYear()
+        const dernierJourMois = new Date(nowAnnee, nowMois, 0).getDate()
+        const dateDebut = `${nowAnnee}-${String(nowMois).padStart(2, '0')}-01`
+        const dateFin   = `${nowAnnee}-${String(nowMois).padStart(2, '0')}-${String(dernierJourMois).padStart(2, '0')}`
+
+        // Calcul du nombre de jours de congé (synchronisé avec calc)
+        const joursCongesGeneres = calc.value.joursCP || 0
+        const totalAcquis = calc.value.totalCongesAcquis || 0
+        const estPriseTotale = (emp.value.prise_conges_mode !== 'partiel') || (joursCongesGeneres >= totalAcquis)
+
+        if (joursCongesGeneres > 0) {
+          const employeeId = emp.value.employee_id || emp.value.id || ''
+          const employeNom = `${emp.value.prenom || ''} ${emp.value.nom || ''}`.trim() || 'Inconnu'
+
+          // 1. Tracer l'absence dans le tableau des congés
+          await localDb.saveAbsence({
+            employeeId,
+            employeNom,
+            type: 'annuel',
+            dateDebut,
+            dateFin,
+            jours: joursCongesGeneres,
+            commentaire: `Bulletin de congés (${estPriseTotale ? 'Totalité' : 'Partiel : ' + joursCongesGeneres + 'j'}) généré (${String(nowMois).padStart(2, '0')}/${nowAnnee})`
+          })
+          console.log(`✅ Congé tracé dans les absences : ${joursCongesGeneres}j pour ${employeNom} (${estPriseTotale ? 'Total' : 'Partiel'})`)
+
+          // 2. Si prise totale : réinitialiser date_dernier_conge = dernier jour du mois du bulletin
+          //    Si prise partielle : NE PAS réinitialiser (le reliquat reste disponible et le cumul BDD assure la cohérence)
+          if (estPriseTotale) {
+            const nouvelleRefConge = dateFin  // ex: "2026-09-30"
+            emp.value.date_dernier_conge = nouvelleRefConge
+
+            if (employeeId) {
+              try {
+                await localDb.saveEmployee({
+                  ...emp.value,
+                  id: employeeId,
+                  date_dernier_conge: nouvelleRefConge
+                })
+                console.log(`✅ date_dernier_conge mis à jour pour ${employeNom} → ${nouvelleRefConge}`)
+              } catch (saveEmpErr) {
+                console.warn('Avertissement : mise à jour date_dernier_conge échouée :', saveEmpErr)
+              }
+            }
+          }
+        }
+      } catch (absErr) {
+        console.warn('Avertissement : impossible d\'enregistrer le congé dans les absences :', absErr)
+      }
+    }
 
     // Rafraîchir le quota d'abonnement de l'utilisateur
     try {
@@ -969,11 +1078,15 @@ const tabs = [
                 <input v-model="emp.date_embauche" type="date" />
               </div>
               <div class="field-group">
-                <label>N° SECU (Sociale)</label>
-                <input v-model="emp.num_secu" type="text" placeholder="N° Sécurité Sociale" />
+                <label>Date du dernier congé pris <span class="field-hint">(si déjà pris)</span></label>
+                <input v-model="emp.date_dernier_conge" type="date" />
               </div>
             </div>
             <div class="field-row">
+              <div class="field-group">
+                <label>N° SECU (Sociale)</label>
+                <input v-model="emp.num_secu" type="text" placeholder="N° Sécurité Sociale" />
+              </div>
               <div class="field-group">
                 <label>Statut du salarié</label>
                 <select v-model="emp.statut_salarie">
@@ -1023,15 +1136,108 @@ const tabs = [
               </div>
               <div class="field-group">
                 <label>
-                  Jours d'absence
-                  <span class="field-hint">Déduits automatiquement</span>
+                  Jours d'absence non rémunérée
+                  <span class="field-hint">Déduits sans indemnité</span>
                 </label>
                 <input v-model.number="emp.absences_jours" type="number" min="0" max="31" />
               </div>
             </div>
+            <!-- BLOC DÉDIÉ GESTION DES CONGÉS (Design professionnel et icônes vectorielles SVG) -->
+            <div class="conges-pro-card">
+              <div class="cpc-header">
+                <div class="cpc-title">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                  <span>Gestion des Congés &amp; Droits</span>
+                </div>
+                <span class="cpc-rule-tag">Code du Travail (2,2 j/mois)</span>
+              </div>
+
+              <div class="cpc-body">
+                <!-- Date de référence -->
+                <div class="cpc-date-row">
+                  <label class="cpc-label">Date du dernier retour de congés :</label>
+                  <input v-model="emp.date_dernier_conge" type="date" class="cpc-date-input" />
+                </div>
+
+                <!-- Compteurs (Badges avec vraies icônes SVG) -->
+                <div class="cpc-badges-grid" v-if="emp.date_dernier_conge || emp.date_embauche">
+                  <div class="cpc-badge cpc-badge-acquis">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                    <div class="cpc-badge-text">
+                      <span class="cpc-badge-lbl">Acquis</span>
+                      <strong class="cpc-badge-val">{{ calc.totalCongesAcquis || 0 }} j</strong>
+                    </div>
+                  </div>
+
+                  <div class="cpc-badge cpc-badge-pris">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"></path></svg>
+                    <div class="cpc-badge-text">
+                      <span class="cpc-badge-lbl">Pris ce mois</span>
+                      <strong class="cpc-badge-val">{{ calc.joursCP || 0 }} j</strong>
+                    </div>
+                  </div>
+
+                  <div class="cpc-badge cpc-badge-reste">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                    <div class="cpc-badge-text">
+                      <span class="cpc-badge-lbl">Reste à prendre</span>
+                      <strong class="cpc-badge-val">{{ Math.max(0, Math.round(((calc.totalCongesAcquis || 0) - (calc.joursCP || 0)) * 10) / 10) }} j</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Sélecteur de mode sous forme de boutons interactifs professionnels -->
+                <div class="cpc-options-box" v-if="emp.date_dernier_conge || emp.date_embauche">
+                  <div class="cpc-mode-label">Option de prise de congés pour ce bulletin :</div>
+                  <div class="cpc-toggle-group">
+                    <button
+                      type="button"
+                      class="cpc-toggle-btn"
+                      :class="{ 'is-active': emp.prise_conges_mode !== 'partiel' }"
+                      @click="emp.prise_conges_mode = 'total'; emp.jours_conges_partiels = null; emp.jours_conges_pris = null"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                      <span>Prendre la totalité ({{ calc.totalCongesAcquis || 0 }} j)</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="cpc-toggle-btn"
+                      :class="{ 'is-active': emp.prise_conges_mode === 'partiel' }"
+                      @click="emp.prise_conges_mode = 'partiel'; if (!emp.jours_conges_partiels) emp.jours_conges_partiels = Math.min(15, calc.totalCongesAcquis || 15)"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle></svg>
+                      <span>Prise partielle</span>
+                    </button>
+                  </div>
+
+                  <!-- Champ de saisie personnalisé si prise partielle -->
+                  <div v-if="emp.prise_conges_mode === 'partiel'" class="cpc-partial-input-row">
+                    <label class="cpc-partial-label">Nombre de jours à poser ce mois :</label>
+                    <div class="cpc-input-with-addon">
+                      <input
+                        type="number"
+                        v-model.number="emp.jours_conges_partiels"
+                        min="0.5"
+                        :max="calc.totalCongesAcquis || 30"
+                        step="0.5"
+                        class="cpc-num-input"
+                        placeholder="Ex: 15"
+                      />
+                      <span class="cpc-addon-text">sur {{ calc.totalCongesAcquis || 0 }} j acquis</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-else class="cpc-empty-hint">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                  <span>Indiquez la date du dernier retour de congés pour calculer automatiquement les droits.</span>
+                </div>
+              </div>
+            </div>
 
             <div class="info-calc" v-if="calc.joursTrav >= 0">
-              📅 Période payée : 
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px; vertical-align: middle;"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+              Période payée : 
               <strong v-if="calc.joursCP > 0">{{ calc.joursTrav }}j trav. + {{ calc.joursCP }}j congés</strong>
               <strong v-else>{{ calc.joursTrav }} jours</strong>
               &rarr; Base imposable : <strong>{{ fcfa(calc.salaireBase + (calc.allocationConges || 0)) }} FCFA</strong>
@@ -1060,25 +1266,7 @@ const tabs = [
               {{ emp.heures_sup_nb }}h × {{ fcfa(calc.tauxHoraire) }} FCFA/h × {{ emp.heures_sup_coef }} = <strong>{{ fcfa(calc.montantHeuresSup) }} FCFA</strong>
             </div>
 
-            <div class="field-row mt-4" v-if="emp.bulletin_type === 'conges'">
-              <div class="field-group">
-                <label style="display: flex; align-items: center; justify-content: space-between;">
-                  Calcul automatique des jours
-                  <div class="toggle-container active disabled" title="Obligatoire en mode Bulletin de Congés">
-                    <div class="toggle-handle"></div>
-                  </div>
-                </label>
-                
-                <div style="margin-top: 10px;">
-                   <label class="text-xs">Date du dernier retour de congés</label>
-                   <input v-model="emp.date_dernier_conge" type="date" class="inp" />
-                   
-                   <div class="field-hint" v-if="calc.joursCP > 0">
-                      Droit acquis : <strong>{{ calc.joursCP }} jours</strong> ({{ calc.moisConge }} mois de service).
-                   </div>
-                </div>
-              </div>
-            </div>
+
           </div>
 
           <div class="form-bloc">
@@ -1331,6 +1519,37 @@ const tabs = [
                 <div class="lph-row" v-if="countryRules.hasPartsFiscales"><span>Parts fiscales :</span> <strong>{{ calc.parts?.toFixed(2) }}</strong></div>
                 <div class="lph-row"><span>Type Contrat :</span> <span>{{ emp.type_contrat || 'CDI' }}</span></div>
                 <div class="lph-row"><span>Ancienneté :</span> <span>{{ calc.ancienneteTxt || '____' }}</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Compteurs de Congés dans l'aperçu du Bulletin (Acquis / Pris / Reste) -->
+          <div class="conges-preview-band mt-2 mb-3" style="display:flex; justify-content:space-between; align-items:center; background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px; padding:8px 16px; font-size:11px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <div style="display:flex; gap:8px; align-items:center;">
+              <div style="width:24px; height:24px; border-radius:6px; background:#e0f2fe; display:flex; align-items:center; justify-content:center; color:#0284c7;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+              </div>
+              <div>
+                <span style="color:#64748b; font-weight:700; font-size:10px; display:block;">CONGÉS ACQUIS</span>
+                <strong style="color:#0284c7; font-size:13px;">{{ calc.totalCongesAcquis || 0 }} j</strong>
+              </div>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center; border-left:1px solid #e2e8f0; border-right:1px solid #e2e8f0; padding: 0 16px;">
+              <div style="width:24px; height:24px; border-radius:6px; background:#dcfce7; display:flex; align-items:center; justify-content:center; color:#16a34a;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"></path></svg>
+              </div>
+              <div>
+                <span style="color:#64748b; font-weight:700; font-size:10px; display:block;">PRIS CE MOIS</span>
+                <strong style="color:#16a34a; font-size:13px;">{{ calc.joursCP || 0 }} j</strong>
+              </div>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <div style="width:24px; height:24px; border-radius:6px; background:#fef3c7; display:flex; align-items:center; justify-content:center; color:#d97706;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+              </div>
+              <div>
+                <span style="color:#64748b; font-weight:700; font-size:10px; display:block;">RESTE À PRENDRE</span>
+                <strong style="color:#d97706; font-size:13px;">{{ Math.max(0, Math.round(((calc.totalCongesAcquis || 0) - (calc.joursCP || 0)) * 10) / 10) }} j</strong>
               </div>
             </div>
           </div>
@@ -2262,6 +2481,215 @@ const tabs = [
   background: #2563eb;
   color: white;
   box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
+}
+
+/* BLOC GESTION DES CONGÉS PRO */
+.conges-pro-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 1rem 1.15rem;
+  margin-top: 1rem;
+  margin-bottom: 0.75rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.conges-pro-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+}
+.cpc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.85rem;
+}
+.cpc-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+.cpc-rule-tag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: #eff6ff;
+  color: #2563eb;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid #bfdbfe;
+}
+.cpc-date-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 0.85rem;
+}
+.cpc-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #475569;
+}
+.cpc-date-input {
+  background: white !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 8px !important;
+  padding: 0.5rem 0.75rem !important;
+  font-size: 0.85rem !important;
+  color: #1e293b !important;
+  width: 100% !important;
+  height: 38px !important;
+  box-sizing: border-box !important;
+  transition: border-color 0.2s, box-shadow 0.2s !important;
+}
+.cpc-date-input:focus {
+  outline: none;
+  border-color: #2563eb !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1) !important;
+}
+.cpc-badges-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 0.85rem;
+}
+.cpc-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.cpc-badge-acquis {
+  background: #f0f9ff;
+  border-color: #bae6fd;
+  color: #0369a1;
+}
+.cpc-badge-pris {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #15803d;
+}
+.cpc-badge-reste {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #b45309;
+}
+.cpc-badge-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.cpc-badge-lbl {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.85;
+}
+.cpc-badge-val {
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+.cpc-options-box {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.85rem;
+}
+.cpc-mode-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #334155;
+  margin-bottom: 0.5rem;
+}
+.cpc-toggle-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.cpc-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f8fafc;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+  min-height: 38px;
+  box-sizing: border-box;
+}
+.cpc-toggle-btn:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #1e293b;
+}
+.cpc-toggle-btn.is-active {
+  background: #eff6ff;
+  border-color: #2563eb;
+  color: #1d4ed8;
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.15);
+}
+.cpc-partial-input-row {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.cpc-partial-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #334155;
+}
+.cpc-input-with-addon {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cpc-num-input {
+  width: 80px !important;
+  height: 34px !important;
+  padding: 4px 8px !important;
+  border: 1.5px solid #2563eb !important;
+  border-radius: 6px !important;
+  font-size: 0.9rem !important;
+  font-weight: 700 !important;
+  text-align: center !important;
+  color: #1e293b !important;
+  background: white !important;
+}
+.cpc-num-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+.cpc-addon-text {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #0369a1;
+}
+.cpc-empty-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: #64748b;
+  background: white;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 12px;
 }
 
 .bt-btn.active .bt-content {

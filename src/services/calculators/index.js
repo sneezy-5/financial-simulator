@@ -7,20 +7,35 @@ export function calculatePayslip(emp, rules) {
   const salaireBaseMensuel = +emp.salaire_base || 0
   const joursDansLeMois = 30 
   
-  let joursTrav = Math.max(0, (+emp.jours_travailles || 0) - (+emp.absences_jours || 0))
-  let joursConges = 0
-
-  let diffMoisConge = 12
-  if (emp.date_dernier_conge && emp.bulletin_type === 'conges') {
-    const d1 = new Date(emp.date_dernier_conge)
+  let diffMoisConge = 0
+  let totalCongesAcquis = 0
+  const dateRefStr = emp.date_dernier_conge || emp.date_embauche
+  if (dateRefStr) {
+    const d1 = new Date(dateRefStr)
     const d2 = new Date(emp.annee, emp.mois - 1, 1)
     diffMoisConge = (d2.getFullYear() - d1.getFullYear()) * 12 + (d2.getMonth() - d1.getMonth())
-    diffMoisConge = Math.max(0, diffMoisConge)
-    joursConges = Math.floor(diffMoisConge * 2.2) 
+    if (diffMoisConge > 0) {
+      totalCongesAcquis = Math.round(Math.floor(diffMoisConge * 2.2) * 10) / 10
+    }
   }
-  
-  if (emp.bulletin_type === 'conges') {
+
+  // Jours de congés pris ce mois
+  let joursConges = 0
+  if (emp.prise_conges_mode === 'partiel' && parseFloat(emp.jours_conges_partiels) > 0) {
+    joursConges = parseFloat(emp.jours_conges_partiels)
+  } else if (emp.prise_conges_mode === 'total' || emp.bulletin_type === 'conges' || emp.auto_conges) {
+    joursConges = totalCongesAcquis
+  } else if (parseFloat(emp.jours_conges_pris) > 0) {
+    joursConges = parseFloat(emp.jours_conges_pris)
+  }
+
+  // Déduction des jours travaillés
+  const joursBase = +emp.jours_travailles || 30
+  let joursTrav = 0
+  if ((emp.bulletin_type === 'conges' || emp.prise_conges_mode === 'total') && totalCongesAcquis >= joursBase) {
     joursTrav = 0
+  } else {
+    joursTrav = Math.max(0, joursBase - (+emp.absences_jours || 0) - joursConges)
   }
 
   const baseProrata = (joursTrav / joursDansLeMois)
@@ -63,7 +78,7 @@ export function calculatePayslip(emp, rules) {
 
   // Congés payés
   let allocationConges = 0
-  if (emp.bulletin_type === 'conges' && joursConges > 0) {
+  if (joursConges > 0) {
     const total12Mois = (salaireBaseMensuel + (+emp.sursalaire || 0) + primeAnciennete) * 12
     allocationConges = Math.round((total12Mois / 12) * (joursConges / 30))
   }
@@ -100,7 +115,7 @@ export function calculatePayslip(emp, rules) {
   const totalRetenuesDiverses = acompte + avance + opposition + autresRetenues
 
   const baseData = {
-    salaireBaseMensuel, joursDansLeMois, joursTrav, joursCP: joursConges, diffMoisConge,
+    salaireBaseMensuel, joursDansLeMois, joursTrav, joursCP: joursConges, totalCongesAcquis, diffMoisConge,
     salaireBase, sursalaire, primeAnciennete, ansAnciennete, tauxAnciennete, ancienneteTxt,
     allocationConges, primeTransport, primeLogement,
     primesImposables, primesNonImposablesRub,

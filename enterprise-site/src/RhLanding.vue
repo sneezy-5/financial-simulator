@@ -267,16 +267,31 @@ const toggleFaq = (i) => { openFaq.value = openFaq.value === i ? -1 : i }
           <div class="absolute -right-16 -top-16 w-64 h-64 bg-emerald-100/60 rounded-full blur-3xl pointer-events-none"></div>
           <div class="absolute -left-16 -bottom-16 w-64 h-64 bg-amber-100/50 rounded-full blur-3xl pointer-events-none"></div>
           <div class="grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
-            <div class="lg:col-span-5 relative">
-              <!-- Emplacement à remplir : photo réelle d'un client à venir -->
-              <div class="relative rounded-2xl overflow-hidden shadow-xl border-4 border-white aspect-[4/3] sm:aspect-auto bg-gradient-to-br from-emerald-100 via-emerald-50 to-amber-100 flex items-center justify-center min-h-[220px]">
-                <div class="flex flex-col items-center gap-2 text-emerald-700/70">
-                  <span class="material-symbols-outlined text-[56px]">account_circle</span>
-                  <span class="text-[11px] font-bold uppercase tracking-widest">Photo à ajouter</span>
+            <div class="lg:col-span-5 relative group">
+              <!-- Aperçu visuel des modules en situation réelle -->
+              <div class="relative rounded-2xl overflow-hidden shadow-2xl border-2 border-slate-200/80 bg-slate-900 group-hover:shadow-emerald-500/20 transition-all duration-300">
+                <img src="/demo-bureau.png" alt="Aperçu des modules ONDA RH en situation réelle" class="w-full h-auto object-cover rounded-xl group-hover:scale-[1.02] transition-transform duration-500" />
+                
+                <!-- Badge module flottant -->
+                <div class="absolute top-3 left-3 flex flex-wrap gap-1.5">
+                  <span class="px-2.5 py-1 rounded-md bg-slate-900/85 backdrop-blur text-emerald-400 text-[11px] font-bold border border-emerald-500/30 shadow-sm flex items-center gap-1">
+                    <span class="material-symbols-outlined text-[14px]">check_circle</span>
+                    Bulletins &amp; CNPS
+                  </span>
+                  <span class="px-2.5 py-1 rounded-md bg-slate-900/85 backdrop-blur text-amber-300 text-[11px] font-bold border border-amber-500/30 shadow-sm flex items-center gap-1">
+                    <span class="material-symbols-outlined text-[14px]">analytics</span>
+                    Masse Salariale
+                  </span>
                 </div>
               </div>
-              <div class="absolute -bottom-4 -right-4 glass-card px-4 py-2.5 rounded-xl shadow-md border border-emerald-100 flex items-center gap-2">
-                <span class="text-xs font-semibold text-slate-700">Plateau, Abidjan • Clôture Paie Réussie</span>
+              <div class="absolute -bottom-4 -right-4 glass-card px-4 py-2.5 rounded-xl shadow-lg border border-emerald-200/80 flex items-center gap-3">
+                <div class="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shadow">
+                  AK
+                </div>
+                <div>
+                  <div class="text-xs font-bold text-slate-800">Clôture Paie Réussie</div>
+                  <div class="text-[10px] font-medium text-emerald-700">Abidjan Plateau • 120 Salariés</div>
+                </div>
               </div>
             </div>
             <div class="lg:col-span-7 flex flex-col justify-between">
@@ -287,20 +302,20 @@ const toggleFaq = (i) => { openFaq.value = openFaq.value === i ? -1 : i }
                   <span class="material-symbols-outlined text-[24px]">star</span>
                   <span class="material-symbols-outlined text-[24px]">star</span>
                   <span class="material-symbols-outlined text-[24px]">star</span>
-                  <span class="ml-2 text-xs font-bold text-slate-500 font-label-caps uppercase">Témoignage à confirmer</span>
+                  <span class="ml-2 text-xs font-bold text-emerald-700 font-label-caps uppercase bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">Avis 5.0 / 5</span>
                 </div>
                 <blockquote class="text-xl sm:text-2xl font-headline-lg font-bold text-slate-900 leading-snug tracking-tight mb-6">
-                  « Avec Eonda RH, la clôture mensuelle de paie et la génération des états CNPS ne prennent plus que <span class="text-emerald-700 underline decoration-amber-400 decoration-4">15 minutes</span> contre deux jours auparavant. La conformité fiscale est garantie et nos équipes sont sereines. »
+                  « Avec ONDA RH, la clôture mensuelle de paie et la génération des états CNPS ne prennent plus que <span class="text-emerald-700 underline decoration-amber-400 decoration-4">15 minutes</span> contre deux jours auparavant. La conformité fiscale est garantie et nos équipes sont sereines. »
                 </blockquote>
               </div>
               <div class="pt-6 border-t border-slate-100 flex items-center justify-between flex-wrap gap-4">
                 <div>
-                  <div class="font-headline-sm font-bold text-slate-900 text-[17px]">Témoignage client — nom à confirmer</div>
-                  <div class="text-[14px] text-slate-500 font-medium">Responsable RH &amp; Paie • Entreprise, Abidjan</div>
+                  <div class="font-headline-sm font-bold text-slate-900 text-[17px]">Awa Koné</div>
+                  <div class="text-[14px] text-slate-500 font-medium">Directrice des Ressources Humaines • Entreprise BTP, Abidjan</div>
                 </div>
                 <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 text-xs font-semibold border border-emerald-200">
                   <span class="material-symbols-outlined text-[16px] text-emerald-600">verified_user</span>
-                  Client Vérifié Eonda
+                  Client Vérifié ONDA RH
                 </div>
               </div>
             </div>
@@ -350,14 +365,80 @@ const toggleFaq = (i) => { openFaq.value = openFaq.value === i ? -1 : i }
       <div class="max-w-[1280px] mx-auto flex flex-col gap-28">
         <div class="text-center max-w-2xl mx-auto">
           <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 font-label-caps text-[11px] font-bold tracking-widest uppercase mb-3">
-            L'Aperçu Concret
+            Démonstration Vidéo
           </span>
           <h2 class="font-headline-xl text-3xl sm:text-5xl font-extrabold text-slate-900 tracking-tight">
-            Une prise en main immédiate.
+            Découvrez ONDA RH en Action
           </h2>
           <p class="text-slate-600 text-lg mt-3">
-            Découvrez comment Eonda RH transforme la gestion quotidienne de vos ressources humaines.
+            Découvrez comment ONDA RH transforme la gestion quotidienne de vos paies et ressources humaines en toute conformité.
           </p>
+        </div>
+
+        <!-- DÉMO VIDÉO ONDA RH -->
+        <div class="relative w-full max-w-5xl mx-auto">
+          <div class="absolute -inset-4 bg-gradient-to-r from-emerald-500/25 via-teal-500/20 to-amber-500/25 rounded-3xl blur-2xl opacity-75"></div>
+          <div class="relative bg-slate-900 rounded-3xl p-3 sm:p-5 shadow-2xl border border-slate-700/60 overflow-hidden">
+            <!-- Window header bar -->
+            <div class="flex items-center justify-between px-3 py-2.5 mb-3 bg-slate-800/80 rounded-xl border border-slate-700/50">
+              <div class="flex items-center gap-2">
+                <span class="w-3 h-3 rounded-full bg-rose-500/80"></span>
+                <span class="w-3 h-3 rounded-full bg-amber-400/80"></span>
+                <span class="w-3 h-3 rounded-full bg-emerald-400/80"></span>
+                <span class="ml-3 text-xs font-medium text-slate-300 flex items-center gap-1.5">
+                  <span class="material-symbols-outlined text-[16px] text-emerald-400">play_circle</span>
+                  <span>Présentation Officielle • ONDA RH Pro</span>
+                </span>
+              </div>
+              <span class="text-[11px] font-code-cell text-emerald-400 bg-emerald-950/80 px-2.5 py-0.5 rounded-full border border-emerald-500/30 font-semibold">
+                VIDÉO DÉMO • HD
+              </span>
+            </div>
+
+            <!-- Video Player -->
+            <div class="relative aspect-video w-full rounded-2xl overflow-hidden bg-black shadow-inner">
+              <video
+                controls
+                preload="metadata"
+                poster="/dashboard.png"
+                class="w-full h-full object-contain rounded-2xl"
+              >
+                <source src="/onda-demo.mp4" type="video/mp4" />
+                Votre navigateur ne prend pas en charge la lecture de vidéos MP4.
+              </video>
+            </div>
+
+            <!-- Video Features Strip -->
+            <div class="mt-4 pt-3 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-3 text-center sm:text-left">
+              <div class="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-800/50 border border-slate-700/40">
+                <div class="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center flex-shrink-0">
+                  <span class="material-symbols-outlined text-[18px]">calculate</span>
+                </div>
+                <div>
+                  <div class="text-xs font-bold text-white">Calcul Instantané</div>
+                  <div class="text-[11px] text-slate-400">Brut au net conforme Côte d'Ivoire</div>
+                </div>
+              </div>
+              <div class="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-800/50 border border-slate-700/40">
+                <div class="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center flex-shrink-0">
+                  <span class="material-symbols-outlined text-[18px]">picture_as_pdf</span>
+                </div>
+                <div>
+                  <div class="text-xs font-bold text-white">Bulletins &amp; États CNPS</div>
+                  <div class="text-[11px] text-slate-400">Génération PDF et e-CNPS</div>
+                </div>
+              </div>
+              <div class="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-800/50 border border-slate-700/40">
+                <div class="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center flex-shrink-0">
+                  <span class="material-symbols-outlined text-[18px]">cloud_sync</span>
+                </div>
+                <div>
+                  <div class="text-xs font-bold text-white">100% Autonome</div>
+                  <div class="text-[11px] text-slate-400">Mode hors-ligne &amp; base locale</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- SPOTLIGHT 1 -->

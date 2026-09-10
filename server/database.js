@@ -354,7 +354,20 @@ const Employee = sequelize.define('Employee', {
     statutSalarie: { type: DataTypes.STRING, allowNull: true, defaultValue: 'local' },
     // 'cadre' ou 'employe' — alimente la répartition Cadres/Employés des
     // indicateurs RH (inspiré de la feuille LOGIPAIE « INDICATEURS RH »).
-    categorieProfessionnelle: { type: DataTypes.STRING, allowNull: true }
+    categorieProfessionnelle: { type: DataTypes.STRING, allowNull: true },
+    dateDernierConge: { type: DataTypes.DATE, allowNull: true },
+    // Cumuls initiaux de début d'exercice (saisie dans les paramètres/fiche)
+    cumulBrutInitial: { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 },
+    cumulNetImposableInitial: { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 },
+    cumulNetInitial: { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 },
+    cumulCnpsSalInitial: { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 },
+    cumulItsInitial: { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 },
+    cumulCmuInitial: { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 },
+    cumulChargesPatInitial: { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 },
+    cumulHeuresSupInitial: { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 },
+    cumulJoursInitial: { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 },
+    // Historique cumulatif automatique par année ({ [annee]: { cumul_brut, ... } })
+    cumulsPaie: { type: DataTypes.JSON, allowNull: true, defaultValue: {} }
 });
 
 const Absence = sequelize.define('Absence', {
@@ -753,8 +766,52 @@ const isSqlite = sequelize.getDialect() === 'sqlite';
                 await sequelize.getQueryInterface().addColumn('Employees', 'categorieProfessionnelle', { type: DataTypes.STRING, allowNull: true });
                 console.log('🛠️  Colonne Employees.categorieProfessionnelle ajoutée.');
             }
+            if (!colonnesEmployees.dateDernierConge) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'dateDernierConge', { type: DataTypes.DATE, allowNull: true });
+                console.log('🛠️  Colonne Employees.dateDernierConge ajoutée.');
+            }
+            if (!colonnesEmployees.cumulBrutInitial) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'cumulBrutInitial', { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 });
+                console.log('🛠️  Colonne Employees.cumulBrutInitial ajoutée.');
+            }
+            if (!colonnesEmployees.cumulNetImposableInitial) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'cumulNetImposableInitial', { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 });
+                console.log('🛠️  Colonne Employees.cumulNetImposableInitial ajoutée.');
+            }
+            if (!colonnesEmployees.cumulNetInitial) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'cumulNetInitial', { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 });
+                console.log('🛠️  Colonne Employees.cumulNetInitial ajoutée.');
+            }
+            if (!colonnesEmployees.cumulCnpsSalInitial) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'cumulCnpsSalInitial', { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 });
+                console.log('🛠️  Colonne Employees.cumulCnpsSalInitial ajoutée.');
+            }
+            if (!colonnesEmployees.cumulItsInitial) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'cumulItsInitial', { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 });
+                console.log('🛠️  Colonne Employees.cumulItsInitial ajoutée.');
+            }
+            if (!colonnesEmployees.cumulCmuInitial) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'cumulCmuInitial', { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 });
+                console.log('🛠️  Colonne Employees.cumulCmuInitial ajoutée.');
+            }
+            if (!colonnesEmployees.cumulChargesPatInitial) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'cumulChargesPatInitial', { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 });
+                console.log('🛠️  Colonne Employees.cumulChargesPatInitial ajoutée.');
+            }
+            if (!colonnesEmployees.cumulHeuresSupInitial) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'cumulHeuresSupInitial', { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 });
+                console.log('🛠️  Colonne Employees.cumulHeuresSupInitial ajoutée.');
+            }
+            if (!colonnesEmployees.cumulJoursInitial) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'cumulJoursInitial', { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 });
+                console.log('🛠️  Colonne Employees.cumulJoursInitial ajoutée.');
+            }
+            if (!colonnesEmployees.cumulsPaie) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'cumulsPaie', { type: DataTypes.JSON, allowNull: true });
+                console.log('🛠️  Colonne Employees.cumulsPaie ajoutée.');
+            }
         } catch (e) {
-            console.warn('Migration Employees.statutSalarie :', e.message);
+            console.warn('Migration Employees colonnes :', e.message);
         }
 
         // ── Lot 1 : colonnes « déclarations » sur les bulletins enregistrés ──

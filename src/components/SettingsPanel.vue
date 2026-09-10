@@ -517,6 +517,74 @@ const saveScheduleSettings = async () => {
     showToast("Erreur lors de la sauvegarde", 'error')
   }
 }
+
+// ── Gestion des Cumuls de Paie (Début d'exercice / Antérieurs) ──
+const cumulsEmployees = ref([])
+const cumulsLoading = ref(false)
+const cumulsSaving = ref(false)
+const cumulsViewMode = ref('table') // 'table' | 'fiche'
+const selectedCumulsEmpId = ref(null)
+const selectedCumulsEmp = computed(() => {
+  return cumulsEmployees.value.find(e => String(e.id) === String(selectedCumulsEmpId.value)) || null
+})
+
+const loadCumulsEmployees = async () => {
+  try {
+    cumulsLoading.value = true
+    const emps = await localDb.getEmployees()
+    cumulsEmployees.value = emps.map(e => ({
+      ...e,
+      cumul_brut_initial: e.cumul_brut_initial ?? e.cumulBrutInitial ?? 0,
+      cumul_net_imposable_initial: e.cumul_net_imposable_initial ?? e.cumulNetImposableInitial ?? 0,
+      cumul_net_initial: e.cumul_net_initial ?? e.cumulNetInitial ?? 0,
+      cumul_cnps_sal_initial: e.cumul_cnps_sal_initial ?? e.cumulCnpsSalInitial ?? 0,
+      cumul_its_initial: e.cumul_its_initial ?? e.cumulItsInitial ?? 0,
+      cumul_cmu_initial: e.cumul_cmu_initial ?? e.cumulCmuInitial ?? 0,
+      cumul_charges_pat_initial: e.cumul_charges_pat_initial ?? e.cumulChargesPatInitial ?? 0,
+      cumul_jours_initial: e.cumul_jours_initial ?? e.cumulJoursInitial ?? 0,
+      cumul_heures_sup_initial: e.cumul_heures_sup_initial ?? e.cumulHeuresSupInitial ?? 0
+    }))
+    if (cumulsEmployees.value.length && !selectedCumulsEmpId.value) {
+      selectedCumulsEmpId.value = cumulsEmployees.value[0].id
+    }
+  } catch (e) {
+    console.error('Erreur chargement employés pour cumuls :', e)
+  } finally {
+    cumulsLoading.value = false
+  }
+}
+
+watch(activeTab, (tab) => {
+  if (tab === 'cumuls') {
+    loadCumulsEmployees()
+  }
+})
+
+const saveSingleCumul = async (emp) => {
+  try {
+    cumulsSaving.value = true
+    await localDb.saveEmployee(emp)
+    showToast(`Cumuls enregistrés pour ${emp.prenom || ''} ${emp.nom || ''}`, 'success')
+  } catch (e) {
+    showToast(`Erreur : ${e.message}`, 'error')
+  } finally {
+    cumulsSaving.value = false
+  }
+}
+
+const saveAllCumuls = async () => {
+  try {
+    cumulsSaving.value = true
+    for (const emp of cumulsEmployees.value) {
+      await localDb.saveEmployee(emp)
+    }
+    showToast("Tous les cumuls ont été enregistrés avec succès !", 'success')
+  } catch (e) {
+    showToast(`Erreur : ${e.message}`, 'error')
+  } finally {
+    cumulsSaving.value = false
+  }
+}
 </script>
 
 <template>
@@ -526,7 +594,7 @@ const saveScheduleSettings = async () => {
         <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         Paramètres & Modèles
       </h2>
-      <p style="color: #64748b;">Configurez les modèles PDF personnalisés et l'automatisation de la paie.</p>
+      <p style="color: #64748b;">Configurez les modèles PDF personnalisés, les cumuls et l'automatisation de la paie.</p>
     </div>
 
     <!-- TABS -->
@@ -536,6 +604,9 @@ const saveScheduleSettings = async () => {
       </button>
       <button @click="activeTab = 'templates'" :style="{ borderBottom: activeTab === 'templates' ? '2px solid #3b82f6' : 'none', color: activeTab === 'templates' ? '#0f172a' : '#64748b', fontWeight: activeTab === 'templates' ? '600' : '400', background: 'transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', padding: '12px 16px', cursor: 'pointer', fontSize: '1rem' }">
         Modèles PDF
+      </button>
+      <button @click="activeTab = 'cumuls'" :style="{ borderBottom: activeTab === 'cumuls' ? '2px solid #3b82f6' : 'none', color: activeTab === 'cumuls' ? '#0f172a' : '#64748b', fontWeight: activeTab === 'cumuls' ? '600' : '400', background: 'transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', padding: '12px 16px', cursor: 'pointer', fontSize: '1rem' }">
+        Cumuls de Paie
       </button>
       <button @click="activeTab = 'schedule'" :style="{ borderBottom: activeTab === 'schedule' ? '2px solid #3b82f6' : 'none', color: activeTab === 'schedule' ? '#0f172a' : '#64748b', fontWeight: activeTab === 'schedule' ? '600' : '400', background: 'transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', padding: '12px 16px', cursor: 'pointer', fontSize: '1rem' }">
         Planification
@@ -942,6 +1013,175 @@ const saveScheduleSettings = async () => {
               </button>
               <button @click="analyserModelePdf" :disabled="pdfAnalyzing" style="background: white; border: 1px solid #e2e8f0; color: #475569; padding: 12px 16px; border-radius: 8px; cursor: pointer; font-weight: 600;">Réanalyser</button>
             </template>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB: CUMULS DE PAIE -->
+    <div v-if="activeTab === 'cumuls'" class="animate-in">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+        <div>
+          <h3 style="margin: 0 0 4px 0; color: #0f172a; display: flex; align-items: center; gap: 8px;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+            Cumuls de Paie (Début d'exercice / Historique)
+          </h3>
+          <p style="color: #64748b; font-size: 0.85rem; margin: 0;">
+            Saisissez les montants cumulés antérieurs de chaque salarié. Ils s'incrémentent automatiquement à chaque génération de bulletin et restent modifiables à tout moment.
+          </p>
+        </div>
+
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <div style="display: inline-flex; background: #e2e8f0; padding: 3px; border-radius: 8px;">
+            <button
+              type="button"
+              @click="cumulsViewMode = 'table'"
+              :style="{ background: cumulsViewMode === 'table' ? '#ffffff' : 'transparent', color: cumulsViewMode === 'table' ? '#0f172a' : '#64748b', fontWeight: cumulsViewMode === 'table' ? '700' : '500', border: 'none', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem' }"
+            >
+              Tableau global
+            </button>
+            <button
+              type="button"
+              @click="cumulsViewMode = 'fiche'"
+              :style="{ background: cumulsViewMode === 'fiche' ? '#ffffff' : 'transparent', color: cumulsViewMode === 'fiche' ? '#0f172a' : '#64748b', fontWeight: cumulsViewMode === 'fiche' ? '700' : '500', border: 'none', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem' }"
+            >
+              Fiche détaillée
+            </button>
+          </div>
+          <button
+            @click="saveAllCumuls"
+            :disabled="cumulsSaving || !cumulsEmployees.length"
+            style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-weight: 700; font-size: 0.82rem; cursor: pointer; display: flex; align-items: center; gap: 6px;"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+            {{ cumulsSaving ? 'Enregistrement…' : 'Enregistrer tout' }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="cumulsLoading" style="text-align: center; padding: 40px; color: #64748b;">
+        Chargement des salariés…
+      </div>
+
+      <div v-else-if="!cumulsEmployees.length" style="background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 12px; padding: 32px; text-align: center; color: #64748b;">
+        <p style="margin: 0 0 8px 0; font-weight: 600; color: #334155;">Aucun employé enregistré dans l'annuaire</p>
+        <p style="margin: 0; font-size: 0.85rem;">Ajoutez d'abord des employés dans l'onglet Employés pour pouvoir configurer leurs cumuls de paie.</p>
+      </div>
+
+      <!-- Mode Tableau (Grille de saisie en masse) -->
+      <div v-else-if="cumulsViewMode === 'table'" class="cumuls-table-wrapper" style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; overflow-x: auto; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.82rem;">
+          <thead>
+            <tr style="background: #f8fafc; border-bottom: 2px solid #e2e8f0; text-align: left; color: #475569;">
+              <th style="padding: 10px 12px; min-width: 180px;">Salarié</th>
+              <th style="padding: 10px 12px; min-width: 130px;">Cumul Brut (FCFA)</th>
+              <th style="padding: 10px 12px; min-width: 130px;">Net Imposable</th>
+              <th style="padding: 10px 12px; min-width: 130px;">Net Payé</th>
+              <th style="padding: 10px 12px; min-width: 120px;">CNPS Salarié</th>
+              <th style="padding: 10px 12px; min-width: 120px;">ITS</th>
+              <th style="padding: 10px 12px; min-width: 110px;">CMU</th>
+              <th style="padding: 10px 12px; min-width: 130px;">Charges Patronales</th>
+              <th style="padding: 10px 12px; text-align: center; min-width: 90px;">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="emp in cumulsEmployees" :key="emp.id" style="border-bottom: 1px solid #f1f5f9; transition: background 0.1s;">
+              <td style="padding: 8px 12px;">
+                <strong style="color: #0f172a; display: block;">{{ (emp.nom || '').toUpperCase() }} {{ emp.prenom || '' }}</strong>
+                <span style="color: #64748b; font-size: 0.72rem;">{{ emp.matricule || 'Sans matricule' }} &bull; {{ emp.poste || 'Employé' }}</span>
+              </td>
+              <td style="padding: 6px 8px;">
+                <input v-model.number="emp.cumul_brut_initial" type="number" style="width: 100%; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.82rem;" placeholder="0" />
+              </td>
+              <td style="padding: 6px 8px;">
+                <input v-model.number="emp.cumul_net_imposable_initial" type="number" style="width: 100%; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.82rem;" placeholder="0" />
+              </td>
+              <td style="padding: 6px 8px;">
+                <input v-model.number="emp.cumul_net_initial" type="number" style="width: 100%; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.82rem;" placeholder="0" />
+              </td>
+              <td style="padding: 6px 8px;">
+                <input v-model.number="emp.cumul_cnps_sal_initial" type="number" style="width: 100%; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.82rem;" placeholder="0" />
+              </td>
+              <td style="padding: 6px 8px;">
+                <input v-model.number="emp.cumul_its_initial" type="number" style="width: 100%; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.82rem;" placeholder="0" />
+              </td>
+              <td style="padding: 6px 8px;">
+                <input v-model.number="emp.cumul_cmu_initial" type="number" style="width: 100%; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.82rem;" placeholder="0" />
+              </td>
+              <td style="padding: 6px 8px;">
+                <input v-model.number="emp.cumul_charges_pat_initial" type="number" style="width: 100%; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.82rem;" placeholder="0" />
+              </td>
+              <td style="padding: 6px 8px; text-align: center;">
+                <button
+                  type="button"
+                  @click="saveSingleCumul(emp)"
+                  style="background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; padding: 5px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; cursor: pointer;"
+                >
+                  Sauvegarder
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Mode Fiche détaillée -->
+      <div v-else class="cumuls-fiche-wrapper" style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px;">
+        <div style="margin-bottom: 20px; max-width: 400px;">
+          <label style="display: block; font-weight: 700; margin-bottom: 6px; color: #334155; font-size: 0.85rem;">Sélectionner le salarié :</label>
+          <select v-model="selectedCumulsEmpId" style="width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.9rem;">
+            <option v-for="emp in cumulsEmployees" :key="emp.id" :value="emp.id">
+              {{ (emp.nom || '').toUpperCase() }} {{ emp.prenom || '' }} ({{ emp.matricule || 'N/A' }})
+            </option>
+          </select>
+        </div>
+
+        <div v-if="selectedCumulsEmp" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;">
+          <div class="form-group">
+            <label style="display: block; font-weight: 600; font-size: 0.8rem; margin-bottom: 4px; color: #475569;">Cumul Brut initial (FCFA)</label>
+            <input v-model.number="selectedCumulsEmp.cumul_brut_initial" type="number" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px;" placeholder="0" />
+          </div>
+          <div class="form-group">
+            <label style="display: block; font-weight: 600; font-size: 0.8rem; margin-bottom: 4px; color: #475569;">Cumul Net Imposable initial</label>
+            <input v-model.number="selectedCumulsEmp.cumul_net_imposable_initial" type="number" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px;" placeholder="0" />
+          </div>
+          <div class="form-group">
+            <label style="display: block; font-weight: 600; font-size: 0.8rem; margin-bottom: 4px; color: #475569;">Cumul Net Payé initial</label>
+            <input v-model.number="selectedCumulsEmp.cumul_net_initial" type="number" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px;" placeholder="0" />
+          </div>
+          <div class="form-group">
+            <label style="display: block; font-weight: 600; font-size: 0.8rem; margin-bottom: 4px; color: #475569;">Cumul CNPS Salarié initial</label>
+            <input v-model.number="selectedCumulsEmp.cumul_cnps_sal_initial" type="number" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px;" placeholder="0" />
+          </div>
+          <div class="form-group">
+            <label style="display: block; font-weight: 600; font-size: 0.8rem; margin-bottom: 4px; color: #475569;">Cumul ITS initial</label>
+            <input v-model.number="selectedCumulsEmp.cumul_its_initial" type="number" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px;" placeholder="0" />
+          </div>
+          <div class="form-group">
+            <label style="display: block; font-weight: 600; font-size: 0.8rem; margin-bottom: 4px; color: #475569;">Cumul CMU initial</label>
+            <input v-model.number="selectedCumulsEmp.cumul_cmu_initial" type="number" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px;" placeholder="0" />
+          </div>
+          <div class="form-group">
+            <label style="display: block; font-weight: 600; font-size: 0.8rem; margin-bottom: 4px; color: #475569;">Cumul Charges Patronales initial</label>
+            <input v-model.number="selectedCumulsEmp.cumul_charges_pat_initial" type="number" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px;" placeholder="0" />
+          </div>
+          <div class="form-group">
+            <label style="display: block; font-weight: 600; font-size: 0.8rem; margin-bottom: 4px; color: #475569;">Cumul Jours Travaillés initial</label>
+            <input v-model.number="selectedCumulsEmp.cumul_jours_initial" type="number" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px;" placeholder="0" />
+          </div>
+          <div class="form-group">
+            <label style="display: block; font-weight: 600; font-size: 0.8rem; margin-bottom: 4px; color: #475569;">Cumul Heures Sup initiales</label>
+            <input v-model.number="selectedCumulsEmp.cumul_heures_sup_initial" type="number" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px;" placeholder="0" />
+          </div>
+
+          <div style="grid-column: 1 / -1; margin-top: 16px; display: flex; justify-content: flex-end;">
+            <button
+              type="button"
+              @click="saveSingleCumul(selectedCumulsEmp)"
+              style="background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 700; cursor: pointer;"
+            >
+              Enregistrer les cumuls de ce salarié
+            </button>
           </div>
         </div>
       </div>

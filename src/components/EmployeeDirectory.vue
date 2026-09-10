@@ -421,6 +421,11 @@ const importExcel = async (e) => {
           <input v-model="selectedEmployee.date_embauche" type="date" />
         </div>
         <div class="form-group">
+          <label>Date du dernier congé payé pris</label>
+          <input v-model="selectedEmployee.date_dernier_conge" type="date" />
+          <small class="champ-aide">Point de départ pour le calcul des congés acquis (2,2 jours/mois).</small>
+        </div>
+        <div class="form-group">
           <label>Numéro CNPS</label>
           <input v-model="selectedEmployee.numero_cnps" type="text" placeholder="ex. 123456-A" />
         </div>
@@ -470,6 +475,53 @@ const importExcel = async (e) => {
           <small class="champ-aide">
             L'employeur paie une T.A.S.P plus élevée sur un salarié expatrié : ce statut sert au calcul du bulletin.
           </small>
+        </div>
+
+        <!-- ═══ CUMULS DE PAIE ANTÉRIEURS (DÉBUT D'EXERCICE) ═══ -->
+        <div class="cumuls-section-card" style="grid-column: 1 / -1; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; margin-top: 8px;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+            <strong style="color: #0f172a; font-size: 0.92rem;">Cumuls de paie antérieurs (Début d'exercice)</strong>
+            <span style="font-size: 0.75rem; color: #64748b; background: #e2e8f0; padding: 2px 8px; border-radius: 12px;">Modifiable à tout moment</span>
+          </div>
+          <p style="font-size: 0.8rem; color: #64748b; margin: 0 0 14px 0; line-height: 1.4;">
+            Si votre entreprise a commencé l'année sur un autre système, renseignez ici les montants cumulés jusqu'à ce jour. Ils s'incrémenteront automatiquement à chaque nouvelle paie générée.
+          </p>
+
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+            <div class="form-group" style="margin-bottom: 0;">
+              <label style="font-size: 0.78rem;">Cumul Brut initial (FCFA)</label>
+              <input v-model.number="selectedEmployee.cumul_brut_initial" type="number" placeholder="0" />
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label style="font-size: 0.78rem;">Cumul Net Imposable initial</label>
+              <input v-model.number="selectedEmployee.cumul_net_imposable_initial" type="number" placeholder="0" />
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label style="font-size: 0.78rem;">Cumul Net Payé initial</label>
+              <input v-model.number="selectedEmployee.cumul_net_initial" type="number" placeholder="0" />
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label style="font-size: 0.78rem;">Cumul CNPS Salarié initial</label>
+              <input v-model.number="selectedEmployee.cumul_cnps_sal_initial" type="number" placeholder="0" />
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label style="font-size: 0.78rem;">Cumul ITS initial</label>
+              <input v-model.number="selectedEmployee.cumul_its_initial" type="number" placeholder="0" />
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label style="font-size: 0.78rem;">Cumul CMU initial</label>
+              <input v-model.number="selectedEmployee.cumul_cmu_initial" type="number" placeholder="0" />
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label style="font-size: 0.78rem;">Cumul Charges Patronales</label>
+              <input v-model.number="selectedEmployee.cumul_charges_pat_initial" type="number" placeholder="0" />
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label style="font-size: 0.78rem;">Cumul Jours Travaillés</label>
+              <input v-model.number="selectedEmployee.cumul_jours_initial" type="number" placeholder="0" />
+            </div>
+          </div>
         </div>
       </div>
 

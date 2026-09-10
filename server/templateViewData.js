@@ -65,12 +65,73 @@ function buildViewData(employee = {}, calculs = {}, companyInfo = {}) {
     const moisNum = parseInt(employee.mois, 10);
     const annee = employee.annee || new Date().getFullYear();
 
+    let congesAcquis = employee.conges_acquis || calculs.congesAcquis;
+    let congesPris = employee.conges_pris || calculs.congesPris;
+    let congesReste = employee.conges_reste || calculs.congesReste;
+    if (congesAcquis === undefined || congesPris === undefined || congesReste === undefined) {
+        let dRef;
+        if (employee.date_dernier_conge) {
+            dRef = new Date(employee.date_dernier_conge);
+        } else {
+            const debutAnnee = new Date(annee, 0, 1);
+            const dateEmb = employee.date_embauche ? new Date(employee.date_embauche) : null;
+            dRef = (dateEmb && dateEmb > debutAnnee) ? dateEmb : debutAnnee;
+        }
+        const dNow = new Date(annee, (moisNum || 1) - 1, 1);
+        const diffMoisConges = (dNow.getFullYear() - dRef.getFullYear()) * 12 + (dNow.getMonth() - dRef.getMonth());
+        if (diffMoisConges > 0) {
+            congesAcquis = Math.round(Math.floor(diffMoisConges * 2.2) * 10) / 10;
+        } else {
+            congesAcquis = 0;
+        }
+        const prisBdd = parseFloat(employee.absences_prises_total) || 0;
+        const prisMois = parseFloat(calculs.joursCP) || (employee.prise_conges_mode === 'total' || employee.bulletin_type === 'conges' ? congesAcquis : (parseFloat(employee.jours_conges_partiels) || parseFloat(employee.jours_conges_pris) || 0));
+        congesPris = prisBdd > 0 ? (prisMois > 0 && prisBdd < prisMois ? prisMois : prisBdd) : prisMois;
+        congesReste = Math.max(0, Math.round((congesAcquis - congesPris) * 10) / 10);
+    }
+
+    // ── Calcul des cumuls annuels ──
+    const anneeKey = String(annee || new Date().getFullYear());
+    const cHist = (employee.cumulsPaie && employee.cumulsPaie[anneeKey]) || (employee.cumuls_paie && employee.cumuls_paie[anneeKey]) || {};
+    const brutInit = parseFloat(employee.cumul_brut_initial ?? employee.cumulBrutInitial ?? cHist.cumul_brut_initial ?? cHist.cumul_brut ?? 0) || 0;
+    const netImpInit = parseFloat(employee.cumul_net_imposable_initial ?? employee.cumulNetImposableInitial ?? cHist.cumul_net_imposable_initial ?? cHist.cumul_net_imposable ?? 0) || 0;
+    const netInit = parseFloat(employee.cumul_net_initial ?? employee.cumulNetInitial ?? cHist.cumul_net_initial ?? cHist.cumul_net ?? 0) || 0;
+    const cnpsInit = parseFloat(employee.cumul_cnps_sal_initial ?? employee.cumulCnpsSalInitial ?? cHist.cumul_cnps_sal_initial ?? cHist.cumul_cnps ?? 0) || 0;
+    const itsInit = parseFloat(employee.cumul_its_initial ?? employee.cumulItsInitial ?? cHist.cumul_its_initial ?? cHist.cumul_its ?? 0) || 0;
+    const cmuInit = parseFloat(employee.cumul_cmu_initial ?? employee.cumulCmuInitial ?? cHist.cumul_cmu_initial ?? cHist.cumul_cmu ?? 0) || 0;
+    const patInit = parseFloat(employee.cumul_charges_pat_initial ?? employee.cumulChargesPatInitial ?? cHist.cumul_charges_pat_initial ?? cHist.cumul_charges_pat ?? 0) || 0;
+    const jrsInit = parseFloat(employee.cumul_jours_initial ?? employee.cumulJoursInitial ?? cHist.cumul_jours_initial ?? cHist.cumul_jours ?? 0) || 0;
+    const hsInit = parseFloat(employee.cumul_heures_sup_initial ?? employee.cumulHeuresSupInitial ?? cHist.cumul_heures_sup_initial ?? cHist.cumul_heures_sup ?? 0) || 0;
+
+    const cumulBrut = Math.round((brutInit + (calculs.gainsTotaux || 0)) * 100) / 100;
+    const cumulNetImposable = Math.round((netImpInit + (calculs.brutImposable || 0)) * 100) / 100;
+    const cumulNet = Math.round((netInit + (calculs.netAPayer || 0)) * 100) / 100;
+    const cumulCnps = Math.round((cnpsInit + (salarial.cnps || 0)) * 100) / 100;
+    const cumulIts = Math.round((itsInit + (salarial.its || 0)) * 100) / 100;
+    const cumulCmu = Math.round((cmuInit + (salarial.cmu || 0)) * 100) / 100;
+    const cumulPatronal = Math.round((patInit + (patronal.grandTotal || 0)) * 100) / 100;
+    const cumulJours = Math.round((jrsInit + (calculs.joursTrav || 0)) * 10) / 10;
+    const cumulHeuresSup = Math.round((hsInit + (calculs.nbHeuresSup || 0)) * 10) / 10;
+
     const view = {
         // Le contrat et la fiche employé d'abord : identité, matricule, poste…
         ...employee,
         // Puis les résultats bruts du calcul, pour les gabarits qui les adressent
         // en camelCase.
         ...calculs,
+
+        // ── Cumuls annuels ──
+        cumul_brut: n(cumulBrut),
+        cumul_brut_imposable: n(cumulNetImposable),
+        cumul_net_imposable: n(cumulNetImposable),
+        cumul_net: n(cumulNet),
+        cumul_net_a_payer: n(cumulNet),
+        cumul_cnps: n(cumulCnps),
+        cumul_its: n(cumulIts),
+        cumul_cmu: n(cumulCmu),
+        cumul_charges_pat: n(cumulPatronal),
+        cumul_jours: n(cumulJours),
+        cumul_heures_sup: n(cumulHeuresSup),
 
         // ── Période ──
         mois: employee.mois,
@@ -99,6 +160,10 @@ function buildViewData(employee = {}, calculs = {}, companyInfo = {}) {
         heures_sup_nb: n(calculs.nbHeuresSup),
         allocation_conges: n(calculs.allocationConges),
         jours_travailles: n(calculs.joursTrav),
+        jours_conges_pris: n(congesPris),
+        conges_acquis: n(congesAcquis),
+        conges_reste: n(congesReste),
+        conges_pris: n(congesPris),
         // Le nombre de parts IGR est un quotient familial, pas un montant :
         // il s'affiche avec une décimale (« 2.0 »), jamais formaté en milliers.
         parts_igr: calculs.parts !== undefined ? Number(calculs.parts).toFixed(1) : '',

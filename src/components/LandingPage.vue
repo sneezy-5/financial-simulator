@@ -255,8 +255,27 @@ const handleInstallPWA = async () => {
     <!-- ══ APERÇU PRODUIT ══ -->
     <section id="apercu" class="ent-section">
       <div class="ent-section-head reveal">
-        <span class="ent-kicker">L'aperçu</span>
-        <h2>Une prise en main immédiate.</h2>
+        <span class="ent-kicker">Démonstration</span>
+        <h2>Découvrez ONDA RH en vidéo</h2>
+        <p>Voyez comment ONDA RH calcule instantanément les paies et édite les documents conformes.</p>
+      </div>
+
+      <div class="ent-video-wrapper reveal" style="max-width: 980px; margin: 0 auto 3.5rem; background: #0b0d12; padding: 1rem; border-radius: 1.5rem; box-shadow: 0 20px 40px rgba(0,0,0,0.15); border: 1px solid rgba(255,255,255,0.1);">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; padding: 0.25rem 0.5rem;">
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span style="width: 10px; height: 10px; border-radius: 50%; background: #ef4444; display: inline-block;"></span>
+            <span style="width: 10px; height: 10px; border-radius: 50%; background: #f59e0b; display: inline-block;"></span>
+            <span style="width: 10px; height: 10px; border-radius: 50%; background: #10b981; display: inline-block;"></span>
+            <span style="font-size: 0.82rem; color: #94a3b8; margin-left: 0.5rem; font-weight: 500;">Démonstration • ONDA RH Pro</span>
+          </div>
+          <span style="font-size: 0.75rem; color: #34d399; background: rgba(16,185,129,0.15); padding: 0.2rem 0.6rem; border-radius: 9999px; font-weight: 600;">1080p HD</span>
+        </div>
+        <div style="position: relative; width: 100%; aspect-ratio: 16/9; border-radius: 1rem; overflow: hidden; background: #000;">
+          <video controls preload="metadata" poster="/dashboard.png" style="width: 100%; height: 100%; object-fit: contain;">
+            <source src="/onda-demo.mp4" type="video/mp4" />
+            Votre navigateur ne supporte pas la lecture vidéo.
+          </video>
+        </div>
       </div>
 
       <div class="ent-shows">

@@ -151,20 +151,20 @@ function calculateSalaryRules(employee) {
         }
     }
 
-    const autoConges = !!employee['auto_conges'];
-    let joursConges = parseFloat(employee['jours_conges_pris'] || 0);
-
-    if (autoConges) {
+    // Détermination des congés pris ce mois :
+    // 1. Prise partielle explicite (jours saisis)
+    // 2. Saisie directe (jours_conges_pris)
+    // 3. Prise totale / Bulletin de congés / auto_conges (totalité des droits acquis)
+    let joursConges = 0;
+    if (employee['prise_conges_mode'] === 'partiel' && parseFloat(employee['jours_conges_partiels']) > 0) {
+        joursConges = parseFloat(employee['jours_conges_partiels']);
+    } else if (employee['prise_conges_mode'] === 'total' || employee['bulletin_type'] === 'conges' || !!employee['auto_conges'] || !!employee['isLeavePayslip']) {
         const dateRefStr = employee['date_dernier_conge'] || employee['date_embauche'];
         if (dateRefStr) {
             const dRef = new Date(dateRefStr);
             const dNow = new Date(paieAnnee, paieMois - 1, 1);
             const diffMois = (dNow.getFullYear() - dRef.getFullYear()) * 12 + (dNow.getMonth() - dRef.getMonth());
             if (diffMois > 0) {
-                // Barème légal (Code du Travail) : au delà de 5 ans d'ancienneté,
-                // la durée du congé est majorée d'un nombre de jours croissant
-                // par palier — jamais retranchée, jamais plafonnée par le calcul
-                // de base.
                 const majoration =
                     (ancienneteAnneesExactes > 5 && ancienneteAnneesExactes <= 10 ? 1 : 0) +
                     (ancienneteAnneesExactes > 10 && ancienneteAnneesExactes <= 15 ? 2 : 0) +
@@ -174,13 +174,23 @@ function calculateSalaryRules(employee) {
                 joursConges = Math.floor(diffMois * 2.2) + majoration;
             }
         }
+    } else if (parseFloat(employee['jours_conges_pris']) > 0) {
+        joursConges = parseFloat(employee['jours_conges_pris']);
     }
 
-    // Jours effectivement travaillés : si jours_travailles est fourni explicitement (ex: export d'un
-    // système de pointage externe qui donne directement le nombre de jours réellement travaillés), on
-    // l'utilise tel quel. Sinon, on part de la base légale standard et on retranche les absences saisies
-    // (évite de compter les absences deux fois si les deux champs sont renseignés en même temps).
-    const joursTrav = Math.max(0, (joursTravailleExplicite !== null ? joursTravailleExplicite : (JOURS_BASE_STANDARD - joursAbsences)) - joursConges);
+    // `jours_travailles` dans le formulaire manuel et dans les imports Excel
+    // représente la BASE d'un mois complet (ex: 26 jours ouvrables) — pas le
+    // résultat final après absences. On en déduit toujours absences_jours et
+    // joursConges.
+    // Exception : `jours_travailles_net` (champ technique, import pointage
+    // externe seulement) donne directement le net ; on l'utilise alors tel quel
+    // sans re-déduire les absences (évite le double-comptage).
+    const joursNetExterne = (employee['jours_travailles_net'] !== undefined && employee['jours_travailles_net'] !== null && employee['jours_travailles_net'] !== '')
+        ? parseFloat(employee['jours_travailles_net'])
+        : null;
+    // Base du mois : jours_travailles (formulaire / Excel) ou 26 par défaut.
+    const joursBaseMois = (joursTravailleExplicite !== null) ? joursTravailleExplicite : JOURS_BASE_STANDARD;
+    const joursTrav = Math.max(0, (joursNetExterne !== null ? joursNetExterne : (joursBaseMois - joursAbsences)) - joursConges);
     const joursBasePaie = JOURS_BASE_STANDARD;
     const joursCP = joursConges;
 
@@ -337,6 +347,126 @@ const formatDate = (dateStr) => {
 };
 
 /**
+ * Calcul harmonisé des compteurs de congés (Acquis, Pris, Reste à prendre)
+ * applicable à tous les modèles de bulletins.
+ *
+ * Source de vérité pour congesPris (par ordre de priorité) :
+ *  1. employee.absences_prises_total  → somme des absences 'annuel' en BDD
+ *                                        depuis date_dernier_conge (injecté par
+ *                                        /api/rh/generate-single-payslip)
+ *  2. calc.joursCP / bulletin_type === 'conges' → jours calculés au moment du bulletin
+ *  3. employee.jours_conges_pris      → saisie explicite / rétrocompat
+ */
+function calculateCongesCounters(employee, calc = {}, annee, moisNum) {
+    let congesAcquis = '';
+    let congesReste = '';
+
+    // Détermination de la date de référence
+    let dRef;
+    if (employee.date_dernier_conge) {
+        dRef = new Date(employee.date_dernier_conge);
+    } else {
+        const debutAnnee = new Date(annee, 0, 1);
+        const dateEmb = employee.date_embauche ? new Date(employee.date_embauche) : null;
+        dRef = (dateEmb && dateEmb > debutAnnee) ? dateEmb : debutAnnee;
+    }
+    const dNow = new Date(annee, moisNum - 1, 1);
+    const diffMoisConges = (dNow.getFullYear() - dRef.getFullYear()) * 12 + (dNow.getMonth() - dRef.getMonth());
+    if (diffMoisConges > 0) {
+        const acquis = Math.round(Math.floor(diffMoisConges * 2.2) * 10) / 10;
+        congesAcquis = acquis;
+    }
+
+    // Congés pris en BDD antérieurement
+    const prisEnBdd = (employee.absences_prises_total !== undefined && employee.absences_prises_total !== null)
+        ? (parseFloat(employee.absences_prises_total) || 0)
+        : null;
+
+    // Congés pris sur ce bulletin courant
+    let prisCeMois = 0;
+    if (calc && calc.joursCP !== undefined && calc.joursCP > 0) {
+        prisCeMois = parseFloat(calc.joursCP) || 0;
+    } else if (employee.prise_conges_mode === 'partiel' && parseFloat(employee.jours_conges_partiels) > 0) {
+        prisCeMois = parseFloat(employee.jours_conges_partiels) || 0;
+    } else if (employee.prise_conges_mode === 'total' || employee.bulletin_type === 'conges' || employee.auto_conges || employee.isLeavePayslip) {
+        prisCeMois = typeof congesAcquis === 'number' ? congesAcquis : 0;
+    } else if (parseFloat(employee.jours_conges_pris) > 0) {
+        prisCeMois = parseFloat(employee.jours_conges_pris) || 0;
+    }
+
+    // Calcul du total des congés pris (BDD + mois courant)
+    let congesPris = 0;
+    if (prisEnBdd !== null && prisEnBdd > 0) {
+        congesPris = prisEnBdd;
+        if (prisCeMois > 0 && prisEnBdd < prisCeMois) {
+            congesPris = prisCeMois;
+        } else if (prisCeMois > 0 && prisEnBdd !== prisCeMois) {
+            congesPris = Math.round((prisEnBdd + prisCeMois) * 10) / 10;
+        }
+    } else {
+        congesPris = prisCeMois;
+    }
+
+    if (congesAcquis !== '') {
+        // Reste à prendre = Acquis - Pris (cas partiel : l'employé peut avoir pris une partie)
+        congesReste = Math.max(0, Math.round((congesAcquis - congesPris) * 10) / 10);
+    }
+
+    // congesPris affiché = 0 si aucun pris (pas de chaîne vide)
+    const congesPrisAff = congesPris > 0 ? congesPris : (congesAcquis !== '' ? 0 : '');
+    return { congesAcquis, congesReste, congesPris: congesPrisAff, jCP: congesPris };
+}
+
+/**
+ * Calcule les cumuls annuels de paie (Exercice en cours).
+ * Prend en compte les cumuls initiaux saisis dans les paramètres / fiche employé,
+ * et le mois courant généré.
+ */
+function calculateCumuls(employee, calc, annee) {
+    const anneeKey = String(annee || new Date().getFullYear());
+    const cHist = (employee.cumulsPaie && employee.cumulsPaie[anneeKey]) || (employee.cumuls_paie && employee.cumuls_paie[anneeKey]) || {};
+
+    const brutInit = parseFloat(employee.cumul_brut_initial ?? employee.cumulBrutInitial ?? cHist.cumul_brut_initial ?? cHist.cumul_brut ?? 0) || 0;
+    const netImpInit = parseFloat(employee.cumul_net_imposable_initial ?? employee.cumulNetImposableInitial ?? cHist.cumul_net_imposable_initial ?? cHist.cumul_net_imposable ?? 0) || 0;
+    const netInit = parseFloat(employee.cumul_net_initial ?? employee.cumulNetInitial ?? cHist.cumul_net_initial ?? cHist.cumul_net ?? 0) || 0;
+    const cnpsInit = parseFloat(employee.cumul_cnps_sal_initial ?? employee.cumulCnpsSalInitial ?? cHist.cumul_cnps_sal_initial ?? cHist.cumul_cnps ?? 0) || 0;
+    const itsInit = parseFloat(employee.cumul_its_initial ?? employee.cumulItsInitial ?? cHist.cumul_its_initial ?? cHist.cumul_its ?? 0) || 0;
+    const cmuInit = parseFloat(employee.cumul_cmu_initial ?? employee.cumulCmuInitial ?? cHist.cumul_cmu_initial ?? cHist.cumul_cmu ?? 0) || 0;
+    const patInit = parseFloat(employee.cumul_charges_pat_initial ?? employee.cumulChargesPatInitial ?? cHist.cumul_charges_pat_initial ?? cHist.cumul_charges_pat ?? 0) || 0;
+    const jrsInit = parseFloat(employee.cumul_jours_initial ?? employee.cumulJoursInitial ?? cHist.cumul_jours_initial ?? cHist.cumul_jours ?? 0) || 0;
+    const hsInit = parseFloat(employee.cumul_heures_sup_initial ?? employee.cumulHeuresSupInitial ?? cHist.cumul_heures_sup_initial ?? cHist.cumul_heures_sup ?? 0) || 0;
+
+    const cumulBrut = Math.round((brutInit + (calc?.gainsTotaux || 0)) * 100) / 100;
+    const cumulBrutImposable = Math.round(((netImpInit || brutInit) + (calc?.brutImposable || 0)) * 100) / 100;
+    const cumulNetImposable = Math.round((netImpInit + (calc?.brutImposable || 0)) * 100) / 100;
+    const cumulNetAPayer = Math.round((netInit + (calc?.netAPayer || 0)) * 100) / 100;
+    const cumulCNPS = Math.round((cnpsInit + (calc?.salarial?.cnps || 0)) * 100) / 100;
+    const cumulITS = Math.round((itsInit + (calc?.salarial?.its || 0)) * 100) / 100;
+    const cumulCMU = Math.round((cmuInit + (calc?.salarial?.cmu || 0)) * 100) / 100;
+    const cumulRICF = Math.round((calc?.salarial?.ricf || 0) * 100) / 100;
+    const cumulChargesSal = Math.round((cnpsInit + itsInit + cmuInit + (calc?.salarial?.total || 0)) * 100) / 100;
+    const cumulChargesPat = Math.round((patInit + (calc?.patronal?.grandTotal || calc?.patronal?.totalSocial || 0)) * 100) / 100;
+    const cumulJours = Math.round((jrsInit + (calc?.joursTrav || 0)) * 10) / 10;
+    const cumulHeuresSup = Math.round((hsInit + (calc?.nbHeuresSup || 0)) * 10) / 10;
+
+    return {
+        cumulBrut,
+        cumulBrutImposable,
+        cumulNetImposable,
+        cumulNetAPayer,
+        cumulCNPS,
+        cumulITS,
+        cumulCMU,
+        cumulRICF,
+        cumulChargesSal,
+        cumulChargesPat,
+        cumulJours,
+        cumulHeuresSup
+    };
+}
+
+
+/**
  * Génère le PDF - COPIE EXACTE DU MODELE IVOIRIEN
  */
 function generatePdfDefinition(employee, calc, companyInfo = {}) {
@@ -344,6 +474,11 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
     const YELLOW_NET = '#FFFF00';
     const GRAY_LIGHT = '#F8FAFC';
     const GRAY_BORDER = '#E2E8F0';
+
+    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
+    const annee = parseInt(employee.annee || new Date().getFullYear());
+    const { congesAcquis, congesReste, congesPris, jCP } = calculateCongesCounters(employee, calc, annee, moisNum);
+    const cumuls = calculateCumuls(employee, calc, annee);
 
     const company = {
         nom: companyInfo.nom_entreprise || employee.nom_entreprise || "VOTRE ENTREPRISE",
@@ -357,8 +492,6 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
         logo: companyInfo.logo || null
     };
 
-    const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
-    const annee = parseInt(employee.annee || new Date().getFullYear());
     const dernierJour = new Date(annee, moisNum, 0).getDate();
     const periodeStr = `01/${String(moisNum).padStart(2, '0')}/${annee} au ${dernierJour}/${String(moisNum).padStart(2, '0')}/${annee}`;
 
@@ -424,10 +557,11 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
         ]
     ];
 
-    const joursTrav = Math.max(0, (employee.jours_travailles || 26) - (employee.absences_jours || 0));
+    // calc.joursTrav est d\u00e9j\u00e0 calcul\u00e9 correctement par le moteur (base \u2212 absences \u2212 cong\u00e9s).
+    const joursTrav = calc.joursTrav !== undefined ? calc.joursTrav : Math.max(0, (employee.jours_travailles || 26) - (employee.absences_jours || 0));
 
-    body.push(row(codes.salaireBase, 'SALAIRE CATEGORIEL', calc.salaireBaseMensuel, joursTrav + '/30', calc.salaireBase, null, null, null));
-    if (calc.sursalaire > 0) body.push(row(codes.sursalaire, 'SURSALAIRE', employee.sursalaire, joursTrav + '/30', calc.sursalaire, null, null, null));
+    body.push(row(codes.salaireBase, 'SALAIRE CATEGORIEL', calc.salaireBaseMensuel, joursTrav + '/26', calc.salaireBase, null, null, null));
+    if (calc.sursalaire > 0) body.push(row(codes.sursalaire, 'SURSALAIRE', employee.sursalaire, joursTrav + '/26', calc.sursalaire, null, null, null));
     if (calc.primeAnciennete > 0) body.push(row(codes.primeAnciennete, `PRIME D'ANCIENNETE (${calc.ansAnciennete} ans)`, calc.salaireBase + (calc.sursalaire || 0), null, calc.primeAnciennete, null, null, null));
     if (calc.allocationConges > 0) body.push(row(codes.allocationConges, `ALLOCATION CONGES (${calc.joursCP} jrs)`, null, null, calc.allocationConges, null, null, null));
 
@@ -521,7 +655,8 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
                                                 [{ text: 'Parts IGR', fontSize: 7 }, { text: calc.parts.toFixed(1), fontSize: 7, bold: true }],
                                                 [{ text: 'Type Contrat', fontSize: 7 }, { text: employee.type_contrat || 'CDI', fontSize: 7 }],
                                                 [{ text: 'Date entrée', fontSize: 7 }, { text: employee.date_embauche ? new Date(employee.date_embauche).toLocaleDateString('fr-FR') : '____', fontSize: 7 }],
-                                                [{ text: 'Ancienneté', fontSize: 7 }, { text: calc.ancienneteTxt || '____', fontSize: 7 }]
+                                                [{ text: 'Ancienneté', fontSize: 7 }, { text: calc.ancienneteTxt || '____', fontSize: 7 }],
+                                                [{ text: 'Congés (Acq/Pris/Reste)', fontSize: 6.5 }, { text: `${congesAcquis || 0}j / ${congesPris || 0}j / ${congesReste || 0}j`, fontSize: 6.5, bold: true }]
                                             ]
                                         },
                                         layout: {
@@ -562,12 +697,12 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
                             body: [
                                 [
                                     { text: 'Cumuls', rowSpan: 5, alignment: 'center', verticalAlign: 'middle', bold: true, fontSize: 12, color: '#94a3b8', margin: [2, 10] },
-                                    { text: 'Brut imposable', fontSize: 7, margin: [2, 2] }, { text: fcfa(calc.brutImposable), fontSize: 7, alignment: 'right' },
+                                    { text: 'Brut imposable', fontSize: 7, margin: [2, 2] }, { text: fcfa(cumuls.cumulBrutImposable), fontSize: 7, alignment: 'right' },
                                     { text: 'Mode de règlement', fontSize: 8, colSpan: 2, alignment: 'center', bold: true, fillColor: '#f1f5f9' }, {}
                                 ],
                                 [
                                     {},
-                                    { text: 'Nombre de jours', fontSize: 7, margin: [2, 2] }, { text: joursTrav, fontSize: 7, alignment: 'right' },
+                                    { text: 'Nombre de jours', fontSize: 7, margin: [2, 2] }, { text: cumuls.cumulJours, fontSize: 7, alignment: 'right' },
                                     {
                                         stack: [
                                             { text: (employee.virement ? 'VIREMENT' : 'ESPECES'), fontSize: 12, bold: true, color: '#1e3a8a' },
@@ -578,17 +713,17 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
                                 ],
                                 [
                                     {},
-                                    { text: 'ITS', fontSize: 7, margin: [2, 2] }, { text: fcfa(calc.salarial.its), fontSize: 7, alignment: 'right' },
+                                    { text: 'ITS', fontSize: 7, margin: [2, 2] }, { text: fcfa(cumuls.cumulITS), fontSize: 7, alignment: 'right' },
                                     {}, {}
                                 ],
                                 [
                                     {},
-                                    { text: 'RICF', fontSize: 7, margin: [2, 2] }, { text: fcfa(calc.salarial.ricf), fontSize: 7, alignment: 'right' },
+                                    { text: 'RICF', fontSize: 7, margin: [2, 2] }, { text: fcfa(cumuls.cumulRICF), fontSize: 7, alignment: 'right' },
                                     {}, {}
                                 ],
                                 [
                                     {},
-                                    { text: 'Cnps', fontSize: 7, margin: [2, 2] }, { text: fcfa(calc.salarial.cnps), fontSize: 7, alignment: 'right' },
+                                    { text: 'Cnps', fontSize: 7, margin: [2, 2] }, { text: fcfa(cumuls.cumulCNPS), fontSize: 7, alignment: 'right' },
                                     {}, {}
                                 ]
                             ]
@@ -676,6 +811,8 @@ function generatePdfDefinitionGrilleNumerotee(employee, calc, companyInfo = {}) 
 
     const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
     const annee = parseInt(employee.annee || new Date().getFullYear());
+    const { congesAcquis, congesReste, congesPris, jCP } = calculateCongesCounters(employee, calc, annee, moisNum);
+    const cumuls = calculateCumuls(employee, calc, annee);
     const dernierJour = new Date(annee, moisNum, 0).getDate();
     const periodeDebut = `01/${String(moisNum).padStart(2, '0')}/${annee}`;
     const periodeFin = `${dernierJour}/${String(moisNum).padStart(2, '0')}/${annee}`;
@@ -863,15 +1000,21 @@ function generatePdfDefinitionGrilleNumerotee(employee, calc, companyInfo = {}) 
                     widths: ['16%', '13%', '16%', '13%', '16%', '13%', '13%'],
                     body: [
                         [
-                            cell('Jours travaillés', { fontSize: 6.3, color: '#475569' }), cell(calc.joursTrav, { fontSize: 6.3, bold: true, align: 'right' }),
-                            cell('I.T.S', { fontSize: 6.3, color: '#475569' }), cell(fcfa(calc.salarial.its), { fontSize: 6.3, bold: true, align: 'right' }),
-                            cell('Caisse de Retraite', { fontSize: 6.3, color: '#475569' }), cell(fcfa(calc.salarial.cnps), { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('Jours travaillés', { fontSize: 6.3, color: '#475569' }), cell(cumuls.cumulJours, { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('I.T.S', { fontSize: 6.3, color: '#475569' }), cell(fcfa(cumuls.cumulITS), { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('Caisse de Retraite', { fontSize: 6.3, color: '#475569' }), cell(fcfa(cumuls.cumulCNPS), { fontSize: 6.3, bold: true, align: 'right' }),
                             cell('', { fontSize: 6.3 })
                         ],
                         [
-                            cell('Brut', { fontSize: 6.3, color: '#475569' }), cell(fcfa(calc.gainsTotaux), { fontSize: 6.3, bold: true, align: 'right' }),
-                            cell('Brut imposable', { fontSize: 6.3, color: '#475569' }), cell(fcfa(calc.brutImposable), { fontSize: 6.3, bold: true, align: 'right' }),
-                            cell('R.I.C.F', { fontSize: 6.3, color: '#475569' }), cell(fcfa(calc.salarial.ricf), { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('Brut', { fontSize: 6.3, color: '#475569' }), cell(fcfa(cumuls.cumulBrut), { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('Brut imposable', { fontSize: 6.3, color: '#475569' }), cell(fcfa(cumuls.cumulBrutImposable), { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('R.I.C.F', { fontSize: 6.3, color: '#475569' }), cell(fcfa(cumuls.cumulRICF), { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('', { fontSize: 6.3 })
+                        ],
+                        [
+                            cell('Congés acquis', { fontSize: 6.3, color: '#475569' }), cell(`${congesAcquis || 0} j`, { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('Congés pris', { fontSize: 6.3, color: '#475569' }), cell(`${congesPris || 0} j`, { fontSize: 6.3, bold: true, align: 'right' }),
+                            cell('Reste à prendre', { fontSize: 6.3, color: '#475569' }), cell(`${congesReste || 0} j`, { fontSize: 6.3, bold: true, align: 'right' }),
                             cell('', { fontSize: 6.3 })
                         ]
                     ]
@@ -987,6 +1130,7 @@ function generatePdfDefinitionCompact(employee, calc, companyInfo = {}) {
 
     const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
     const annee = parseInt(employee.annee || new Date().getFullYear());
+    const { congesAcquis, congesReste, congesPris } = calculateCongesCounters(employee, calc, annee, moisNum);
     const periode = `${['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'][moisNum] || ''} ${annee}`;
 
     const headerCols = [];
@@ -1039,7 +1183,8 @@ function generatePdfDefinitionCompact(employee, calc, companyInfo = {}) {
                     { width: 170, table: { widths: ['*'], body: [[{ text: 'NET À PAYER', fontSize: 8, bold: true, alignment: 'center' }], [{ text: fcfa(calc.netAPayer) + ' F', fontSize: 15, bold: true, alignment: 'center', fillColor: '#FFFF00', margin: [0, 4] }]] }, layout: { hLineWidth: () => 1.2, vLineWidth: () => 1.2, hLineColor: () => '#000', vLineColor: () => '#000' } }
                 ]
             },
-            { text: `Mode de règlement : ${employee.virement ? `Virement bancaire${employee.rib ? ` — ${employee.rib}` : ''}` : 'Espèces'}`, fontSize: 6.8, margin: [0, 8, 0, 0], color: '#64748b' },
+            { text: `Congés payés — Acquis : ${congesAcquis || 0} j   ·   Pris : ${congesPris || 0} j   ·   Reste à prendre : ${congesReste || 0} j`, fontSize: 6.8, margin: [0, 6, 0, 0], color: '#1e3a8a', bold: true },
+            { text: `Mode de règlement : ${employee.virement ? `Virement bancaire${employee.rib ? ` — ${employee.rib}` : ''}` : 'Espèces'}`, fontSize: 6.8, margin: [0, 4, 0, 0], color: '#64748b' },
             { text: '', margin: [0, 14] },
             { columns: [{ text: 'Signature Employeur', fontSize: 6.5, alignment: 'center' }, { text: 'Signature Salarié', fontSize: 6.5, alignment: 'center' }] }
         ],
@@ -1060,6 +1205,7 @@ function generatePdfDefinitionLogipaie(employee, calc, companyInfo = {}) {
 
     const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
     const annee = parseInt(employee.annee || new Date().getFullYear());
+    const { congesAcquis, congesReste, congesPris } = calculateCongesCounters(employee, calc, annee, moisNum);
     const dernierJour = new Date(annee, moisNum, 0).getDate();
     const periode = `01/${String(moisNum).padStart(2, '0')}/${annee} au ${dernierJour}/${String(moisNum).padStart(2, '0')}/${annee}`;
 
@@ -1074,7 +1220,8 @@ function generatePdfDefinitionLogipaie(employee, calc, companyInfo = {}) {
                 [cell('Nom', { bold: true, fill: BAND }), cell((employee.nom || '').toUpperCase()), cell('Prénoms', { bold: true, fill: BAND }), cell(employee.prenom || '')],
                 [cell('Emploi', { bold: true, fill: BAND }), cell(employee.poste || ''), cell('Catégorie', { bold: true, fill: BAND }), cell(employee.categorie || '')],
                 [cell('Date embauche', { bold: true, fill: BAND }), cell(employee.date_embauche ? formatDate(employee.date_embauche) : ''), cell('Ancienneté', { bold: true, fill: BAND }), cell(calc.ancienneteTxt || '')],
-                [cell('Situation familiale', { bold: true, fill: BAND }), cell({ celibataire: 'Célibataire', marie: 'Marié(e)', divorce: 'Divorcé(e)', veuf: 'Veuf/Veuve' }[employee.situation_matrimoniale] || employee.situation_matrimoniale || ''), cell('Parts IGR', { bold: true, fill: BAND }), cell(calc.parts !== undefined ? calc.parts.toFixed(1) : '1.0')]
+                [cell('Situation familiale', { bold: true, fill: BAND }), cell({ celibataire: 'Célibataire', marie: 'Marié(e)', divorce: 'Divorcé(e)', veuf: 'Veuf/Veuve' }[employee.situation_matrimoniale] || employee.situation_matrimoniale || ''), cell('Parts IGR', { bold: true, fill: BAND }), cell(calc.parts !== undefined ? calc.parts.toFixed(1) : '1.0')],
+                [cell('Congés acquis / reste', { bold: true, fill: BAND }), cell(`${congesAcquis || 0} j  (Reste : ${congesReste || 0} j)`), cell('Congés pris', { bold: true, fill: BAND }), cell(`${congesPris || 0} j`)]
             ]
         },
         layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => BORDER, vLineColor: () => BORDER }
@@ -1145,6 +1292,7 @@ function generatePdfDefinitionBancaire(employee, calc, companyInfo = {}) {
 
     const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
     const annee = parseInt(employee.annee || new Date().getFullYear());
+    const { congesAcquis, congesReste, congesPris } = calculateCongesCounters(employee, calc, annee, moisNum);
     const periode = `${['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'][moisNum] || ''} ${annee}`;
 
     const cell = (text, opts = {}) => ({ text: (text === null || text === undefined) ? '' : text.toString(), fontSize: opts.fontSize || 7, bold: opts.bold || false, alignment: opts.align || 'left', fillColor: opts.fill || null, color: opts.color || 'black', margin: opts.margin || [3, 2, 3, 2] });
@@ -1166,7 +1314,8 @@ function generatePdfDefinitionBancaire(employee, calc, companyInfo = {}) {
             },
             { canvas: [{ type: 'line', x1: 0, y1: 6, x2: 531, y2: 6, lineWidth: 1.5, strokeColor: TEAL }] },
             { text: '', margin: [0, 8] },
-            { text: `${(employee.nom || '').toUpperCase()} ${employee.prenom || ''}   —   ${employee.poste || ''}   —   Matricule ${employee.matricule || '____'}   —   N° CNPS ${employee.num_secu || employee.numero_cnps || '____'}`, fontSize: 7.5, margin: [0, 0, 0, 10] },
+            { text: `${(employee.nom || '').toUpperCase()} ${employee.prenom || ''}   —   ${employee.poste || ''}   —   Matricule ${employee.matricule || '____'}   —   N° CNPS ${employee.num_secu || employee.numero_cnps || '____'}`, fontSize: 7.5, margin: [0, 0, 0, 4] },
+            { text: `Congés payés : Acquis ${congesAcquis || 0} j   ·   Pris ${congesPris || 0} j   ·   Reste à prendre ${congesReste || 0} j`, fontSize: 7, bold: true, color: TEAL, margin: [0, 0, 0, 8] },
             {
                 columns: [
                     { width: '49%', table: { headerRows: 1, widths: ['70%', '30%'], body: bodyGains }, layout: { hLineWidth: (i, n) => (i <= 1 || i === n.table.body.length) ? 1 : 0.3, vLineWidth: () => 0, hLineColor: () => BORDER } },
@@ -1208,6 +1357,7 @@ function generatePdfDefinitionModerne(employee, calc, companyInfo = {}) {
 
     const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
     const annee = parseInt(employee.annee || new Date().getFullYear());
+    const { congesAcquis, congesReste, congesPris } = calculateCongesCounters(employee, calc, annee, moisNum);
     const periode = `${['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'][moisNum] || ''} ${annee}`;
 
     const card = (titre, contenu) => ({
@@ -1233,7 +1383,7 @@ function generatePdfDefinitionModerne(employee, calc, companyInfo = {}) {
             },
             { text: '', margin: [0, 10] },
             card('IDENTITÉ DU SALARIÉ', [
-                { columns: [{ stack: [kv('Nom', (employee.nom || '').toUpperCase()), kv('Prénoms', employee.prenom), kv('Emploi', employee.poste), kv('Matricule', employee.matricule)] }, { stack: [kv('N° CNPS', employee.num_secu || employee.numero_cnps), kv('Catégorie', employee.categorie), kv('Ancienneté', calc.ancienneteTxt), kv('Parts IGR', calc.parts !== undefined ? calc.parts.toFixed(1) : '1.0')] }] }
+                { columns: [{ stack: [kv('Nom', (employee.nom || '').toUpperCase()), kv('Prénoms', employee.prenom), kv('Emploi', employee.poste), kv('Matricule', employee.matricule)] }, { stack: [kv('N° CNPS', employee.num_secu || employee.numero_cnps), kv('Catégorie', employee.categorie), kv('Ancienneté', calc.ancienneteTxt), kv('Congés (Acq/Pris/Reste)', `${congesAcquis || 0}j / ${congesPris || 0}j / ${congesReste || 0}j`)] }] }
             ]),
             { text: '', margin: [0, 8] },
             {
@@ -1283,7 +1433,8 @@ function generatePdfDefinitionLavandiere(employee, calc, companyInfo = {}) {
     const dernierJour = new Date(annee, moisNum, 0).getDate();
     const periodeDebut = `01/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
     const periodeFin = `${dernierJour}/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
-    const jrsMois = calc.joursTrav || dernierJour;
+
+    const { congesAcquis, congesReste, congesPris, jCP } = calculateCongesCounters(employee, calc, annee, moisNum);
 
     const box = (contenu, opts = {}) => ({
         table: { widths: ['*'], body: [[{ stack: contenu, margin: opts.margin || [6, 5] }]] },
@@ -1339,9 +1490,13 @@ function generatePdfDefinitionLavandiere(employee, calc, companyInfo = {}) {
         subHeaderCell('Part patronale', { colSpan: 2 }), {}
     ]];
 
-    const joursBase = jrsMois || 30;
-    body.push(ligne(codes.salaireBase, 'Salaire de base', joursBase, (calc.salaireBaseMensuel || 0) / joursBase, undefined, calc.salaireBase));
-    if (calc.sursalaire > 0) body.push(ligne(codes.sursalaire, 'Sursalaire', joursBase, (employee.sursalaire || 0) / joursBase, undefined, calc.sursalaire));
+    // Dénominateur standard 26 jours (même base que le moteur de calcul) :
+    // utiliser joursTrav (jours après déductions) donnait un taux journalier
+    // différent et un affichage incohérent — la déduction est déjà faite dans
+    // calc.salaireBase, pas besoin de la répercuter ici.
+    const JOURS_BASE_LAVANDIERE = 26;
+    body.push(ligne(codes.salaireBase, 'Salaire de base', calc.joursTrav, (calc.salaireBaseMensuel || 0) / JOURS_BASE_LAVANDIERE, undefined, calc.salaireBase));
+    if (calc.sursalaire > 0) body.push(ligne(codes.sursalaire, 'Sursalaire', calc.joursTrav, (employee.sursalaire || 0) / JOURS_BASE_LAVANDIERE, undefined, calc.sursalaire));
     if (calc.primeAnciennete > 0) body.push(ligne(codes.primeAnciennete, `Prime d'ancienneté (${calc.ansAnciennete} ans)`, undefined, undefined, undefined, calc.primeAnciennete));
     (employee.primes || []).forEach(p => { if (p.montant > 0) body.push(ligne(codes.prime, p.libelle || p.label || 'Prime', undefined, undefined, undefined, p.montant)); });
     if (calc.allocationConges > 0) body.push(ligne(codes.allocationConges, `Allocation congés (${calc.joursCP} j)`, calc.joursCP, undefined, undefined, calc.allocationConges));
@@ -1433,7 +1588,7 @@ function generatePdfDefinitionLavandiere(employee, calc, companyInfo = {}) {
                                 body: [
                                     [headerCell(''), headerCell('Acquis'), headerCell('Reste à prendre'), headerCell('Pris')],
                                     congesRow('Repos comp.'),
-                                    congesRow('Congés')
+                                    congesRow('Congés', congesAcquis, congesReste, congesPris)
                                 ]
                             },
                             layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => BORDER, vLineColor: () => BORDER }
@@ -1470,10 +1625,7 @@ function generatePdfDefinitionLavandiere(employee, calc, companyInfo = {}) {
                     body: [
                         [headerCell('Période'), headerCell('Salaire brut'), headerCell('Charges sal.'), headerCell('Charges pat.'), headerCell('Net imposable'), headerCell('Jrs trav.'), headerCell('Heures sup'), headerCell('NET À PAYER')],
                         cumulsRow('Mois', calc.gainsTotaux, calc.salarial.total, totalPatronal, calc.brutImposable, calc.joursTrav, calc.montantHeuresSup, calc.netAPayer),
-                        // Cumul annuel identique au cumul du mois : ONDA ne conserve pas
-                        // encore d'historique de paie (voir generatePdfDefinitionGrilleNumerotee
-                        // ci-dessus) — exact pour un premier bulletin de l'année, approximatif ensuite.
-                        cumulsRow(`Année ${annee}`, calc.gainsTotaux, calc.salarial.total, totalPatronal, calc.brutImposable, calc.joursTrav, calc.montantHeuresSup, calc.netAPayer)
+                        cumulsRow(`Année ${annee}`, cumuls.cumulBrut, cumuls.cumulChargesSal, cumuls.cumulChargesPat, cumuls.cumulBrutImposable, cumuls.cumulJours, cumuls.cumulHeuresSup, cumuls.cumulNetAPayer)
                     ]
                 },
                 layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => BORDER, vLineColor: () => BORDER }
@@ -1512,6 +1664,7 @@ function generatePdfDefinitionADArchitecture(employee, calc, companyInfo = {}) {
 
     const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
     const annee = parseInt(employee.annee || new Date().getFullYear());
+    const { congesAcquis, congesReste, congesPris } = calculateCongesCounters(employee, calc, annee, moisNum);
     const dernierJour = new Date(annee, moisNum, 0).getDate();
     const periodeDebut = `01/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
     const periodeFin = `${dernierJour}/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
@@ -1605,7 +1758,7 @@ function generatePdfDefinitionADArchitecture(employee, calc, companyInfo = {}) {
                 { columns: [kv('Prénoms', employee.prenom), kv('Emploi', employee.poste), kv('Nationalité', employee.nationalite || 'Ivoirienne')] },
                 { columns: [kv('Équipe', employee.equipe || ''), kv('Sal. Cat.', employee.categorie || ''), kv('N° CNPS', employee.num_secu || employee.numero_cnps || '')] },
                 { columns: [kv('Département', employee.departement || ''), kv('Service', employee.service || employee.departement || ''), kv("Date d'embauche", employee.date_embauche ? formatDate(employee.date_embauche) : '')] },
-                { columns: [kv('Ancienneté', calc.ancienneteTxt), kv('Lieu de paie', company.ville), kv('Date retour congés', '')] }
+                { columns: [kv('Ancienneté', calc.ancienneteTxt), kv('Lieu de paie', company.ville), kv('Congés (Acq/Pris/Reste)', `${congesAcquis || 0}j / ${congesPris || 0}j / ${congesReste || 0}j`)] }
             ]),
             { text: '', margin: [0, 6] },
             {
@@ -1617,19 +1770,18 @@ function generatePdfDefinitionADArchitecture(employee, calc, companyInfo = {}) {
                 columns: [
                     { width: '46%', ...box([
                         { text: 'CUMULS ANNUELS', fontSize: 6.8, bold: true, margin: [0, 0, 0, 3] },
-                        // Historique de paie non conservé (voir la même remarque sur
-                        // generatePdfDefinitionGrilleNumerotee) : cumul annuel = cumul du
-                        // mois, exact pour un premier bulletin de l'année.
-                        kv('Cumul Brut imposable', fcfa(calc.brutImposable), { labelWidth: 140 }),
-                        kv('Cumul ITS', fcfa(calc.salarial.its), { labelWidth: 140 }),
-                        kv('Cumul CNPS Employé', fcfa(calc.salarial.cnps), { labelWidth: 140 }),
+                        kv('Cumul Brut imposable', fcfa(cumuls.cumulBrutImposable), { labelWidth: 140 }),
+                        kv('Cumul ITS', fcfa(cumuls.cumulITS), { labelWidth: 140 }),
+                        kv('Cumul CNPS Employé', fcfa(cumuls.cumulCNPS), { labelWidth: 140 }),
                         kv('Brut congé', fcfa(calc.allocationConges || 0), { labelWidth: 140 }),
                         kv('Brut CNPS', fcfa(calc.baseCNPS), { labelWidth: 140 }),
-                        kv('Jrs congés à prendre', calc.joursCP || 0, { labelWidth: 140 }),
+                        kv('Jrs congés acquis', `${congesAcquis || 0} j`, { labelWidth: 140 }),
+                        kv('Jrs congés pris', `${congesPris || 0} j`, { labelWidth: 140 }),
+                        kv('Jrs congés reste', `${congesReste || 0} j`, { labelWidth: 140 }),
                         kv('Indemnité de Transport', fcfa(calc.primeTransport || 0), { labelWidth: 140 }),
-                        kv('Jours fiscaux', calc.joursTrav || 0, { labelWidth: 140 }),
+                        kv('Jours fiscaux', cumuls.cumulJours, { labelWidth: 140 }),
                         kv('Cumul exonéré', fcfa((calc.primeTransport || 0) + (calc.primeLogement || 0)), { labelWidth: 140 }),
-                        kv('Cumul CMU', fcfa(calc.salarial.cmu), { labelWidth: 140 })
+                        kv('Cumul CMU', fcfa(cumuls.cumulCMU), { labelWidth: 140 })
                     ]) },
                     { width: '4%', text: '' },
                     { width: '50%', stack: [
@@ -1691,6 +1843,8 @@ function generatePdfDefinitionTcmLogistic(employee, calc, companyInfo = {}) {
     const periodeDebut = `01/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
     const periodeFin = `${dernierJour}/${String(moisNum).padStart(2, '0')}/${String(annee).slice(-2)}`;
 
+    const { congesAcquis: congesAcquisTCM, congesReste: congesResteTCM, congesPris: congesPrisTCM } = calculateCongesCounters(employee, calc, annee, moisNum);
+
     const box = (contenu, opts = {}) => ({
         table: { widths: ['*'], body: [[{ stack: contenu, margin: opts.margin || [6, 5] }]] },
         layout: { hLineWidth: () => 0.75, vLineWidth: () => 0.75, hLineColor: () => BORDER, vLineColor: () => BORDER }
@@ -1738,9 +1892,12 @@ function generatePdfDefinitionTcmLogistic(employee, calc, companyInfo = {}) {
         subHeaderCell('Part patronale', { colSpan: 3 }), {}, {}
     ]];
 
-    const joursBase = calc.joursTrav || 30;
-    body.push(ligne(codes.salaireBase, 'Salaire de base', joursBase, (calc.salaireBaseMensuel || 0) / joursBase, undefined, calc.salaireBase));
-    if (calc.sursalaire > 0) body.push(ligne(codes.sursalaire, 'Sursalaire', joursBase, (employee.sursalaire || 0) / joursBase, undefined, calc.sursalaire));
+    // Dénominateur standard 26 jours (même base que le moteur de calcul) :
+    // utiliser calc.joursTrav ici affichait 30 même avec des absences,
+    // la déduction étant déjà appliquée dans calc.salaireBase.
+    const JOURS_BASE_TCM = 26;
+    body.push(ligne(codes.salaireBase, 'Salaire de base', calc.joursTrav, (calc.salaireBaseMensuel || 0) / JOURS_BASE_TCM, undefined, calc.salaireBase));
+    if (calc.sursalaire > 0) body.push(ligne(codes.sursalaire, 'Sursalaire', calc.joursTrav, (employee.sursalaire || 0) / JOURS_BASE_TCM, undefined, calc.sursalaire));
     if (calc.primeAnciennete > 0) body.push(ligne(codes.primeAnciennete, `Prime d'ancienneté (${calc.ansAnciennete} ans)`, undefined, undefined, undefined, calc.primeAnciennete));
     (employee.primes || []).forEach(p => { if (p.montant > 0) body.push(ligne(codes.prime, p.libelle || p.label || 'Prime', undefined, undefined, undefined, p.montant)); });
     if (calc.allocationConges > 0) body.push(ligne(codes.allocationConges, `Allocation congés (${calc.joursCP} j)`, calc.joursCP, undefined, undefined, calc.allocationConges));
@@ -1820,7 +1977,8 @@ function generatePdfDefinitionTcmLogistic(employee, calc, companyInfo = {}) {
                                 widths: ['34%', '22%', '22%', '22%'],
                                 body: [
                                     [headerCell(''), headerCell('Acquis'), headerCell('Reste'), headerCell('Pris')],
-                                    congesRow('Repos comp.'), congesRow('Congés')
+                                    congesRow('Repos comp.'),
+                                    congesRow('Congés', congesAcquisTCM, congesResteTCM, congesPrisTCM)
                                 ]
                             },
                             layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => BORDER, vLineColor: () => BORDER }
@@ -1854,7 +2012,7 @@ function generatePdfDefinitionTcmLogistic(employee, calc, companyInfo = {}) {
                     body: [
                         [headerCell('Période'), headerCell('Salaire Brut'), headerCell('Charges Sal.'), headerCell('Charges Pat.'), headerCell('Avant. en nature'), headerCell('NET À PAYER')],
                         cumulsRow('Mois', calc.gainsTotaux, calc.salarial.total, totalPatronal, calc.primeLogement || 0, calc.netAPayer),
-                        cumulsRow(`Année ${annee}`, calc.gainsTotaux, calc.salarial.total, totalPatronal, calc.primeLogement || 0, calc.netAPayer)
+                        cumulsRow(`Année ${annee}`, cumuls.cumulBrut, cumuls.cumulChargesSal, cumuls.cumulChargesPat, calc.primeLogement || 0, cumuls.cumulNetAPayer)
                     ]
                 },
                 layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => BORDER, vLineColor: () => BORDER }
@@ -1888,6 +2046,7 @@ function generatePdfDefinitionScaso(employee, calc, companyInfo = {}) {
 
     const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
     const annee = parseInt(employee.annee || new Date().getFullYear());
+    const { congesAcquis, congesReste, congesPris } = calculateCongesCounters(employee, calc, annee, moisNum);
     const dernierJour = new Date(annee, moisNum, 0).getDate();
     const periodeDebut = `01/${String(moisNum).padStart(2, '0')}/${annee}`;
     const periodeFin = `${dernierJour}/${String(moisNum).padStart(2, '0')}/${annee}`;
@@ -1930,13 +2089,14 @@ function generatePdfDefinitionScaso(employee, calc, companyInfo = {}) {
     void bandRow;
 
     const body = [[headerCell('CODE'), headerCell('RUBRIQUE'), headerCell('BASE'), headerCell('NBRE/TAUX'), headerCell('GAINS'), headerCell('RETENUES')]];
-    body.push(ligne(codes.salaireBase, 'Salaire de base', calc.salaireBaseMensuel, (calc.joursTrav || 30).toFixed(2), calc.salaireBase));
+    const jTravScaso = calc.joursTrav !== undefined ? calc.joursTrav : (employee.jours_travailles || 30);
+    body.push(ligne(codes.salaireBase, 'Salaire de base', calc.salaireBaseMensuel, jTravScaso.toFixed(2), calc.salaireBase));
     if (calc.sursalaire > 0) body.push(ligne(codes.sursalaire, 'Sursalaire', employee.sursalaire, '100%', calc.sursalaire));
     if (calc.primeAnciennete > 0) body.push(ligne(codes.primeAnciennete, "Prime d'ancienneté", null, `${calc.ansAnciennete},00`, calc.primeAnciennete));
     (employee.primes || []).forEach(p => { if (p.montant > 0) body.push(ligne(codes.prime, p.libelle || p.label || "Prime d'incitation", null, null, p.montant)); });
     if (calc.allocationConges > 0) body.push(ligne(codes.allocationConges, `Allocation congés (${calc.joursCP} j)`, null, null, calc.allocationConges));
     (calc.heuresSupTranches || []).forEach(t => body.push(ligne(codes.heuresSup, `Heures sup. — ${t.label}`, calc.tauxHoraire, `×${t.coef}`, t.montant)));
-    if (calc.primeTransport > 0) body.push(ligne(codes.primeTransport, 'Indemnité Transport non Imposable', null, `${(calc.joursTrav || 30).toFixed(2)}`, calc.primeTransport));
+    if (calc.primeTransport > 0) body.push(ligne(codes.primeTransport, 'Indemnité Transport non Imposable', null, `${jTravScaso.toFixed(2)}`, calc.primeTransport));
     if (calc.primeLogement > 0) body.push(ligne(codes.primeLogement, 'Prime de logement', null, null, calc.primeLogement));
     body.push([cell(''), cell('Total Brut', { bold: true }), cell(''), cell(''), cell(fcfa(calc.gainsTotaux), { align: 'right', bold: true }), cell('')]);
 
@@ -1981,7 +2141,8 @@ function generatePdfDefinitionScaso(employee, calc, companyInfo = {}) {
                         kv('VILLE', company.ville),
                         kv('FONCTION', employee.poste || ''),
                         kv('DATE DE NAISS.', employee.date_naissance ? formatDate(employee.date_naissance) : ''),
-                        kv('DATE ENTREE', dateEntree)
+                        kv('DATE ENTREE', dateEntree),
+                        kv('CONGÉS (ACQ/PRIS/RESTE)', `${congesAcquis || 0}j / ${congesPris || 0}j / ${congesReste || 0}j`)
                     ]) },
                     { width: '2%', text: '' },
                     { width: '43%', ...box([
@@ -2050,6 +2211,7 @@ function generatePdfDefinitionPersonnalise(employee, calc, companyInfo = {}) {
 
     const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
     const annee = parseInt(employee.annee || new Date().getFullYear());
+    const { congesAcquis, congesReste, congesPris } = calculateCongesCounters(employee, calc, annee, moisNum);
     const periode = `${['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'][moisNum] || ''} ${annee}`;
 
     const cell = (text, opts = {}) => ({
@@ -2058,7 +2220,7 @@ function generatePdfDefinitionPersonnalise(employee, calc, companyInfo = {}) {
         fillColor: opts.fill || null, color: opts.color || 'black', colSpan: opts.colSpan || null,
         margin: opts.margin || [2, 2, 2, 2]
     });
-    const headerCell = (text, opts = {}) => cell(text, { fill: ACCENT, color: 'white', bold: true, align: 'center', fontSize: 6.8, ...opts });
+    const headerCell = (text) => cell(text, { fill: ACCENT, color: 'white', bold: true, align: 'center', fontSize: 6.8, ...opts });
     const infoRow = (label, value) => [
         { text: label, fontSize: 7, color: '#475569', margin: [0, 1.5, 0, 1.5] },
         { text: (value || '').toString(), fontSize: 7, bold: true, margin: [0, 1.5, 0, 1.5] }
@@ -2090,7 +2252,7 @@ function generatePdfDefinitionPersonnalise(employee, calc, companyInfo = {}) {
             {
                 columns: [
                     { width: '50%', table: { widths: ['40%', '60%'], body: [infoRow('Nom', (employee.nom || '').toUpperCase()), infoRow('Prénoms', employee.prenom), infoRow('Emploi', employee.poste), infoRow('Matricule', employee.matricule)] }, layout: 'noBorders' },
-                    { width: '50%', table: { widths: ['46%', '54%'], body: [infoRow('N° CNPS', employee.num_secu || employee.numero_cnps), infoRow('Catégorie', employee.categorie), infoRow('Ancienneté', calc.ancienneteTxt), infoRow('Nombre de parts', calc.parts !== undefined ? calc.parts.toFixed(1) : '1.0')] }, layout: 'noBorders' }
+                    { width: '50%', table: { widths: ['46%', '54%'], body: [infoRow('N° CNPS', employee.num_secu || employee.numero_cnps), infoRow('Catégorie', employee.categorie), infoRow('Ancienneté', calc.ancienneteTxt), infoRow('Congés payés', `${congesAcquis || 0}j acq. / ${congesPris || 0}j pris / ${congesReste || 0}j reste`)] }, layout: 'noBorders' }
                 ],
                 columnGap: 16
             },
@@ -2805,8 +2967,12 @@ function calculateBeninSalaryRules(employee) {
         }
     }
 
-    // Cf. calculateSalaryRules : jours_travailles explicite prime sur base - absences (évite le double comptage)
-    const joursTrav = Math.max(0, (joursTravailleExplicite !== null ? joursTravailleExplicite : (JOURS_BASE_STANDARD - joursAbsences)) - joursConges);
+    // Même correction que calculateSalaryRules (CI) : jours_travailles est la
+    // base du mois, pas le net après absences. On déduit toujours absences_jours.
+    const joursNetExterneBJ = (employee['jours_travailles_net'] !== undefined && employee['jours_travailles_net'] !== null && employee['jours_travailles_net'] !== '')
+        ? parseFloat(employee['jours_travailles_net']) : null;
+    const joursBaseMoisBJ = (joursTravailleExplicite !== null) ? joursTravailleExplicite : JOURS_BASE_STANDARD;
+    const joursTrav = Math.max(0, (joursNetExterneBJ !== null ? joursNetExterneBJ : (joursBaseMoisBJ - joursAbsences)) - joursConges);
     const joursBasePaie = JOURS_BASE_STANDARD;
     const joursCP = joursConges;
 
@@ -2933,6 +3099,7 @@ function generateBeninPdfDefinition(employee, calc, companyInfo = {}) {
 
     const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
     const annee = parseInt(employee.annee || new Date().getFullYear());
+    const { congesAcquis, congesReste, congesPris } = calculateCongesCounters(employee, calc, annee, moisNum);
     const dernierJour = new Date(annee, moisNum, 0).getDate();
     const moisNoms = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
     const moisNom = moisNoms[moisNum - 1];
@@ -3123,7 +3290,8 @@ function generateBeninPdfDefinition(employee, calc, companyInfo = {}) {
                             { text: 'SALARIÉ :', fontSize: 8.5, bold: true, color: NAVY_HEADER },
                             { text: (employee.nom || '').toUpperCase() + ' ' + (employee.prenom || ''), fontSize: 8, bold: true, margin: [0, 2, 0, 0] },
                             { text: 'Matricule : ' + (employee.matricule || '____') + '   |   N° CNSS : ' + (employee.num_secu || employee.numero_cnps || '____'), fontSize: 7.5, color: '#475569', margin: [0, 2, 0, 0] },
-                            { text: 'Fonction : ' + (employee.poste || '____'), fontSize: 7.5, color: '#475569', margin: [0, 1, 0, 0] }
+                            { text: 'Fonction : ' + (employee.poste || '____'), fontSize: 7.5, color: '#475569', margin: [0, 1, 0, 0] },
+                            { text: 'Congés : ' + (congesAcquis || 0) + 'j acq. / ' + (congesPris || 0) + 'j pris / ' + (congesReste || 0) + 'j reste', fontSize: 7.5, color: '#1e3a8a', bold: true, margin: [0, 1, 0, 0] }
                         ],
                         width: '35%'
                     }
