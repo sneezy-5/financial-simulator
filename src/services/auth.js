@@ -65,6 +65,9 @@ export const login = async (email, password) => {
 };
 
 export const register = async (email, password) => {
+    if (import.meta.env.VITE_APP_MODE === 'simulator') {
+        throw new Error("La création de compte n'est pas disponible dans le simulateur.");
+    }
     const res = await fetch(`${API_URL}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -748,8 +748,10 @@ const generatePDF = async () => {
   // pour un compte gratuit — seule la connexion est exigée. La génération
   // groupée (import Excel) et les fonctionnalités IA restent, elles, comptées
   // dans l'allocation mensuelle (voir billingService.js côté serveur).
+  // Le simulateur génère le bulletin sans compte (le serveur applique alors
+  // une limitation de débit et ignore tout modèle personnalisé).
   const token = localStorage.getItem('auth_token')
-  if (!token) {
+  if (!token && !isSimulatorMode) {
     errorMsg.value = "Vous devez être connecté pour générer un bulletin de paie."
     emit('require-auth')
     return
@@ -770,7 +772,7 @@ const generatePDF = async () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
       },
       // templateStyle ne s'applique qu'au modèle ONDA intégré (aucun effet dès
       // qu'un modèle personnalisé — htmlTemplate — est actif).
@@ -792,7 +794,8 @@ const generatePDF = async () => {
     // ── Traçabilité automatique dans le tableau des absences ──
     // Quand un bulletin de congé est généré, on crée automatiquement
     // une entrée de type 'annuel' dans CongesManager (calendrier + soldes).
-    if (emp.value.bulletin_type === 'conges' || emp.value.auto_conges) {
+    // Sans objet dans le simulateur : pas de compte, donc pas de base d'absences.
+    if (!isSimulatorMode && (emp.value.bulletin_type === 'conges' || emp.value.auto_conges)) {
       try {
         const nowMois = Number(emp.value.mois) || (new Date().getMonth() + 1)
         const nowAnnee = Number(emp.value.annee) || new Date().getFullYear()

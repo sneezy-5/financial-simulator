@@ -87,6 +87,12 @@ try {
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-onda-key';
 
+// Instance « simulateur » : publique, sans compte. VITE_APP_MODE est déjà
+// injectée dans le conteneur (voir deploy/stack.yml) ; APP_MODE la remplace si
+// définie. Ici aucune inscription n'est possible et le bulletin individuel se
+// génère sans connexion — la création de compte se fait uniquement sur l'instance Pro.
+const IS_SIMULATOR = (process.env.APP_MODE || process.env.VITE_APP_MODE) === 'simulator';
+
 const app = express();
 const PORT = process.env.PORT || 3002;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -160,6 +166,38 @@ const authMiddleware = async (req, res, next) => {
     } catch (e) {
         return res.status(401).json({ error: "Token invalide ou expiré" });
     }
+};
+
+// Limiteur minimal en mémoire, par IP (une seule instance du serveur : pas de
+// stockage partagé). Réservé aux routes publiques qui lancent un rendu PDF.
+const makeRateLimiter = ({ windowMs, max }) => {
+    const hits = new Map();
+    setInterval(() => {
+        const now = Date.now();
+        for (const [ip, h] of hits) if (h.resetAt <= now) hits.delete(ip);
+    }, windowMs).unref();
+    return (req, res, next) => {
+        const now = Date.now();
+        let h = hits.get(req.ip);
+        if (!h || h.resetAt <= now) {
+            h = { count: 0, resetAt: now + windowMs };
+            hits.set(req.ip, h);
+        }
+        if (++h.count > max) {
+            res.setHeader('Retry-After', Math.ceil((h.resetAt - now) / 1000));
+            return res.status(429).json({ error: "Trop de générations en peu de temps. Réessayez dans quelques minutes." });
+        }
+        next();
+    };
+};
+
+// Bulletin individuel : sur l'instance simulateur, une requête sans jeton passe
+// (avec limitation de débit) ; avec un jeton, ou sur l'instance Pro, l'auth
+// habituelle s'applique.
+const payslipRateLimit = makeRateLimiter({ windowMs: 10 * 60 * 1000, max: 20 });
+const singlePayslipAuth = (req, res, next) => {
+    if (IS_SIMULATOR && !req.headers.authorization) return payslipRateLimit(req, res, next);
+    return authMiddleware(req, res, next);
 };
 
 /**
@@ -258,6 +296,9 @@ app.post('/api/stats/visit', async (req, res) => {
 
 app.post('/api/auth/register', async (req, res) => {
     try {
+        if (IS_SIMULATOR) {
+            return res.status(403).json({ error: "La création de compte n'est pas disponible dans le simulateur. Rendez-vous sur la version ONDA RH Pro." });
+        }
         if (!bcrypt) throw new Error("bcrypt non installé");
         const { email, password } = req.body;
         if (!email || !password) return res.status(400).json({ error: "Email et mot de passe requis" });
@@ -2116,15 +2157,22 @@ app.get('/api/rh/analytics/company', authMiddleware, async (req, res) => {
 // pour un compte gratuit — seule la génération groupée (import Excel) et les
 // fonctionnalités IA sont comptées dans l'allocation gratuite mensuelle. Voir
 // billingService.js.
-app.post('/api/rh/generate-single-payslip', authMiddleware, async (req, res) => {
+app.post('/api/rh/generate-single-payslip', singlePayslipAuth, async (req, res) => {
     try {
-        const { employee, htmlTemplate, templateStyle } = req.body;
+        const { employee, templateStyle } = req.body;
         if (!employee || !employee.nom) {
             return res.status(400).json({ error: 'Données employé manquantes' });
         }
 
-        const userObj = await User.findByPk(req.user.id);
-        if (!userObj) {
+        // Appel anonyme (instance simulateur) : aucun compte, donc ni base de
+        // données, ni profil entreprise, ni cumuls. Un modèle HTML fourni par
+        // l'appelant est ignoré — il serait rendu tel quel par le navigateur
+        // headless, ce qu'on ne concède qu'à un compte identifié.
+        const anonymous = !req.user;
+        const htmlTemplate = anonymous ? null : req.body.htmlTemplate;
+
+        const userObj = anonymous ? null : await User.findByPk(req.user.id);
+        if (!anonymous && !userObj) {
             return res.status(404).json({ error: "Utilisateur non trouvé" });
         }
 
@@ -2134,7 +2182,7 @@ app.post('/api/rh/generate-single-payslip', authMiddleware, async (req, res) => 
         // C'est ce total qui alimente congesPris dans calculateCongesCounters().
         let empRecord = null;
         try {
-            const employeeId = employee.employee_id || employee.id || null;
+            const employeeId = anonymous ? null : (employee.employee_id || employee.id || null);
             if (employeeId) {
                 const { Op } = require('sequelize');
                 const moisNum = parseInt(employee.mois || new Date().getMonth() + 1);
@@ -2226,33 +2274,33 @@ app.post('/api/rh/generate-single-payslip', authMiddleware, async (req, res) => 
         const companyInfo = {
             // Le formulaire de saisie prime ; le profil enregistré dans Paramètres
             // ne sert que de repli pour ce que ce formulaire ne fournit pas.
-            nom_entreprise: employee.nom_entreprise || userObj.companyName || '',
-            adresse: employee.adresse || userObj.companyAdresse || '',
-            siege_social: employee.siege_social || userObj.companyAdresse || '',
-            ville: employee.ville || userObj.companyVille || '',
+            nom_entreprise: employee.nom_entreprise || userObj?.companyName || '',
+            adresse: employee.adresse || userObj?.companyAdresse || '',
+            siege_social: employee.siege_social || userObj?.companyAdresse || '',
+            ville: employee.ville || userObj?.companyVille || '',
             // `email`/`telephone` : mêmes noms que companyInfoOverride (génération en
             // lot) et que la feuille ENTREPRISE du classeur Excel — pour que le
             // second modèle par défaut (grille numérotée), qui les affiche, les
             // trouve quel que soit le chemin de génération emprunté.
-            email: employee.email_entreprise || userObj.companyEmail || '',
-            telephone: employee.tel_entreprise || userObj.companyTelephone || '',
-            numero_cnps: employee.numero_cnps || userObj.companyNumeroCnps || '',
-            numero_contribuable: employee.numero_contribuable || userObj.companyNumeroContribuable || '',
+            email: employee.email_entreprise || userObj?.companyEmail || '',
+            telephone: employee.tel_entreprise || userObj?.companyTelephone || '',
+            numero_cnps: employee.numero_cnps || userObj?.companyNumeroCnps || '',
+            numero_contribuable: employee.numero_contribuable || userObj?.companyNumeroContribuable || '',
             // Le logo est un attribut du compte (Paramètres > Profil Entreprise), pas
             // du formulaire de saisie : on le prend directement sur l'utilisateur
             // authentifié, absent s'il n'en a pas configuré.
-            logo: userObj.companyLogo || null,
+            logo: userObj?.companyLogo || null,
             // Numérotation de rubrique du compte (Paramètres > Modèles de bulletin) :
             // il n'existe pas de code universel entre logiciels de paie, donc chaque
             // compte peut redéfinir les siens plutôt que de subir ceux d'ONDA.
-            rubriqueCodes: userObj.rubriqueCodes ? JSON.parse(userObj.rubriqueCodes) : null,
-            bulletinCouleur: userObj.bulletinCouleur || null,
-            bulletinCanvasLayout: userObj.bulletinCanvasLayout ? JSON.parse(userObj.bulletinCanvasLayout) : null,
+            rubriqueCodes: userObj?.rubriqueCodes ? JSON.parse(userObj?.rubriqueCodes) : null,
+            bulletinCouleur: userObj?.bulletinCouleur || null,
+            bulletinCanvasLayout: userObj?.bulletinCanvasLayout ? JSON.parse(userObj?.bulletinCanvasLayout) : null,
         };
 
         // Si l'appelant n'a pas explicitement choisi, on retombe sur le style
         // enregistré dans Paramètres > Modèles de bulletin.
-        const pdfBuffer = await payrollService.generateSinglePdf(employee, calculs, companyInfo, htmlTemplate, templateStyle || userObj.defaultBulletinStyle || null);
+        const pdfBuffer = await payrollService.generateSinglePdf(employee, calculs, companyInfo, htmlTemplate, templateStyle || userObj?.defaultBulletinStyle || null);
 
         const moisNoms = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
         const moisNom = moisNoms[parseInt(employee.mois || 1) - 1] || 'Mois';

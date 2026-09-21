@@ -52,6 +52,8 @@ const normaliserPays = (code) => {
 const currentCountry = ref(normaliserPays(urlParams.get('country')))
 
 const isSimulatorMode = import.meta.env.VITE_APP_MODE === 'simulator'
+// Landing RH (version Pro) : seul endroit où l'on crée un compte — le simulateur n'en propose aucun.
+const PRO_LANDING_URL = import.meta.env.VITE_PRO_URL || 'https://rh.eonda.online/'
 
 // Data
 const banques = ref([])
@@ -88,7 +90,13 @@ const showFullTable = ref(false)
 // CHARGEMENT
 // ══════════════════════════════════════════════════════════════
 
-const showAuthModal = ref(false)
+// Le simulateur n'a ni connexion ni inscription : peu importe qui demande
+// l'ouverture (bouton PDF, module verrouillé...), la fenêtre ne s'ouvre jamais.
+const showAuthModalRaw = ref(false)
+const showAuthModal = computed({
+  get: () => showAuthModalRaw.value && !isSimulatorMode,
+  set: (v) => { showAuthModalRaw.value = v && !isSimulatorMode }
+})
 const showBillingModal = ref(false)
 const showProfileModal = ref(false)
 
@@ -1112,9 +1120,9 @@ const toggleNotifMenu = () => {
                </div>
              </template>
              <template v-else>
-               <span style="background: #cbd5e1; color: #64748b; font-weight: 700; font-size: 0.75rem; padding: 0.5rem 1.25rem; border-radius: 9999px; display: flex; align-items: center; gap: 0.4rem; cursor: not-allowed; user-select: none;" title="Bientôt disponible">
-                 Version PRO — Bientôt
-               </span>
+               <a :href="PRO_LANDING_URL" target="_blank" rel="noopener" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #ffffff; font-weight: 700; font-size: 0.75rem; padding: 0.5rem 1.25rem; border-radius: 9999px; display: flex; align-items: center; gap: 0.4rem; text-decoration: none; box-shadow: 0 4px 10px rgba(16,185,129,0.25);" title="Découvrir ONDA RH Pro">
+                 Version PRO
+               </a>
              </template>
           </div>
         </div>
