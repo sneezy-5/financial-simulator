@@ -42,9 +42,15 @@ const filteredEmployees = computed(() => {
     (e.prenom || '').toLowerCase().includes(q) ||
     (e.matricule || '').toLowerCase().includes(q) ||
     (e.poste || '').toLowerCase().includes(q) ||
+    (e.departement || '').toLowerCase().includes(q) ||
     (e.telephone || '').toLowerCase().includes(q)
   )
 })
+
+// Départements déjà saisis, proposés en suggestion : « Finance » et
+// « finance » formeraient sinon deux barres distinctes dans le tableau de bord.
+const departementsConnus = computed(() =>
+  [...new Set(employees.value.map(e => (e.departement || '').trim()).filter(Boolean))].sort())
 
 const currentPage = ref(1)
 const pageSize = ref(12)
@@ -450,6 +456,16 @@ const importExcel = async (e) => {
           </select>
           <small class="champ-aide">
             Alimente la répartition Cadres/Employés du tableau de bord RH.
+          </small>
+        </div>
+        <div class="form-group">
+          <label>Département / Service</label>
+          <input v-model="selectedEmployee.departement" type="text" list="liste-departements" placeholder="ex. Finance, Commercial, Production" />
+          <datalist id="liste-departements">
+            <option v-for="d in departementsConnus" :key="d" :value="d" />
+          </datalist>
+          <small class="champ-aide">
+            Alimente l'analyse des salaires par département du tableau de bord RH.
           </small>
         </div>
         <div class="form-group">

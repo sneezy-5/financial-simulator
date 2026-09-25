@@ -125,6 +125,105 @@ const indicateursRH = computed(() => [
 ])
 const vueIndicateur = ref('effectifs') // 'effectifs' | 'masse'
 
+// ══════════════════════════════════════════════
+// ANALYSE DES SALAIRES — salaire moyen, ancienneté, parité, écart H/F,
+// salaires par département et par sexe, salaire selon l'ancienneté.
+// Le « salaire » est le brut mensuel du contrat en vigueur (brutContrat).
+// ══════════════════════════════════════════════
+const moyenne = (valeurs) => valeurs.length ? valeurs.reduce((s, v) => s + v, 0) / valeurs.length : null
+
+const salaireMoyen = computed(() => kpiActifs.value ? masseSalariale.value / kpiActifs.value : null)
+
+// L'ancienneté part de la date d'embauche de la fiche ; à défaut, du plus
+// ancien contrat connu du salarié (un CDD renouvelé en CDI ne remet pas
+// l'ancienneté à zéro).
+function dateEntree(emp) {
+  if (emp.date_embauche) return new Date(emp.date_embauche)
+  const debuts = contrats.value
+    .filter(c => String(c.employeeId) === String(emp.id) && c.dateDebut)
+    .map(c => new Date(c.dateDebut))
+  return debuts.length ? new Date(Math.min(...debuts)) : null
+}
+const ancienneteAns = (emp) => {
+  const d = dateEntree(emp)
+  if (!d || isNaN(d.getTime()) || d > now) return null
+  return (now - d) / (1000 * 60 * 60 * 24 * 365.25)
+}
+const ancienneteMoyenne = computed(() =>
+  moyenne(actifs.value.map(x => ancienneteAns(x.emp)).filter(a => a != null)))
+const fmtAnciennete = (ans) => {
+  if (ans == null) return '—'
+  if (ans < 1) return `${Math.round(ans * 12)} mois`
+  return `${ans.toFixed(1).replace('.', ',')} an${ans >= 2 ? 's' : ''}`
+}
+
+const actifsHommes = computed(() => actifs.value.filter(x => x.emp.genre === 'M'))
+const actifsFemmes = computed(() => actifs.value.filter(x => x.emp.genre === 'F'))
+const sexeRenseigne = computed(() => actifsHommes.value.length + actifsFemmes.value.length)
+const pctFemmes = computed(() => sexeRenseigne.value ? actifsFemmes.value.length / sexeRenseigne.value : null)
+const salaireMoyenHommes = computed(() => moyenne(actifsHommes.value.map(x => brutContrat(x.contrat))))
+const salaireMoyenFemmes = computed(() => moyenne(actifsFemmes.value.map(x => brutContrat(x.contrat))))
+// Écart exprimé en % du salaire moyen masculin (convention usuelle de
+// l'index d'égalité) : positif = les hommes sont mieux payés en moyenne.
+const ecartHF = computed(() => {
+  if (!salaireMoyenHommes.value || salaireMoyenFemmes.value == null) return null
+  return (salaireMoyenHommes.value - salaireMoyenFemmes.value) / salaireMoyenHommes.value
+})
+const fmtPct = (v, decimales = 1) => v == null ? '—' : `${(v * 100).toFixed(decimales).replace('.', ',')} %`
+
+// --- Salaires par département et par sexe ---
+const SANS_DEPARTEMENT = 'Non affecté'
+const salairesParDepartement = computed(() => {
+  const groupes = new Map()
+  for (const { emp, contrat } of actifs.value) {
+    const cle = (emp.departement || '').trim() || SANS_DEPARTEMENT
+    if (!groupes.has(cle)) groupes.set(cle, { tous: [], H: [], F: [] })
+    const g = groupes.get(cle)
+    const brut = brutContrat(contrat)
+    g.tous.push(brut)
+    if (emp.genre === 'M') g.H.push(brut)
+    if (emp.genre === 'F') g.F.push(brut)
+  }
+  return Array.from(groupes.entries())
+    .map(([label, g]) => ({
+      label,
+      effectif: g.tous.length,
+      nbH: g.H.length,
+      nbF: g.F.length,
+      moyenne: moyenne(g.tous),
+      moyenneH: moyenne(g.H),
+      moyenneF: moyenne(g.F)
+    }))
+    // « Non affecté » toujours en dernier, le reste par salaire moyen décroissant.
+    .sort((a, b) => (a.label === SANS_DEPARTEMENT) - (b.label === SANS_DEPARTEMENT) || b.moyenne - a.moyenne)
+})
+const aucunDepartement = computed(() =>
+  salairesParDepartement.value.every(d => d.label === SANS_DEPARTEMENT))
+const maxSalaireDepartement = computed(() =>
+  Math.max(1, ...salairesParDepartement.value.flatMap(d => [d.moyenneH || 0, d.moyenneF || 0, d.moyenne || 0])))
+
+// --- Salaire et ancienneté ---
+const TRANCHES_ANCIENNETE = [
+  { label: '< 1 an', test: (a) => a < 1 },
+  { label: '1-3 ans', test: (a) => a >= 1 && a < 3 },
+  { label: '3-5 ans', test: (a) => a >= 3 && a < 5 },
+  { label: '5-10 ans', test: (a) => a >= 5 && a < 10 },
+  { label: '≥ 10 ans', test: (a) => a >= 10 }
+]
+const salaireParAnciennete = computed(() => {
+  const buckets = TRANCHES_ANCIENNETE.map(t => ({ label: t.label, salaires: [] }))
+  for (const { emp, contrat } of actifs.value) {
+    const a = ancienneteAns(emp)
+    if (a == null) continue
+    const idx = TRANCHES_ANCIENNETE.findIndex(t => t.test(a))
+    if (idx !== -1) buckets[idx].salaires.push(brutContrat(contrat))
+  }
+  return buckets.map(b => ({ label: b.label, effectif: b.salaires.length, moyenne: moyenne(b.salaires) }))
+})
+const maxSalaireAnciennete = computed(() =>
+  Math.max(1, ...salaireParAnciennete.value.map(b => b.moyenne || 0)))
+const largeurBarre = (valeur, max) => valeur ? Math.max(2, Math.round(valeur / max * 100)) + '%' : '0%'
+
 // --- Mouvements et événements du mois ---
 const estDansMoisCourant = (dateStr) => {
   if (!dateStr) return false
@@ -233,6 +332,31 @@ const getAbsenceLabel = (type) => {
       </div>
     </div>
 
+    <!-- KPIs d'analyse salariale -->
+    <div class="kpi-grid kpi-grid-4">
+      <div class="kpi-card">
+        <div class="kpi-label">Salaire moyen</div>
+        <div class="kpi-val kpi-val-sm">{{ salaireMoyen == null ? '—' : fmtMontant(salaireMoyen) }}</div>
+        <div class="kpi-sub">Brut mensuel, salariés sous contrat</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Ancienneté moyenne</div>
+        <div class="kpi-val kpi-val-sm">{{ fmtAnciennete(ancienneteMoyenne) }}</div>
+        <div class="kpi-sub">Depuis la date d'embauche</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Part des femmes</div>
+        <div class="kpi-val kpi-val-sm" style="color: #db2777;">{{ fmtPct(pctFemmes) }}</div>
+        <div class="kpi-sub">{{ actifsFemmes.length }} F · {{ actifsHommes.length }} H<template v-if="sexeRenseigne < kpiActifs"> · {{ kpiActifs - sexeRenseigne }} non renseigné(s)</template></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Écart salarial H/F</div>
+        <div class="kpi-val kpi-val-sm" :style="{ color: ecartHF == null ? '#1e293b' : Math.abs(ecartHF) < 0.05 ? '#059669' : '#ea580c' }">{{ fmtPct(ecartHF) }}</div>
+        <div class="kpi-sub" v-if="ecartHF == null">Nécessite au moins un homme et une femme</div>
+        <div class="kpi-sub" v-else>{{ ecartHF >= 0 ? 'En faveur des hommes' : 'En faveur des femmes' }} (salaire moyen)</div>
+      </div>
+    </div>
+
     <!-- Alertes -->
     <div class="alerts-grid">
       
@@ -279,6 +403,62 @@ const getAbsenceLabel = (type) => {
         </div>
       </div>
 
+    </div>
+
+    <!-- Analyse des salaires -->
+    <div class="rh-indic-section" v-if="kpiActifs > 0">
+      <h3 class="panel-title" style="color: #0f766e;">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+        Analyse des salaires
+      </h3>
+      <div class="sal-grid">
+        <!-- Par département et par sexe -->
+        <div class="rh-indic-card">
+          <div class="sal-card-head">
+            <h4 class="rh-indic-title">Salaire moyen par département et par sexe</h4>
+            <div class="sal-legend">
+              <span><i class="dot dot-h"></i>Hommes</span>
+              <span><i class="dot dot-f"></i>Femmes</span>
+            </div>
+          </div>
+          <div v-if="aucunDepartement" class="rh-indic-empty">
+            Aucun département renseigné. Complétez le champ « Département / Service » des fiches salarié
+            (ou la colonne <em>departement</em> du classeur d'import).
+          </div>
+          <div v-else class="rh-indic-rows">
+            <div v-for="d in salairesParDepartement" :key="d.label" class="sal-dept">
+              <div class="rh-indic-row-head">
+                <span class="rh-indic-row-label">{{ d.label }} <small class="sal-muted">({{ d.effectif }})</small></span>
+                <span class="rh-indic-row-val">{{ fmtMontant(d.moyenne) }}</span>
+              </div>
+              <div class="sal-bar-line" :title="`Hommes (${d.nbH}) : ${d.moyenneH == null ? '—' : fmtMontant(d.moyenneH)}`">
+                <div class="rh-indic-bar-track"><div class="sal-bar sal-bar-h" :style="{ width: largeurBarre(d.moyenneH, maxSalaireDepartement) }"></div></div>
+                <span class="sal-bar-val">{{ d.moyenneH == null ? '—' : fmtMontant(d.moyenneH) }}</span>
+              </div>
+              <div class="sal-bar-line" :title="`Femmes (${d.nbF}) : ${d.moyenneF == null ? '—' : fmtMontant(d.moyenneF)}`">
+                <div class="rh-indic-bar-track"><div class="sal-bar sal-bar-f" :style="{ width: largeurBarre(d.moyenneF, maxSalaireDepartement) }"></div></div>
+                <span class="sal-bar-val">{{ d.moyenneF == null ? '—' : fmtMontant(d.moyenneF) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Salaire selon l'ancienneté -->
+        <div class="rh-indic-card">
+          <h4 class="rh-indic-title">Salaire moyen selon l'ancienneté</h4>
+          <div class="rh-indic-rows">
+            <div v-for="b in salaireParAnciennete" :key="b.label" class="rh-indic-row">
+              <div class="rh-indic-row-head">
+                <span class="rh-indic-row-label">{{ b.label }} <small class="sal-muted">({{ b.effectif }})</small></span>
+                <span class="rh-indic-row-val">{{ b.moyenne == null ? '—' : fmtMontant(b.moyenne) }}</span>
+              </div>
+              <div class="rh-indic-bar-track">
+                <div class="sal-bar sal-bar-anc" :style="{ width: largeurBarre(b.moyenne, maxSalaireAnciennete) }"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Indicateurs RH (inspiré de LOGIPAIE) -->
@@ -378,8 +558,31 @@ const getAbsenceLabel = (type) => {
 .rh-indic-bar-track { height: 6px; background: #f1f5f9; border-radius: 99px; overflow: hidden; }
 .rh-indic-bar-fill { height: 100%; background: linear-gradient(90deg, #a78bfa, #7c3aed); border-radius: 99px; }
 
+.kpi-grid-4 { grid-template-columns: repeat(4, 1fr); }
+.kpi-val-sm { font-size: 1.55rem; }
+
+.sal-grid { display: grid; grid-template-columns: 3fr 2fr; gap: 1.5rem; }
+.sal-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; flex-wrap: wrap; }
+.sal-legend { display: flex; gap: 0.75rem; font-size: 0.75rem; color: #64748b; font-weight: 600; }
+.sal-legend span { display: inline-flex; align-items: center; gap: 0.3rem; }
+.dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.dot-h, .sal-bar-h { background: #3b82f6; }
+.dot-f, .sal-bar-f { background: #ec4899; }
+.sal-muted { color: #94a3b8; font-weight: 600; }
+.sal-dept { display: flex; flex-direction: column; gap: 0.3rem; }
+.sal-bar-line { display: grid; grid-template-columns: 1fr 9.5rem; align-items: center; gap: 0.6rem; }
+.sal-bar-val { font-size: 0.75rem; color: #475569; font-weight: 600; text-align: right; white-space: nowrap; }
+.sal-bar { height: 100%; border-radius: 99px; }
+.sal-bar-anc { background: linear-gradient(90deg, #5eead4, #0f766e); }
+
+@media (max-width: 1100px) {
+  .kpi-grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .sal-grid { grid-template-columns: 1fr; }
+}
 @media (max-width: 900px) {
   .kpi-grid, .alerts-grid, .rh-indic-grid { grid-template-columns: 1fr; }
+  .kpi-grid-4 { grid-template-columns: repeat(2, 1fr); }
   .mvt-grid { grid-template-columns: repeat(2, 1fr); }
+  .sal-bar-line { grid-template-columns: 1fr 7.5rem; }
 }
 </style>

@@ -24,7 +24,7 @@ const COLONNES_ENTREPRISE = [
 
 const COLONNES_EMPLOYES = [
     'matricule', 'nom', 'prenom', 'sexe', 'date_naissance',
-    'poste', 'categorie', 'categorie_professionnelle',
+    'poste', 'categorie', 'categorie_professionnelle', 'departement',
     'telephone', 'date_embauche', 'numero_cnps',
     'situation_matrimoniale', 'nombre_enfants',
     'expatrie', 'salaire_net'
@@ -57,6 +57,7 @@ const EXEMPLE_EMPLOYE = {
     date_naissance: '15/03/1988',
     poste: 'Comptable', categorie: 'Agent de maîtrise',
     categorie_professionnelle: 'cadre',
+    departement: 'Finance',
     telephone: '+225 07 00 00 01',
     date_embauche: '15/01/2020',
     numero_cnps: '123456-A',
@@ -88,6 +89,7 @@ const MODE_EMPLOI = [
     ['', 'sexe : M ou F (ou « Homme » / « Femme »).'],
     ['', 'categorie : classification conventionnelle (ex. Agent de maîtrise, Cadre, Employé).'],
     ['', 'categorie_professionnelle : cadre ou employe — alimente la répartition Cadres/Employés du tableau de bord RH.'],
+    ['', 'departement : service d\'affectation (ex. Finance, Commercial) — alimente l\'analyse des salaires par département.'],
     ['3. CONTRATS', 'Une ligne par contrat. Un salarié peut en avoir plusieurs (CDD renouvelé, avenant).'],
     ['', 'C\'est ici que se déclarent le salaire de base, le sursalaire et les primes.'],
     ['', 'Le contrat en vigueur à la date de paie est celui qui est retenu.'],

@@ -355,6 +355,9 @@ const Employee = sequelize.define('Employee', {
     // 'cadre' ou 'employe' — alimente la répartition Cadres/Employés des
     // indicateurs RH (inspiré de la feuille LOGIPAIE « INDICATEURS RH »).
     categorieProfessionnelle: { type: DataTypes.STRING, allowNull: true },
+    // Département / service d'affectation, en texte libre — alimente l'analyse
+    // des salaires par département du tableau de bord RH.
+    departement: { type: DataTypes.STRING, allowNull: true },
     dateDernierConge: { type: DataTypes.DATE, allowNull: true },
     // Cumuls initiaux de début d'exercice (saisie dans les paramètres/fiche)
     cumulBrutInitial: { type: DataTypes.FLOAT, allowNull: true, defaultValue: 0 },
@@ -765,6 +768,10 @@ const isSqlite = sequelize.getDialect() === 'sqlite';
             if (!colonnesEmployees.categorieProfessionnelle) {
                 await sequelize.getQueryInterface().addColumn('Employees', 'categorieProfessionnelle', { type: DataTypes.STRING, allowNull: true });
                 console.log('🛠️  Colonne Employees.categorieProfessionnelle ajoutée.');
+            }
+            if (!colonnesEmployees.departement) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'departement', { type: DataTypes.STRING, allowNull: true });
+                console.log('🛠️  Colonne Employees.departement ajoutée.');
             }
             if (!colonnesEmployees.dateDernierConge) {
                 await sequelize.getQueryInterface().addColumn('Employees', 'dateDernierConge', { type: DataTypes.DATE, allowNull: true });

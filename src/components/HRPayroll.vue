@@ -2645,7 +2645,7 @@ const activeModuleDetails = computed(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   position: absolute;
   inset: 0;
   bottom: 48px; /* taskbar height */
@@ -2653,21 +2653,17 @@ const activeModuleDetails = computed(() => {
   overflow-y: auto;
   overflow-x: hidden;
   padding: 2rem;
+  /* Réserve sous le contenu pour que la bannière flottante « Installer
+   * ONDA Lite » ne masque jamais les dernières cartes en fin de scroll. */
+  padding-bottom: 7rem;
 }
 
-/* .desktop-bg centre son contenu (justify-content: center) pour l'aspect
- * "bureau" sur grand écran. Mais quand le contenu dépasse la hauteur
- * disponible — la liste de modules sur mobile — un flex centré déborde de
- * façon symétrique des deux côtés, et le début de la liste (la carte
- * "Import en Masse") se retrouve repoussé dans un décalage négatif que
- * scrollTop ne peut pas atteindre : la carte reste inaccessible, quel que
- * soit le sens du scroll. En alignant au début, tout redevient atteignable
- * par un simple défilement vers le bas. */
-@media (max-width: 900px) {
-  .desktop-bg {
-    justify-content: flex-start;
-  }
-}
+/* Un flex centré (justify-content: center) déborde de façon symétrique
+ * quand le contenu dépasse la hauteur disponible : le haut de la grille
+ * (première rangée de modules, horloge) part dans un décalage négatif que
+ * scrollTop ne peut pas atteindre, quelle que soit la taille d'écran. On
+ * aligne donc au début et on centre via des marges auto sur .desktop-layout,
+ * qui, elles, se réduisent à zéro au lieu de devenir négatives. */
 
 /* Animated Ambient Shapes */
 .bg-shape {
@@ -2725,6 +2721,8 @@ const activeModuleDetails = computed(() => {
   min-height: min-content;
   z-index: 2;
   align-items: start;
+  margin-block: auto;
+  flex-shrink: 0;
 }
 
 @media (max-width: 900px) {
