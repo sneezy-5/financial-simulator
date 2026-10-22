@@ -550,7 +550,7 @@ const explanations = computed(() => {
     },
     transport: {
       title: "Prime de Transport",
-      text: `C'est une indemnité pour vos frais de déplacement. Elle n'est généralement pas imposable jusqu'à un certain seuil : vous recevez 100% du montant sans retenue.`
+      text: `C'est une indemnité pour vos frais de déplacement. Elle n'est pas imposable jusqu'à un certain seuil : en Côte d'Ivoire, 30 000 FCFA par mois à Abidjan. Au-delà, l'excédent est traité comme du salaire : il supporte l'ITS et la CNPS.`
     },
     anciennete: {
       title: "Prime d'Ancienneté",
@@ -1588,7 +1588,7 @@ const tabs = [
                 <tr v-if="calc.primeTransport > 0 || calc.primeLogement > 0">
                   <td class="label">4. Indemnités (transport, logement, représentation, etc.)</td>
                   <td class="val"></td><td class="val"></td>
-                  <td class="montant">{{ fcfa(calc.primeTransport + calc.primeLogement) }}</td>
+                  <td class="montant">{{ fcfa(calc.primeTransport + (calc.primeTransportImposable || 0) + calc.primeLogement) }}</td>
                 </tr>
                 <tr v-if="calc.allocationConges > 0">
                   <td class="label">5. Gratifications / Congés Payés</td>
@@ -1705,7 +1705,7 @@ const tabs = [
                 <tr v-if="calc.primeTransport > 0 || calc.primeLogement > 0">
                   <td class="label">5. Indemnités (transport, logement)</td>
                   <td class="val"></td><td class="val"></td>
-                  <td class="montant">{{ fcfa(calc.primeTransport + calc.primeLogement) }}</td>
+                  <td class="montant">{{ fcfa(calc.primeTransport + (calc.primeTransportImposable || 0) + calc.primeLogement) }}</td>
                 </tr>
                 <tr v-if="calc.allocationConges > 0">
                   <td class="label">6. Gratifications / Congés Payés</td>
@@ -1882,6 +1882,14 @@ const tabs = [
                   <td class="label">PRIME DE TRANSPORT (EXO)</td>
                   <td></td><td></td>
                   <td class="gain">{{ fcfa(calc.primeTransport) }}</td>
+                  <td></td><td></td><td></td>
+                </tr>
+
+                <tr v-if="calc.primeTransportImposable > 0">
+                  <td class="code">703</td>
+                  <td class="label">PRIME DE TRANSPORT (EXCÉDENT IMPOSABLE)</td>
+                  <td></td><td></td>
+                  <td class="gain">{{ fcfa(calc.primeTransportImposable) }}</td>
                   <td></td><td></td><td></td>
                 </tr>
 

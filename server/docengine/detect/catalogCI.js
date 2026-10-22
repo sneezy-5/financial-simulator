@@ -116,6 +116,7 @@ const PRIMES = [
     { variable: 'prime_statistique', labels: ['prime statistique'] },
     { variable: 'prime_sujetion', labels: ['prime de sujetion', 'indemnite de sujetion', 'sujetion'] },
     { variable: 'prime_transport', labels: ['prime de transport', 'prime de transport exo', 'transport'] },
+    { variable: 'prime_transport_imposable', labels: ['prime de transport imposable', 'transport imposable', 'excedent transport'] },
     { variable: 'prime_treizieme_mois', labels: ['prime de 13e mois', 'treizieme mois', '13e mois', 'gratification'] },
     { variable: 'prime_vacances', labels: ['prime de vacances', 'prime vacances'] },
     { variable: 'prime_objectif', labels: ['prime d objectif', 'prime objectifs', 'bonus objectifs'] },

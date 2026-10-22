@@ -1,6 +1,12 @@
 export function calculateCIPayslip(baseData, emp, rules) {
-  const brutImposable = baseData.salaireBrut
-  const gainsTotaux = brutImposable + baseData.primeTransport + baseData.primeLogement + baseData.primesNonImposablesRub
+  // Transport exonéré dans la limite du plafond (fiche salarié pour les zones
+  // hors Abidjan, sinon règle pays) ; l'excédent rejoint le brut imposable.
+  const plafondTransport = Number(emp.plafond_transport_exonere) || rules.plafondTransportExonere || Infinity
+  const primeTransport = Math.min(baseData.primeTransport, plafondTransport)
+  const primeTransportImposable = baseData.primeTransport - primeTransport
+  const salaireBrut = baseData.salaireBrut + primeTransportImposable
+  const brutImposable = salaireBrut
+  const gainsTotaux = brutImposable + primeTransport + baseData.primeLogement + baseData.primesNonImposablesRub
 
   // Charges fiscales employeur — rubriques dissociées (cf. countryConfig CI)
   const baseFiscale = brutImposable
@@ -82,6 +88,7 @@ export function calculateCIPayslip(baseData, emp, rules) {
 
   return {
     ...baseData,
+    primeTransport, primeTransportImposable, salaireBrut,
     brutImposable, baseFiscale, baseCNPS, baseCNPS_PfAtAm, tauxAT: tauxAtMp, estExpatrie, nbAyantsDroitCMU, totalPersonnesCMU,
     parts, ricf,
     gainsTotaux,

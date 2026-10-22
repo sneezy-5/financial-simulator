@@ -49,6 +49,10 @@ const HS_TAUX_NUIT = 1.75;
 const HS_TAUX_FERIE_JOUR = 1.75;
 const HS_TAUX_FERIE_NUIT = 2;
 
+// Indemnité de transport : exonérée d'ITS et de CNPS dans la limite de
+// 30 000 FCFA/mois (Abidjan, arrêté du 30/01/2020).
+const PLAFOND_TRANSPORT_EXONERE_CI = 30000;
+
 function calculerHeuresSupplementaires(employee, tauxHoraire) {
     const nbSimple = parseFloat(employee['heures_sup_nb'] || 0);
     const nbNuit = parseFloat(employee['heures_sup_nuit'] || 0);
@@ -204,7 +208,13 @@ function calculateSalaryRules(employee) {
     const sursalaire = Math.round((sursalaireTotal / joursBasePaie) * joursTrav);
     const primeTransportMensuel = parseFloat(employee['prime_transport'] || 0);
     const bulletinType = employee['bulletin_type'] || 'habituel';
-    const primeTransport = bulletinType === 'conges' ? 0 : Math.round((primeTransportMensuel / joursBasePaie) * joursTrav);
+    const primeTransportVersee = bulletinType === 'conges' ? 0 : Math.round((primeTransportMensuel / joursBasePaie) * joursTrav);
+    // Exonération ITS + CNPS limitée au plafond (30 000 FCFA/mois à Abidjan,
+    // arrêté du 30/01/2020 ; surchargeable sur la fiche pour les autres zones).
+    // L'excédent est du salaire : il rejoint le brut imposable.
+    const plafondTransport = parseFloat(employee['plafond_transport_exonere']) || PLAFOND_TRANSPORT_EXONERE_CI;
+    const primeTransport = Math.min(primeTransportVersee, plafondTransport);
+    const primeTransportImposable = primeTransportVersee - primeTransport;
     const primeLogement = parseFloat(employee['prime_logement'] || 0);
 
     const tauxHoraire = salaireBaseMensuel > 0 ? Math.round(salaireBaseMensuel / 173.33) : 0;
@@ -227,7 +237,7 @@ function calculateSalaryRules(employee) {
     const indemTransac = parseFloat(employee['indemnite_transactionnelle'] || 0);
     const fraisFuneraires = parseFloat(employee['frais_funeraires'] || 0);
 
-    const salaireBrut = salaireBase + sursalaire + primeAnciennete + allocationConges + montantHeuresSup + primesImposables + gratification + preavisVal;
+    const salaireBrut = salaireBase + sursalaire + primeAnciennete + allocationConges + montantHeuresSup + primesImposables + primeTransportImposable + gratification + preavisVal;
     const brutImposable = salaireBrut;
     const gainsTotaux = salaireBrut + primeTransport + primeLogement + primesNonImposablesRub + indemLicenciement + indemTransac + fraisFuneraires;
 
@@ -313,7 +323,7 @@ function calculateSalaryRules(employee) {
         gratification, preavisVal, indemLicenciement, indemTransac, fraisFuneraires,
         primesImposables, primesNonImposablesRub, montantHeuresSup, nbHeuresSup, coefHS, tauxHoraire,
         heuresSupTranches: heuresSup.tranches,
-        primeTransport, primeLogement,
+        primeTransport, primeTransportImposable, primeLogement,
         brutImposable, gainsTotaux, baseCNPS, baseCNPS_PfAtAm, parts, totalPersonnesCMU, joursTrav,
         patronal: {
             cnEmployeur, ceEmployeur, tauxCe: tauxCeEmployeur, estExpatrie,
@@ -575,6 +585,7 @@ function generatePdfDefinition(employee, calc, companyInfo = {}) {
         body.push(row(codes.heuresSup, `HEURES SUPPLEMENTAIRES — ${t.label.toUpperCase()} (${t.heures}h)`, calc.tauxHoraire, `×${t.coef}`, t.montant, null, null, null));
     });
     if (calc.primeTransport > 0) body.push(row(codes.primeTransport, 'PRIME DE TRANSPORT (EXO)', null, null, calc.primeTransport, null, null, null));
+    if (calc.primeTransportImposable > 0) body.push(row(codes.primeTransportImposable, 'PRIME DE TRANSPORT (EXCEDENT IMPOSABLE)', null, null, calc.primeTransportImposable, null, null, null));
     if (calc.primeLogement > 0) body.push(row(codes.primeLogement, 'PRIME DE LOGEMENT (EXO)', null, null, calc.primeLogement, null, null, null));
 
     body.push(row('', 'BRUT IMPOSABLE', null, null, calc.brut, null, null, null, { bold: true }));
@@ -927,6 +938,7 @@ function generatePdfDefinitionGrilleNumerotee(employee, calc, companyInfo = {}) 
     if (calc.allocationConges > 0) body.push(ligne(`Allocation congés (${calc.joursCP} j)`, null, null, calc.allocationConges, undefined, undefined, undefined, codes.allocationConges));
     (calc.heuresSupTranches || []).forEach(t => body.push(ligne(`Heures supplémentaires — ${t.label}`, calc.tauxHoraire, `×${t.coef}`, t.montant, undefined, undefined, undefined, codes.heuresSup)));
     if (calc.primeTransport > 0) body.push(ligne('Prime de transport non imposable', null, null, calc.primeTransport, undefined, undefined, undefined, codes.primeTransport));
+    if (calc.primeTransportImposable > 0) body.push(ligne('Prime de transport (excédent imposable)', null, null, calc.primeTransportImposable, undefined, undefined, undefined, codes.primeTransportImposable));
     if (calc.primeLogement > 0) body.push(ligne('Prime de logement', null, null, calc.primeLogement, undefined, undefined, undefined, codes.primeLogement));
 
     body.push(bandRow('SALAIRE BRUT', calc.gainsTotaux));
@@ -1064,7 +1076,7 @@ function resolveCompanyInfo(employee, companyInfo = {}) {
 const CODE_RUBRIQUE = {
     salaireBase: '10', sursalaire: '11', primeAnciennete: '12', prime: '13',
     allocationConges: '14', heuresSup: '15', gratification: '60',
-    primeTransport: '655', primeLogement: '656',
+    primeTransport: '655', primeLogement: '656', primeTransportImposable: '16',
     its: '430', cnpsSalariale: '502', cmuSalariale: '504', ricf: '432', acompte: '460',
     cnpsPatronale: '503', cnpsPF: '450', cnpsAT: '452', cnpsAM: '451', cmuPatronale: '505',
     impotEmployeur: '431', ceEmployeur: '433', fdfpTA: '520', fdfpFPC: '530'
@@ -1090,6 +1102,7 @@ function construireRubriques(employee, calc, codesCompte) {
     if (calc.allocationConges > 0) gains.push({ code: c.allocationConges, label: `Allocation congés (${calc.joursCP} j)`, montant: calc.allocationConges });
     (calc.heuresSupTranches || []).forEach(t => gains.push({ code: c.heuresSup, label: `Heures sup. — ${t.label} (${t.heures}h)`, base: calc.tauxHoraire, taux: `×${t.coef}`, montant: t.montant }));
     if (calc.primeTransport > 0) gains.push({ code: c.primeTransport, label: 'Indemnité de transport', montant: calc.primeTransport, exonere: true });
+    if (calc.primeTransportImposable > 0) gains.push({ code: c.primeTransportImposable, label: 'Indemnité de transport (excédent imposable)', montant: calc.primeTransportImposable });
     if (calc.primeLogement > 0) gains.push({ code: c.primeLogement, label: 'Prime de logement', montant: calc.primeLogement, exonere: true });
 
     const retenues = [];
@@ -1503,6 +1516,7 @@ function generatePdfDefinitionLavandiere(employee, calc, companyInfo = {}) {
     if (calc.allocationConges > 0) body.push(ligne(codes.allocationConges, `Allocation congés (${calc.joursCP} j)`, calc.joursCP, undefined, undefined, calc.allocationConges));
     (calc.heuresSupTranches || []).forEach(t => body.push(ligne(codes.heuresSup, `Heures sup. — ${t.label}`, t.heures, calc.tauxHoraire, `×${t.coef}`, t.montant)));
     if (calc.primeTransport > 0) body.push(ligne(codes.primeTransport, 'Indemnité de transport', undefined, undefined, undefined, calc.primeTransport));
+    if (calc.primeTransportImposable > 0) body.push(ligne(codes.primeTransportImposable, 'Indemnité de transport (excédent imposable)', undefined, undefined, undefined, calc.primeTransportImposable));
     if (calc.primeLogement > 0) body.push(ligne(codes.primeLogement, 'Prime de logement', undefined, undefined, undefined, calc.primeLogement));
 
     body.push(bandRow('TOTAL BRUT', calc.gainsTotaux));
@@ -1705,6 +1719,7 @@ function generatePdfDefinitionADArchitecture(employee, calc, companyInfo = {}) {
     if (calc.allocationConges > 0) body.push(ligne(codes.allocationConges, `Allocation congés (${calc.joursCP} j)`, undefined, undefined, calc.allocationConges));
     (calc.heuresSupTranches || []).forEach(t => body.push(ligne(codes.heuresSup, `Heures sup. — ${t.label} (${t.heures}h)`, calc.tauxHoraire, `×${t.coef}`, t.montant)));
     if (calc.primeTransport > 0) body.push(ligne(codes.primeTransport, 'Indemnité de transport', undefined, undefined, calc.primeTransport));
+    if (calc.primeTransportImposable > 0) body.push(ligne(codes.primeTransportImposable, 'Indemnité de transport (excédent imposable)', undefined, undefined, calc.primeTransportImposable));
     if (calc.primeLogement > 0) body.push(ligne(codes.primeLogement, 'Prime de logement', undefined, undefined, calc.primeLogement));
     body.push(bandRow('TOTAL BRUT', calc.gainsTotaux));
 
@@ -1906,6 +1921,7 @@ function generatePdfDefinitionTcmLogistic(employee, calc, companyInfo = {}) {
     if (calc.allocationConges > 0) body.push(ligne(codes.allocationConges, `Allocation congés (${calc.joursCP} j)`, calc.joursCP, undefined, undefined, calc.allocationConges));
     (calc.heuresSupTranches || []).forEach(t => body.push(ligne(codes.heuresSup, `Heures sup. — ${t.label}`, t.heures, calc.tauxHoraire, `×${t.coef}`, t.montant)));
     if (calc.primeTransport > 0) body.push(ligne(codes.primeTransport, 'Indemnité de transport', undefined, undefined, undefined, calc.primeTransport));
+    if (calc.primeTransportImposable > 0) body.push(ligne(codes.primeTransportImposable, 'Indemnité de transport (excédent imposable)', undefined, undefined, undefined, calc.primeTransportImposable));
     if (calc.primeLogement > 0) {
         // Avantage en nature en toutes lettres dans les cumuls plus bas : ce
         // bulletin l'affiche explicitement, contrairement aux autres modèles.
@@ -2100,6 +2116,7 @@ function generatePdfDefinitionScaso(employee, calc, companyInfo = {}) {
     if (calc.allocationConges > 0) body.push(ligne(codes.allocationConges, `Allocation congés (${calc.joursCP} j)`, null, null, calc.allocationConges));
     (calc.heuresSupTranches || []).forEach(t => body.push(ligne(codes.heuresSup, `Heures sup. — ${t.label}`, calc.tauxHoraire, `×${t.coef}`, t.montant)));
     if (calc.primeTransport > 0) body.push(ligne(codes.primeTransport, 'Indemnité Transport non Imposable', null, `${jTravScaso.toFixed(2)}`, calc.primeTransport));
+    if (calc.primeTransportImposable > 0) body.push(ligne(codes.primeTransportImposable, 'Indemnité Transport (excédent imposable)', null, null, calc.primeTransportImposable));
     if (calc.primeLogement > 0) body.push(ligne(codes.primeLogement, 'Prime de logement', null, null, calc.primeLogement));
     body.push([cell(''), cell('Total Brut', { bold: true }), cell(''), cell(''), cell(fcfa(calc.gainsTotaux), { align: 'right', bold: true }), cell('')]);
 
@@ -2588,6 +2605,7 @@ exports.CATALOGUE_RUBRIQUES = [
     { cle: 'heuresSup', libelle: 'Heures supplémentaires', groupe: 'Gains' },
     { cle: 'gratification', libelle: 'Gratification / 13e mois', groupe: 'Gains' },
     { cle: 'primeTransport', libelle: 'Indemnité de transport', groupe: 'Gains' },
+    { cle: 'primeTransportImposable', libelle: 'Indemnité de transport (excédent imposable)', groupe: 'Gains' },
     { cle: 'primeLogement', libelle: 'Prime de logement', groupe: 'Gains' },
     { cle: 'its', libelle: 'ITS — impôt sur salaire (nouveau régime, 2024)', groupe: 'Retenues salariales' },
     { cle: 'cnpsSalariale', libelle: 'CNPS retraite (part salariale)', groupe: 'Retenues salariales' },

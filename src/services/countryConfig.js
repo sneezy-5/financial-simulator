@@ -22,6 +22,9 @@ export const COUNTRIES_CONFIG = {
     tauxRetraitePat: 0.077,
     tauxPFPat: 0.05,
     tauxATPat: 0.02,
+    // Indemnité de transport exonérée d'ITS et de CNPS dans la limite de
+    // 30 000 FCFA/mois (Abidjan, arrêté du 30/01/2020) ; l'excédent est du salaire.
+    plafondTransportExonere: 30000,
     // Charges fiscales patronales DISSOCIÉES (à ne jamais agréger) :
     //   CN — Contribution Nationale : 1,2 % du brut imposable, personnel local ET expatrié.
     //   CE — Contribution Employeur : 0 % pour le local, 9,2 % pour les expatriés.
