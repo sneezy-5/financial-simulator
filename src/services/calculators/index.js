@@ -1,8 +1,12 @@
-import { calculateCIPayslip } from './ci'
+import { calculerBulletinCI } from '../../../server/moteur/paieCI.mjs'
 import { calculateBJPayslip } from './bj'
 import { calculateTGPayslip } from './tg'
 
 export function calculatePayslip(emp, rules) {
+  // Côte d'Ivoire : même moteur que les bulletins générés par le serveur, pour
+  // que ce que l'on simule soit exactement ce que le RH obtiendra.
+  if (rules.code === 'CI') return calculerBulletinCI(emp)
+
   // Base calculations that are common to all countries
   const salaireBaseMensuel = +emp.salaire_base || 0
   const joursDansLeMois = 30 
@@ -125,13 +129,11 @@ export function calculatePayslip(emp, rules) {
   }
 
   switch (rules.code) {
-    case 'CI':
-      return calculateCIPayslip(baseData, emp, rules)
     case 'BJ':
       return calculateBJPayslip(baseData, emp, rules)
     case 'TG':
       return calculateTGPayslip(baseData, emp, rules)
     default:
-      return calculateCIPayslip(baseData, emp, rules)
+      return calculerBulletinCI(emp)
   }
 }

@@ -24,10 +24,6 @@ server/*.sqlite
 server/uploads
 uploads
 
-# Fichiers de scratch / debug jamais destinés au déploiement
-server/__test_*.js
-server/__dump_sheet.js
-server/__pdf_to_png.js
 
 # Divers
 .git

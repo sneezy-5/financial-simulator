@@ -40,7 +40,7 @@ const bodyParser = require('body-parser');
 const http = require('http');
 const { Server } = require('socket.io');
 const { Sequelize } = require('sequelize');
-const { Visit, PayrollRequest, User, AdminUser, SubscriptionPlan, BankLoan, Transaction, Invoice, License, PayrollPeriod, PayslipRecord, Employee, Absence, Formation, Evaluation, Template, LocalSettings } = require('./database');
+const { AuditLog, Visit, PayrollRequest, User, AdminUser, SubscriptionPlan, BankLoan, Transaction, Invoice, License, PayrollPeriod, PayslipRecord, Employee, Absence, Formation, Evaluation, Template, LocalSettings } = require('./database');
 const payrollService = require('./payrollService');
 const aiService = require('./aiService');
 const templateEngine = require('./templateEngine');
@@ -55,7 +55,9 @@ const { poserVariables, remplir: remplirOffice } = require('./docengine/office/o
 const { listerTypes: listerTypesDocuments } = require('./docengine/office/typesDocuments');
 const { construireClasseur } = require('./import/classeurModele');
 const { lireClasseur } = require('./import/classeurLecture');
-const { genererDeclaration } = require('./declarations');
+const { genererDeclaration, TYPES_ANNUELS } = require('./declarations');
+const { journaliser, differences } = require('./paie/audit');
+const cyclePaie = require('./paie/cyclePaie');
 
 // Le moteur ne connaît aucun fournisseur d'IA : on lui injecte le nôtre. L'IA
 // n'intervient que sur les fragments que le lexique métier n'a pas su nommer,
@@ -240,7 +242,10 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-app.get('/api/stats', async (req, res) => {
+// Réservé aux administrateurs : la route renvoie les dernières visites avec IP
+// et navigateur (elle était publique). adminMiddleware est défini plus bas,
+// d'où l'appel différé au moment de la requête.
+app.get('/api/stats', (req, res, next) => adminMiddleware(req, res, next), async (req, res) => {
     try {
         const totalHits = await Visit.count();
         const totalVisits = await Visit.count({
@@ -290,282 +295,30 @@ app.post('/api/stats/visit', async (req, res) => {
     }
 });
 
-// ==========================================
-// ROUTES D'AUTHENTIFICATION & CRÉDITS
-// ==========================================
-
-app.post('/api/auth/register', async (req, res) => {
+// ─── Entonnoir simulateur → Pro ────────────────────────────────────────────────
+// Événements anonymes (aucun montant, aucune donnée de paie), rangés dans la
+// table des visites sous « evt:<nom>[:<source>] » pour réutiliser le stockage.
+const EVENEMENTS_ENTONNOIR = ['simulation', 'pdf_simulateur', 'net_vers_brut', 'partage', 'explication', 'cout_employeur', 'guide_vu', 'clic_pro'];
+app.post('/api/stats/evenement', async (req, res) => {
     try {
-        if (IS_SIMULATOR) {
-            return res.status(403).json({ error: "La création de compte n'est pas disponible dans le simulateur. Rendez-vous sur la version ONDA RH Pro." });
-        }
-        if (!bcrypt) throw new Error("bcrypt non installé");
-        const { email, password } = req.body;
-        if (!email || !password) return res.status(400).json({ error: "Email et mot de passe requis" });
-
-        const existingUser = await User.findOne({ where: { email } });
-        if (existingUser) {
-            if (!existingUser.emailVerified) {
-                const newVerificationToken = Math.floor(100000 + Math.random() * 900000).toString();
-                existingUser.verificationToken = newVerificationToken;
-                existingUser.password = await bcrypt.hash(password, 10); // Update password in case they changed their mind
-                await existingUser.save();
-                
-                emailService.sendVerificationEmail(existingUser.email, newVerificationToken).catch(console.error);
-                return res.json({ success: true, requiresVerification: true, message: "Un nouveau code de vérification a été envoyé." });
-            }
-            return res.status(400).json({ error: "Cet email est déjà utilisé et vérifié" });
-        }
-
-        const hashedPassword = await bcrypt.hash(password, 10);
-        // Generate a 6-digit OTP code (e.g. 123456)
-        const verificationToken = Math.floor(100000 + Math.random() * 900000).toString();
-
-        const newUser = await User.create({
-            email,
-            password: hashedPassword,
-            verificationToken: verificationToken
+        const { evenement, clientId, source } = req.body || {};
+        if (!EVENEMENTS_ENTONNOIR.includes(evenement)) return res.status(400).json({ success: false });
+        const suffixe = source ? ':' + String(source).replace(/[^a-z0-9_-]/gi, '').slice(0, 40) : '';
+        await Visit.create({
+            page: `evt:${evenement}${suffixe}`,
+            clientId: clientId ? String(clientId).slice(0, 40) : null,
+            userAgent: (req.headers['user-agent'] || '').slice(0, 250),
+            country: 'CI'
         });
-
-        // Essai gratuit de 14 jours (niveau Starter) accordé automatiquement à l'inscription
-        const trialUser = await billingService.grantTrial(newUser.id);
-
-        // Envoi de l'email de vérification (non bloquant)
-        emailService.sendVerificationEmail(newUser.email, verificationToken).catch(console.error);
-
-        res.json({ success: true, requiresVerification: true, message: "Un code de vérification a été envoyé." });
+        res.json({ success: true });
     } catch (e) {
-        console.error('❌ Erreur sur POST /api/auth/register :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
+        console.error('Erreur entonnoir :', e.message);
+        res.json({ success: false });
     }
 });
 
-app.post('/api/auth/login', async (req, res) => {
-    try {
-        if (!bcrypt) throw new Error("bcrypt non installé");
-        const { email, password } = req.body;
-
-        const user = await User.findOne({ where: { email } });
-        if (!user) return res.status(401).json({ error: "Identifiants incorrects" });
-
-        if (user.isBlocked) {
-            return res.status(403).json({ error: "Votre compte a été suspendu par un administrateur." });
-        }
-
-        if (!user.emailVerified) {
-            // Renvoyer un nouveau code si l'utilisateur essaie de se connecter sans être vérifié
-            const newVerificationToken = Math.floor(100000 + Math.random() * 900000).toString();
-            user.verificationToken = newVerificationToken;
-            await user.save();
-            emailService.sendVerificationEmail(user.email, newVerificationToken).catch(console.error);
-            return res.status(403).json({ error: "email_not_verified" });
-        }
-
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) return res.status(401).json({ error: "Identifiants incorrects" });
-
-        const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-        res.json({ success: true, token, user: { id: user.id, email: user.email, subscriptionTier: user.subscriptionTier, subscriptionExpiresAt: user.subscriptionExpiresAt, subscriptionIsTrial: user.subscriptionIsTrial, role: user.role } });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/auth/login :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-app.post('/api/auth/forgot-password', async (req, res) => {
-    try {
-        const { email } = req.body;
-        const user = await User.findOne({ where: { email } });
-        if (!user) return res.status(404).json({ error: "Aucun compte associé à cet email" });
-
-        const resetToken = Math.floor(100000 + Math.random() * 900000).toString();
-        user.resetPasswordToken = resetToken;
-        user.resetPasswordExpires = Date.now() + 3600000; // 1 heure
-        await user.save();
-
-        emailService.sendPasswordResetEmail(user.email, resetToken).catch(console.error);
-
-        res.json({ success: true, message: "Un code de réinitialisation a été envoyé à votre adresse email" });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/auth/forgot-password :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-app.post('/api/auth/reset-password', async (req, res) => {
-    try {
-        if (!bcrypt) throw new Error("bcrypt non installé");
-        const { otp, newPassword, email } = req.body;
-
-        if (!otp || !newPassword || !email) {
-            return res.status(400).json({ error: "Code OTP, email et nouveau mot de passe requis" });
-        }
-
-        const user = await User.findOne({ 
-            where: { 
-                email,
-                resetPasswordToken: otp,
-                resetPasswordExpires: { [Sequelize.Op.gt]: new Date() }
-            }
-        });
-
-        if (!user) {
-            return res.status(400).json({ error: "Code OTP invalide ou expiré" });
-        }
-
-        user.password = await bcrypt.hash(newPassword, 10);
-        user.resetPasswordToken = null;
-        user.resetPasswordExpires = null;
-        await user.save();
-
-        res.json({ success: true, message: "Mot de passe réinitialisé avec succès" });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/auth/reset-password :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// Nouvelle route pour vérifier le code OTP
-app.post('/api/auth/verify-otp', async (req, res) => {
-    try {
-        const { email, otp } = req.body;
-
-        if (!email || !otp) return res.status(400).json({ error: "Email et code OTP requis" });
-
-        const user = await User.findOne({ where: { email } });
-        if (!user) return res.status(404).json({ error: "Utilisateur non trouvé" });
-
-        if (user.verificationToken !== otp) {
-            return res.status(400).json({ error: "Code OTP incorrect" });
-        }
-
-        user.emailVerified = true;
-        user.verificationToken = null;
-        await user.save();
-
-        const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-        res.json({ 
-            success: true, 
-            message: "Compte vérifié avec succès",
-            token, 
-            user: { id: user.id, email: user.email, subscriptionTier: user.subscriptionTier, subscriptionExpiresAt: user.subscriptionExpiresAt, subscriptionIsTrial: user.subscriptionIsTrial, role: user.role } 
-        });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/auth/verify-otp :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-app.get('/api/auth/me', authMiddleware, async (req, res) => {
-    try {
-        const user = await User.findByPk(req.user.id, { attributes: { exclude: ['password'] } });
-        if (!user) return res.status(404).json({ error: "Utilisateur introuvable" });
-        const userJson = user.toJSON();
-        // Stocké en JSON (colonne texte) : reparsé pour que le client
-        // manipule toujours un objet, jamais une chaîne à re-parser lui-même.
-        userJson.rubriqueCodes = userJson.rubriqueCodes ? JSON.parse(userJson.rubriqueCodes) : null;
-        userJson.bulletinCanvasLayout = userJson.bulletinCanvasLayout ? JSON.parse(userJson.bulletinCanvasLayout) : null;
-        res.json({ success: true, user: userJson });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/auth/me :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// POST /api/auth/activate-license - Activer une licence d'entreprise
-app.post('/api/auth/activate-license', authMiddleware, async (req, res) => {
-    try {
-        const { licenseKey } = req.body;
-        if (!licenseKey) return res.status(400).json({ error: "La clé de licence est requise" });
-
-        const license = await License.findOne({ where: { licenseKey } });
-        
-        if (!license) {
-            return res.status(404).json({ error: "Clé de licence invalide ou introuvable" });
-        }
-        
-        if (license.status !== 'active') {
-            return res.status(403).json({ error: "Cette licence a été révoquée ou suspendue" });
-        }
-        
-        if (license.expiresAt && new Date(license.expiresAt) < new Date()) {
-            return res.status(403).json({ error: "Cette licence a expiré" });
-        }
-        
-        if (license.installationId && license.installationId !== req.user.id.toString()) {
-            return res.status(403).json({ error: "Cette licence est déjà activée sur un autre compte" });
-        }
-
-        // Marquer la licence comme activée par cet utilisateur
-        license.installationId = req.user.id.toString();
-        license.activatedAt = new Date();
-        await license.save();
-
-        // Mettre à jour l'utilisateur
-        const user = await User.findByPk(req.user.id);
-        user.subscriptionTier = 'entreprise'; // ou 'pro' selon la nomenclature, mais mettons 'entreprise' 
-        user.subscriptionIsTrial = false;
-        user.subscriptionExpiresAt = license.expiresAt || null;
-        await user.save();
-
-        res.json({ 
-            success: true, 
-            message: "Licence activée avec succès. Bienvenue dans l'édition Entreprise !",
-            user: { id: user.id, email: user.email, subscriptionTier: user.subscriptionTier, subscriptionExpiresAt: user.subscriptionExpiresAt, subscriptionIsTrial: user.subscriptionIsTrial, role: user.role }
-        });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/auth/activate-license :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// PUT /api/auth/profile - Mettre à jour le profil (Nom, Entreprise, Téléphone, Type de compte)
-app.put('/api/auth/profile', authMiddleware, async (req, res) => {
-    try {
-        const user = await User.findByPk(req.user.id);
-        if (!user) return res.status(404).json({ error: "Utilisateur introuvable" });
-
-        const {
-            name, companyName, phone, accountType, companyNumeroCnps, companyNumeroContribuable, companyLogo,
-            companyAdresse, companyTelephone, companyEmail, companyVille, companySignataireNom, companySignataireFonction,
-            companyNumeroEmployeur, companyTauxAtMp, companyCnpsVersementMensuel,
-            defaultBulletinStyle, rubriqueCodes, bulletinCouleur, bulletinCanvasLayout
-        } = req.body;
-        if (name !== undefined) user.name = name;
-        if (companyName !== undefined) user.companyName = companyName;
-        if (phone !== undefined) user.phone = phone;
-        if (accountType !== undefined) user.accountType = accountType;
-        if (companyNumeroCnps !== undefined) user.companyNumeroCnps = companyNumeroCnps;
-        if (companyNumeroContribuable !== undefined) user.companyNumeroContribuable = companyNumeroContribuable;
-        if (companyLogo !== undefined) user.companyLogo = companyLogo;
-        if (companyAdresse !== undefined) user.companyAdresse = companyAdresse;
-        if (companyTelephone !== undefined) user.companyTelephone = companyTelephone;
-        if (companyEmail !== undefined) user.companyEmail = companyEmail;
-        if (companyVille !== undefined) user.companyVille = companyVille;
-        if (companySignataireNom !== undefined) user.companySignataireNom = companySignataireNom;
-        if (companySignataireFonction !== undefined) user.companySignataireFonction = companySignataireFonction;
-        if (companyNumeroEmployeur !== undefined) user.companyNumeroEmployeur = companyNumeroEmployeur;
-        if (companyTauxAtMp !== undefined) user.companyTauxAtMp = (companyTauxAtMp === '' || companyTauxAtMp === null) ? null : parseFloat(companyTauxAtMp);
-        if (companyCnpsVersementMensuel !== undefined) user.companyCnpsVersementMensuel = (companyCnpsVersementMensuel === '' || companyCnpsVersementMensuel === null) ? null : !!companyCnpsVersementMensuel;
-        if (defaultBulletinStyle !== undefined) user.defaultBulletinStyle = defaultBulletinStyle;
-        // Stocké en JSON (colonne texte) ; { } explicitement envoyé remet aux
-        // valeurs par défaut ONDA plutôt que de laisser d'anciens codes traîner.
-        if (rubriqueCodes !== undefined) user.rubriqueCodes = rubriqueCodes ? JSON.stringify(rubriqueCodes) : null;
-        if (bulletinCouleur !== undefined) user.bulletinCouleur = bulletinCouleur || null;
-        if (bulletinCanvasLayout !== undefined) user.bulletinCanvasLayout = bulletinCanvasLayout ? JSON.stringify(bulletinCanvasLayout) : null;
-
-        await user.save();
-        const updatedUser = user.toJSON();
-        delete updatedUser.password;
-        updatedUser.rubriqueCodes = updatedUser.rubriqueCodes ? JSON.parse(updatedUser.rubriqueCodes) : null;
-        updatedUser.bulletinCanvasLayout = updatedUser.bulletinCanvasLayout ? JSON.parse(updatedUser.bulletinCanvasLayout) : null;
-
-        res.json({ success: true, user: updatedUser, message: "Profil mis à jour avec succès !" });
-    } catch (e) {
-        console.error('❌ Erreur sur PUT /api/auth/profile :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
+// Routes « auth » : server/routes/auth.js
+require('./routes/auth')(app, { IS_SIMULATOR, JWT_SECRET, License, Sequelize, User, authMiddleware, bcrypt, billingService, differences, emailService, journaliser, jwt });
 
 app.post('/api/billing/verify-paystack', authMiddleware, async (req, res) => {
     try {
@@ -826,199 +579,18 @@ const adminAuthMiddleware = async (req, res, next) => {
         return res.status(401).json({ error: "Session Admin invalide ou expirée" });
     }
 };
-
-// POST /api/admin/auth/login - Connexion Administrateur Dédiée
-app.post('/api/admin/auth/login', async (req, res) => {
-    try {
-        if (!bcrypt) throw new Error("bcrypt non installé");
-        const { email, password } = req.body;
-        if (!email || !password) return res.status(400).json({ error: "Email et mot de passe admin requis" });
-
-        const admin = await AdminUser.findOne({ where: { email } });
-        if (!admin) return res.status(401).json({ error: "Identifiants Administrateur incorrects" });
-
-        const isMatch = await bcrypt.compare(password, admin.password);
-        if (!isMatch) return res.status(401).json({ error: "Identifiants Administrateur incorrects" });
-
-        admin.lastLogin = new Date();
-        await admin.save();
-
-        const token = jwt.sign(
-            { id: admin.id, email: admin.email, role: admin.role, scope: 'admin' },
-            JWT_SECRET,
-            { expiresIn: '1d' }
-        );
-
-        res.json({
-            success: true,
-            token,
-            admin: { id: admin.id, email: admin.email, name: admin.name, role: admin.role }
-        });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/admin/auth/login :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// GET /api/admin/auth/me - Profil Administrateur connecté
-app.get('/api/admin/auth/me', adminAuthMiddleware, async (req, res) => {
-    try {
-        res.json({
-            success: true,
-            admin: { id: req.admin.id, email: req.admin.email, name: req.admin.name, role: req.admin.role }
-        });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/admin/auth/me :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
+// Alias historique, utilisé aussi par /api/stats plus haut (appel différé).
 const adminMiddleware = adminAuthMiddleware;
 
-// GET /api/admin/users - Liste des utilisateurs inscrits
-app.get('/api/admin/users', adminMiddleware, async (req, res) => {
-    try {
-        const { search } = req.query;
-        const whereClause = {};
-        if (search) {
-            whereClause.email = { [Sequelize.Op.like]: `%${search}%` };
-        }
-        const users = await User.findAll({
-            where: whereClause,
-            attributes: { exclude: ['password'] },
-            order: [['createdAt', 'DESC']]
-        });
-        res.json({ success: true, users });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/admin/users :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
+/** Data URL ou base64 nu → Buffer (modèles PDF ici, documents Office dans routes/documents.js). */
+function decodeDataUrl(value) {
+    const comma = value.indexOf(',');
+    const payload = value.startsWith('data:') && comma > 0 ? value.slice(comma + 1) : value;
+    return Buffer.from(payload, 'base64');
+}
 
-// POST /api/admin/users - Création manuelle d'un utilisateur par un Admin
-app.post('/api/admin/users', adminMiddleware, async (req, res) => {
-    try {
-        if (!bcrypt) throw new Error("bcrypt non installé");
-        const { email, password } = req.body;
-        if (!email || !password) return res.status(400).json({ error: "Email et mot de passe requis" });
-
-        const existingUser = await User.findOne({ where: { email } });
-        if (existingUser) return res.status(400).json({ error: "Cet email est déjà utilisé" });
-
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const newUser = await User.create({
-            email,
-            password: hashedPassword,
-            emailVerified: true
-        });
-
-        res.json({
-            success: true,
-            user: { id: newUser.id, email: newUser.email, subscriptionTier: newUser.subscriptionTier, subscriptionExpiresAt: newUser.subscriptionExpiresAt, role: newUser.role, createdAt: newUser.createdAt }
-        });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/admin/users :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// PUT /api/admin/users/:id/subscription - Octroi/prolongation manuelle d'un abonnement
-// (ex : paiement Mobile Money reçu hors Paystack)
-app.put('/api/admin/users/:id/subscription', adminMiddleware, async (req, res) => {
-    try {
-        const { tier, days } = req.body;
-        const targetUser = await User.findByPk(req.params.id);
-        if (!targetUser) return res.status(404).json({ error: "Utilisateur non trouvé" });
-
-        if (!tier) {
-            // Désactivation manuelle de l'abonnement
-            targetUser.subscriptionTier = null;
-            targetUser.subscriptionExpiresAt = null;
-            targetUser.bulletinsUsed = 0;
-            targetUser.periodStartedAt = null;
-            await targetUser.save();
-            return res.json({ success: true, user: { id: targetUser.id, email: targetUser.email, subscriptionTier: null, subscriptionExpiresAt: null, bulletinsUsed: 0 } });
-        }
-
-        const plan = await billingService.getPlanByCode(tier);
-        if (!plan) return res.status(400).json({ error: "Palier d'abonnement inconnu." });
-
-        const durationDays = parseInt(days) > 0 ? parseInt(days) : 30;
-        const now = new Date();
-        targetUser.subscriptionTier = plan.tier || plan.code;
-        targetUser.subscriptionExpiresAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
-        targetUser.bulletinsUsed = 0;
-        targetUser.periodStartedAt = now;
-        targetUser.subscriptionIsTrial = false;
-        await targetUser.save();
-
-        res.json({
-            success: true,
-            user: { id: targetUser.id, email: targetUser.email, subscriptionTier: targetUser.subscriptionTier, subscriptionExpiresAt: targetUser.subscriptionExpiresAt, bulletinsUsed: targetUser.bulletinsUsed }
-        });
-    } catch (e) {
-        console.error('❌ Erreur sur PUT /api/admin/users/:id/subscription :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// PUT /api/admin/users/:id/toggle-block - Blocage / Déblocage d'un compte
-app.put('/api/admin/users/:id/toggle-block', adminMiddleware, async (req, res) => {
-    try {
-        const targetUser = await User.findByPk(req.params.id);
-        if (!targetUser) return res.status(404).json({ error: "Utilisateur non trouvé" });
-
-        targetUser.isBlocked = !targetUser.isBlocked;
-        await targetUser.save();
-
-        res.json({ 
-            success: true, 
-            isBlocked: targetUser.isBlocked, 
-            message: targetUser.isBlocked ? `Compte de ${targetUser.email} suspendu.` : `Compte de ${targetUser.email} réactivé.` 
-        });
-    } catch (e) {
-        console.error('❌ Erreur sur PUT /api/admin/users/:id/toggle-block :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// DELETE /api/admin/users/:id - Suppression d'un compte
-app.delete('/api/admin/users/:id', adminMiddleware, async (req, res) => {
-    try {
-        const targetUser = await User.findByPk(req.params.id);
-        if (!targetUser) return res.status(404).json({ error: "Utilisateur non trouvé" });
-
-        // Nettoyage manuel des associations pour SQLite
-        const periods = await PayrollPeriod.findAll({ where: { userId: targetUser.id } });
-        for (const p of periods) {
-            await PayslipRecord.destroy({ where: { periodId: p.id } });
-        }
-        await PayrollPeriod.destroy({ where: { userId: targetUser.id } });
-        await Transaction.destroy({ where: { userId: targetUser.id } });
-        await Invoice.destroy({ where: { userId: targetUser.id } });
-
-        await targetUser.destroy();
-        res.json({ success: true, message: `Utilisateur ${targetUser.email} supprimé avec succès.` });
-    } catch (e) {
-        console.error('❌ Erreur sur DELETE /api/admin/users/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// GET /api/admin/analytics/countries - Statistiques de trafic par pays
-app.get('/api/admin/analytics/countries', adminMiddleware, async (req, res) => {
-    try {
-        const countryStats = await Visit.findAll({
-            attributes: ['country', [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']],
-            group: ['country'],
-            order: [[Sequelize.literal('count'), 'DESC']]
-        });
-        res.json({ success: true, countryStats });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/admin/analytics/countries :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
+// Routes « admin » : server/routes/admin.js
+require('./routes/admin')(app, { AdminUser, BankLoan, Invoice, JWT_SECRET, License, PayrollPeriod, PayslipRecord, Sequelize, SubscriptionPlan, Transaction, User, Visit, adminAuthMiddleware, bcrypt, billingService, jwt, licenseService });
 
 // ==========================================
 // ROUTES PUBLIQUES DES FORMULES D'ABONNEMENT
@@ -1084,87 +656,6 @@ app.get('/api/billing/invoices/:id/download', authMiddleware, async (req, res) =
         fs.createReadStream(actualPdfPath).pipe(res);
     } catch (e) {
         console.error('❌ Erreur sur GET /api/billing/invoices/:id/download :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// ==========================================
-// ROUTES ADMIN DES FORMULES D'ABONNEMENT (CRUD TARIFS)
-// ==========================================
-
-// GET /api/admin/subscription-plans - Obtenir la liste complète des formules (Admin)
-app.get('/api/admin/subscription-plans', adminMiddleware, async (req, res) => {
-    try {
-        const plans = await SubscriptionPlan.findAll({
-            order: [['price', 'ASC']]
-        });
-        res.json({ success: true, plans });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/admin/subscription-plans :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// POST /api/admin/subscription-plans - Créer une nouvelle formule d'abonnement
-app.post('/api/admin/subscription-plans', adminMiddleware, async (req, res) => {
-    try {
-        const { code, tier, billingCycle, name, bulletinLimit, price, popular, active } = req.body;
-        if (!code || !name || !bulletinLimit || !price) {
-            return res.status(400).json({ error: "Code, nom, volume de bulletins et prix requis" });
-        }
-
-        const newPlan = await SubscriptionPlan.create({
-            code,
-            tier: tier || code,
-            billingCycle: billingCycle || 'monthly',
-            name,
-            bulletinLimit: parseInt(bulletinLimit),
-            price: parseInt(price),
-            popular: Boolean(popular),
-            active: active !== undefined ? Boolean(active) : true
-        });
-
-        res.json({ success: true, plan: newPlan, message: "Formule d'abonnement créée avec succès !" });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/admin/subscription-plans :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// PUT /api/admin/subscription-plans/:id - Modifier une formule d'abonnement
-app.put('/api/admin/subscription-plans/:id', adminMiddleware, async (req, res) => {
-    try {
-        const plan = await SubscriptionPlan.findByPk(req.params.id);
-        if (!plan) return res.status(404).json({ error: "Formule d'abonnement introuvable" });
-
-        const { code, tier, billingCycle, name, bulletinLimit, price, popular, active } = req.body;
-        if (code !== undefined) plan.code = code;
-        if (tier !== undefined) plan.tier = tier;
-        if (billingCycle !== undefined) plan.billingCycle = billingCycle;
-        if (name !== undefined) plan.name = name;
-        if (bulletinLimit !== undefined) plan.bulletinLimit = parseInt(bulletinLimit);
-        if (price !== undefined) plan.price = parseInt(price);
-        if (popular !== undefined) plan.popular = Boolean(popular);
-        if (active !== undefined) plan.active = Boolean(active);
-
-        await plan.save();
-        res.json({ success: true, plan, message: "Formule mise à jour avec succès !" });
-    } catch (e) {
-        console.error('❌ Erreur sur PUT /api/admin/subscription-plans/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// DELETE /api/admin/subscription-plans/:id - Supprimer une formule d'abonnement
-app.delete('/api/admin/subscription-plans/:id', adminMiddleware, async (req, res) => {
-    try {
-        const plan = await SubscriptionPlan.findByPk(req.params.id);
-        if (!plan) return res.status(404).json({ error: "Formule d'abonnement introuvable" });
-
-        await plan.destroy();
-        res.json({ success: true, message: "Formule d'abonnement supprimée." });
-    } catch (e) {
-        console.error('❌ Erreur sur DELETE /api/admin/subscription-plans/:id :', e);
         res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
@@ -1301,79 +792,6 @@ app.post('/api/enterprise/licenses/verify-paystack', async (req, res) => {
     }
 });
 
-// GET /api/admin/licenses - Liste des licences entreprise (Admin)
-app.get('/api/admin/licenses', adminMiddleware, async (req, res) => {
-    try {
-        const licenses = await License.findAll({ order: [['createdAt', 'DESC']] });
-        res.json({ success: true, licenses });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/admin/licenses :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// POST /api/admin/licenses - Créer une nouvelle licence (la clé n'est retournée qu'une fois)
-app.post('/api/admin/licenses', adminMiddleware, async (req, res) => {
-    try {
-        const { companyName, contactEmail, expiresAt, price, notes } = req.body;
-        if (!companyName) return res.status(400).json({ error: "Nom de l'entreprise requis" });
-
-        const license = await License.create({
-            licenseKey: licenseService.generateLicenseKey(),
-            companyName,
-            contactEmail: contactEmail || null,
-            expiresAt: expiresAt || null,
-            price: price !== undefined ? parseInt(price) : 500000,
-            notes: notes || null
-        });
-
-        res.json({ success: true, license, message: "Licence créée avec succès. Transmettez la clé à l'entreprise." });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/admin/licenses :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// PUT /api/admin/licenses/:id - Modifier une licence (prolonger, révoquer, réinitialiser l'activation)
-app.put('/api/admin/licenses/:id', adminMiddleware, async (req, res) => {
-    try {
-        const license = await License.findByPk(req.params.id);
-        if (!license) return res.status(404).json({ error: "Licence introuvable" });
-
-        const { companyName, contactEmail, status, expiresAt, price, notes, resetActivation } = req.body;
-        if (companyName !== undefined) license.companyName = companyName;
-        if (contactEmail !== undefined) license.contactEmail = contactEmail;
-        if (status !== undefined) license.status = status;
-        if (expiresAt !== undefined) license.expiresAt = expiresAt || null;
-        if (price !== undefined) license.price = parseInt(price);
-        if (notes !== undefined) license.notes = notes;
-        if (resetActivation) {
-            license.installationId = null;
-            license.activatedAt = null;
-        }
-
-        await license.save();
-        res.json({ success: true, license, message: "Licence mise à jour avec succès !" });
-    } catch (e) {
-        console.error('❌ Erreur sur PUT /api/admin/licenses/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// DELETE /api/admin/licenses/:id - Supprimer une licence
-app.delete('/api/admin/licenses/:id', adminMiddleware, async (req, res) => {
-    try {
-        const license = await License.findByPk(req.params.id);
-        if (!license) return res.status(404).json({ error: "Licence introuvable" });
-
-        await license.destroy();
-        res.json({ success: true, message: "Licence supprimée." });
-    } catch (e) {
-        console.error('❌ Erreur sur DELETE /api/admin/licenses/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
 // ==========================================
 // ROUTES DES PRÊTS BANCAIRES (SIMULATION CRUD)
 // ==========================================
@@ -1393,87 +811,6 @@ app.get('/api/bank-loans', async (req, res) => {
         res.json({ success: true, loans });
     } catch (e) {
         console.error('❌ Erreur sur GET /api/bank-loans :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// GET /api/admin/bank-loans - Liste complète des offres bancaires (Admin)
-app.get('/api/admin/bank-loans', adminMiddleware, async (req, res) => {
-    try {
-        const loans = await BankLoan.findAll({
-            order: [['country', 'ASC'], ['bankName', 'ASC']]
-        });
-        res.json({ success: true, loans });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/admin/bank-loans :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// POST /api/admin/bank-loans - Créer une nouvelle offre de prêt bancaire
-app.post('/api/admin/bank-loans', adminMiddleware, async (req, res) => {
-    try {
-        const { bankName, loanName, country, interestRate, minAmount, maxAmount, minDurationMonths, maxDurationMonths, description, active } = req.body;
-        if (!bankName || !loanName || !interestRate) {
-            return res.status(400).json({ error: "Nom de banque, nom de prêt et taux d'intérêt requis" });
-        }
-
-        const newLoan = await BankLoan.create({
-            bankName,
-            loanName,
-            country: country || 'CI',
-            interestRate: parseFloat(interestRate),
-            minAmount: parseInt(minAmount) || 500000,
-            maxAmount: parseInt(maxAmount) || 30000000,
-            minDurationMonths: parseInt(minDurationMonths) || 6,
-            maxDurationMonths: parseInt(maxDurationMonths) || 72,
-            description: description || '',
-            active: active !== undefined ? Boolean(active) : true
-        });
-
-        res.json({ success: true, loan: newLoan, message: "Offre de prêt bancaire créée avec succès !" });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/admin/bank-loans :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// PUT /api/admin/bank-loans/:id - Modifier une offre de prêt bancaire
-app.put('/api/admin/bank-loans/:id', adminMiddleware, async (req, res) => {
-    try {
-        const loan = await BankLoan.findByPk(req.params.id);
-        if (!loan) return res.status(404).json({ error: "Offre de prêt introuvable" });
-
-        const { bankName, loanName, country, interestRate, minAmount, maxAmount, minDurationMonths, maxDurationMonths, description, active } = req.body;
-        if (bankName !== undefined) loan.bankName = bankName;
-        if (loanName !== undefined) loan.loanName = loanName;
-        if (country !== undefined) loan.country = country;
-        if (interestRate !== undefined) loan.interestRate = parseFloat(interestRate);
-        if (minAmount !== undefined) loan.minAmount = parseInt(minAmount);
-        if (maxAmount !== undefined) loan.maxAmount = parseInt(maxAmount);
-        if (minDurationMonths !== undefined) loan.minDurationMonths = parseInt(minDurationMonths);
-        if (maxDurationMonths !== undefined) loan.maxDurationMonths = parseInt(maxDurationMonths);
-        if (description !== undefined) loan.description = description;
-        if (active !== undefined) loan.active = Boolean(active);
-
-        await loan.save();
-        res.json({ success: true, loan, message: "Offre mise à jour !" });
-    } catch (e) {
-        console.error('❌ Erreur sur PUT /api/admin/bank-loans/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// DELETE /api/admin/bank-loans/:id - Supprimer une offre de prêt bancaire
-app.delete('/api/admin/bank-loans/:id', adminMiddleware, async (req, res) => {
-    try {
-        const loan = await BankLoan.findByPk(req.params.id);
-        if (!loan) return res.status(404).json({ error: "Offre de prêt introuvable" });
-
-        await loan.destroy();
-        res.json({ success: true, message: "Offre de prêt supprimée." });
-    } catch (e) {
-        console.error('❌ Erreur sur DELETE /api/admin/bank-loans/:id :', e);
         res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
     }
 });
@@ -1692,6 +1029,18 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
             return res.status(400).json({ error: "Aucun employé trouvé pour la génération." });
         }
 
+        // Cycle de paie : une période clôturée est figée et refuse la régénération.
+        // Vérifié AVANT le quota : « période clôturée » est la vraie raison du refus.
+        let period = await PayrollPeriod.findOne({ where: { userId: userObj.id, mois, annee, country } });
+        if (period && period.status === cyclePaie.STATUTS.CLOTUREE) {
+            if (finalDataPath && fs.existsSync(finalDataPath)) fs.unlinkSync(finalDataPath);
+            if (finalTemplatePath && fs.existsSync(finalTemplatePath)) fs.unlinkSync(finalTemplatePath);
+            return res.status(409).json({
+                error: "Cette période est clôturée : ses bulletins ne peuvent plus être régénérés. Rouvrez-la (avec un motif) dans « Cycle de paie », ou régularisez sur le mois suivant.",
+                reason: 'periode_cloturee'
+            });
+        }
+
         const plan = await billingService.getPlanByCode(userObj.subscriptionTier);
         await billingService.ensureFreeMonthlyPeriod(userObj);
         const quotaCheck = billingService.checkQuota(userObj, plan, employeeCount);
@@ -1706,15 +1055,15 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
             });
         }
 
-        // Historique de paie (fondation des futures déclarations CNPS/ITS/CMU) : la période est
-        // validée dès sa première génération — pas d'étape de confirmation manuelle séparée — et
-        // reste régénérable à volonté pour permettre de corriger une erreur de saisie.
-        let period = await PayrollPeriod.findOne({ where: { userId: userObj.id, mois, annee, country } });
+        // Cycle de paie : une génération crée la période en brouillon. Régénérer une
+        // période validée la repasse en brouillon (ses chiffres changent, il faut
+        // les recontrôler). Le cas « clôturée » a été refusé plus haut.
+        const regeneration = !!period;
         if (!period) {
-            period = await PayrollPeriod.create({ userId: userObj.id, mois, annee, country, status: 'validated', validatedAt: new Date() });
-        } else if (period.status !== 'validated') {
-            period.status = 'validated';
-            period.validatedAt = new Date();
+            period = await PayrollPeriod.create({ userId: userObj.id, mois, annee, country, status: cyclePaie.STATUTS.BROUILLON });
+        } else if (period.status !== cyclePaie.STATUTS.BROUILLON) {
+            period.status = cyclePaie.STATUTS.BROUILLON;
+            period.validatedAt = null;
             await period.save();
         }
 
@@ -1776,7 +1125,8 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
                 companyInfoOverride,
                 leavesToProcess,
                 docxTemplateBase64,
-                templateStyleFinal
+                templateStyleFinal,
+                { baseJoursPaie: userPourLogo?.companyBaseJoursPaie, zoneTransport: userPourLogo?.companyZoneTransport }
              );
         } else {
              result = await payrollService.processPayrollFile(
@@ -1789,7 +1139,8 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
                 sheetName,
                 leavesToProcess,
                 docxTemplateBase64,
-                templateStyleFinal
+                templateStyleFinal,
+                { baseJoursPaie: userPourLogo?.companyBaseJoursPaie, zoneTransport: userPourLogo?.companyZoneTransport }
              );
         }
 
@@ -1816,6 +1167,11 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
         await userObj.save();
 
         console.log(`✅ ${result.count} bulletins (${result.type}) générés.`);
+        await journaliser({
+            req, action: regeneration ? 'periode.regeneree' : 'periode.generee', entite: 'periode', entiteId: period.id,
+            libelle: `${regeneration ? 'Régénération' : 'Génération'} de la paie ${String(mois).padStart(2, '0')}/${annee} — ${result.count} bulletin(s)`,
+            details: { mois, annee, bulletins: result.count }
+        });
 
         res.json({
             success: true,
@@ -1825,6 +1181,7 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
             periodId: period.id,
             periodStatus: period.status,
             leavesProcessed: leavesToProcess,
+            avertissements: result.avertissements || [],
             ...billingService.getSubscriptionSnapshot(userObj, plan),
             stats: {
                 employeeCount: result.count,
@@ -1840,98 +1197,8 @@ app.post('/api/rh/generate-pay-slips', authMiddleware, cpUpload, async (req, res
     }
 });
 
-// ─── Périodes de paie (historique + validation — fondation des futures déclarations) ──────
-
-// GET /api/rh/periods - Liste des périodes de l'utilisateur connecté
-app.get('/api/rh/periods', authMiddleware, async (req, res) => {
-    try {
-        const periods = await PayrollPeriod.findAll({
-            where: { userId: req.user.id },
-            order: [['annee', 'DESC'], ['mois', 'DESC']]
-        });
-        const periodsWithCount = await Promise.all(periods.map(async (p) => {
-            const employeeCount = await PayslipRecord.count({ where: { periodId: p.id } });
-            return { ...p.toJSON(), employeeCount };
-        }));
-        res.json({ success: true, periods: periodsWithCount });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/rh/periods :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// GET /api/rh/periods/:id - Détail d'une période + ses bulletins enregistrés
-app.get('/api/rh/periods/:id', authMiddleware, async (req, res) => {
-    try {
-        const period = await PayrollPeriod.findByPk(req.params.id);
-        if (!period || period.userId !== req.user.id) {
-            return res.status(404).json({ error: "Période introuvable" });
-        }
-        const records = await PayslipRecord.findAll({ where: { periodId: period.id } });
-        res.json({ success: true, period, records });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/rh/periods/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// ─── Déclarations sociales / fiscales (CNPS, ITS, FDFP...) ────────────────────
-// Générées à partir de l'historique de paie figé (PayslipRecord). Ce sont des
-// AIDES À LA SAISIE sur e-CNPS / e-Impôts, pas des télédéclarations.
-//
-// GET /api/rh/declarations?type=cnps|cnps-liste&format=pdf|xlsx|csv&periodIds=1,2,3
-//   periodIds : une période (mensuel) ou trois d'un même trimestre (trimestriel).
-app.get('/api/rh/declarations', authMiddleware, async (req, res) => {
-    try {
-        const type = String(req.query.type || '');
-        const format = String(req.query.format || 'pdf');
-        const ids = String(req.query.periodIds || req.query.periodId || '')
-            .split(',').map(s => parseInt(s.trim(), 10)).filter(Number.isFinite);
-        if (!ids.length) return res.status(400).json({ error: 'periodIds requis.' });
-
-        const periods = await PayrollPeriod.findAll({ where: { id: ids, userId: req.user.id } });
-        if (periods.length !== ids.length) {
-            return res.status(404).json({ error: "Période(s) introuvable(s) ou non autorisée(s)." });
-        }
-        if (periods.some(p => (p.country || 'CI') !== 'CI')) {
-            return res.status(400).json({ error: "Les déclarations ne sont disponibles que pour la Côte d'Ivoire." });
-        }
-
-        const records = [];
-        for (const p of periods) {
-            const recs = await PayslipRecord.findAll({ where: { periodId: p.id } });
-            records.push(...recs.map(r => r.toJSON()));
-        }
-
-        const u = await User.findByPk(req.user.id);
-        const entreprise = {
-            raisonSociale: u?.companyName || '',
-            numeroCnps: u?.companyNumeroCnps || '',
-            numeroEmployeur: u?.companyNumeroEmployeur || u?.companyNumeroCnps || '',
-            numeroContribuable: u?.companyNumeroContribuable || '',
-            adresse: u?.companyAdresse || '',
-            telephone: u?.companyTelephone || '',
-            ville: u?.companyVille || '',
-            signataireNom: u?.companySignataireNom || '',
-            tauxAtMp: (u?.companyTauxAtMp ?? null),
-            cnpsVersementMensuel: (u?.companyCnpsVersementMensuel ?? null)
-        };
-
-        const out = await genererDeclaration({
-            type, format, entreprise,
-            periodes: periods.map(p => ({ mois: p.mois, annee: p.annee })),
-            records
-        });
-
-        res.setHeader('Content-Type', out.mime);
-        res.setHeader('Content-Disposition', `attachment; filename="${out.filename}"`);
-        if (out.partielle) res.setHeader('X-Declaration-Partielle', '1');
-        return res.send(out.buffer);
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/rh/declarations :', e);
-        res.status(400).json({ error: e.message || "Génération impossible." });
-    }
-});
+// Routes « paieGouvernance » : server/routes/paieGouvernance.js
+require('./routes/paieGouvernance')(app, { AuditLog, PayrollPeriod, PayslipRecord, TYPES_ANNUELS, User, authMiddleware, cyclePaie, genererDeclaration, journaliser });
 
 // Résout une plage de période (mois/année début → mois/année fin) depuis les query params,
 // avec repli sur l'année civile en cours si rien n'est fourni (comportement par défaut inchangé).
@@ -2159,7 +1426,11 @@ app.get('/api/rh/analytics/company', authMiddleware, async (req, res) => {
 // billingService.js.
 app.post('/api/rh/generate-single-payslip', singlePayslipAuth, async (req, res) => {
     try {
-        const { employee, templateStyle } = req.body;
+        // let : la fiche enregistrée est fusionnée plus bas (employé de l'annuaire).
+        // En const, cette réassignation levait une TypeError avalée par le catch
+        // des absences : ni la fiche ni les congés pris n'étaient jamais pris en compte.
+        let { employee } = req.body;
+        const { templateStyle } = req.body;
         if (!employee || !employee.nom) {
             return res.status(400).json({ error: 'Données employé manquantes' });
         }
@@ -2174,6 +1445,20 @@ app.post('/api/rh/generate-single-payslip', singlePayslipAuth, async (req, res) 
         const userObj = anonymous ? null : await User.findByPk(req.user.id);
         if (!anonymous && !userObj) {
             return res.status(404).json({ error: "Utilisateur non trouvé" });
+        }
+        if (!anonymous) {
+            const moisBulletin = parseInt(employee.mois || new Date().getMonth() + 1);
+            const anneeBulletin = parseInt(employee.annee || new Date().getFullYear());
+            const close = await PayrollPeriod.findOne({ where: { userId: req.user.id, mois: moisBulletin, annee: anneeBulletin, status: cyclePaie.STATUTS.CLOTUREE } });
+            if (close) {
+                return res.status(409).json({ error: "Ce mois est clôturé : aucun bulletin ne peut plus y être généré. Rouvrez la période dans « Cycle de paie » ou régularisez sur le mois suivant.", reason: 'periode_cloturee' });
+            }
+        }
+        if (employee.base_jours_paie == null && userObj?.companyBaseJoursPaie) {
+            employee.base_jours_paie = userObj.companyBaseJoursPaie;
+        }
+        if (!employee.zone_transport && userObj?.companyZoneTransport) {
+            employee.zone_transport = userObj.companyZoneTransport;
         }
 
         // ── Enrichissement avec les congés réellement pris (depuis la BDD des absences)
@@ -2420,7 +1705,7 @@ app.post('/api/rh/preview-bulletin-style', authMiddleware, async (req, res) => {
             salaire_base: 250000, sursalaire: 50000, prime_transport: 30000,
             primes: [{ libelle: 'Prime de responsabilité', montant: 40000 }],
             mois: String(new Date().getMonth() + 1), annee: String(new Date().getFullYear()),
-            virement: true
+            virement: true, base_jours_paie: userObj.companyBaseJoursPaie, zone_transport: userObj.companyZoneTransport
         };
         const calculs = payrollService.calculateSinglePayroll(employee);
         const companyInfo = {
@@ -2584,185 +1869,6 @@ app.get('/api/rh/download/:filename', (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════
-// ROUTES ADMIN — Plans d'abonnement & Licences Entreprise
-// ═══════════════════════════════════════════════════════
-
-/** GET /api/admin/subscription-plans */
-app.get('/api/admin/subscription-plans', adminAuthMiddleware, async (req, res) => {
-    try {
-        const plans = await SubscriptionPlan.findAll({ order: [['price', 'ASC']] });
-        res.json({ plans });
-    } catch (e) {
-        console.error('Erreur lecture plans:', e.message);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-/** POST /api/admin/subscription-plans — Créer un nouveau plan */
-app.post('/api/admin/subscription-plans', adminAuthMiddleware, async (req, res) => {
-    try {
-        const { code, tier, billingCycle, name, bulletinLimit, price, popular, active } = req.body;
-        if (!code || !name || price === undefined || bulletinLimit === undefined) {
-            return res.status(400).json({ error: 'Champs requis : code, name, price, bulletinLimit' });
-        }
-        const plan = await SubscriptionPlan.create({
-            code, tier: tier || code, billingCycle: billingCycle || 'monthly',
-            name, bulletinLimit: parseInt(bulletinLimit),
-            price: parseInt(price), popular: !!popular, active: active !== false
-        });
-        res.json({ plan });
-    } catch (e) {
-        if (e.name === 'SequelizeUniqueConstraintError') {
-            return res.status(409).json({ error: `Un plan avec le code "${req.body.code}" existe déjà.` });
-        }
-        console.error('Erreur création plan:', e.message);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-/** PUT /api/admin/subscription-plans/:id — Modifier un plan */
-app.put('/api/admin/subscription-plans/:id', adminAuthMiddleware, async (req, res) => {
-    try {
-        const plan = await SubscriptionPlan.findByPk(req.params.id);
-        if (!plan) return res.status(404).json({ error: 'Plan introuvable' });
-        const allowed = ['name', 'price', 'bulletinLimit', 'active', 'popular', 'tier', 'billingCycle', 'code'];
-        for (const key of allowed) {
-            if (req.body[key] !== undefined) {
-                plan[key] = (key === 'price' || key === 'bulletinLimit') ? parseInt(req.body[key]) : req.body[key];
-            }
-        }
-        await plan.save();
-        res.json({ plan });
-    } catch (e) {
-        console.error('Erreur mise à jour plan:', e.message);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-/** DELETE /api/admin/subscription-plans/:id */
-app.delete('/api/admin/subscription-plans/:id', adminAuthMiddleware, async (req, res) => {
-    try {
-        const plan = await SubscriptionPlan.findByPk(req.params.id);
-        if (!plan) return res.status(404).json({ error: 'Plan introuvable' });
-        await plan.destroy();
-        res.json({ success: true });
-    } catch (e) {
-        console.error('Erreur suppression plan:', e.message);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// ═══════════════════════════════════════════════════════
-// ROUTES ADMIN — Licences Entreprise (CRUD + génération)
-// ═══════════════════════════════════════════════════════
-
-/** GET /api/admin/licenses */
-app.get('/api/admin/licenses', adminAuthMiddleware, async (req, res) => {
-    try {
-        const licenses = await License.findAll({ order: [['createdAt', 'DESC']] });
-        res.json({ licenses });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/admin/licenses :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-/** POST /api/admin/licenses — Créer une licence entreprise avec clé générée automatiquement */
-app.post('/api/admin/licenses', adminAuthMiddleware, async (req, res) => {
-    try {
-        const { companyName, contactEmail, expiresAt, price, notes } = req.body;
-        if (!companyName) return res.status(400).json({ error: 'Le nom de l\'entreprise est requis' });
-
-        // Génération clé unique format : ONDA-XXXX-XXXX-XXXX
-        const key = 'ONDA-' + crypto.randomBytes(6).toString('hex').toUpperCase().match(/.{4}/g).join('-');
-
-        const license = await License.create({
-            licenseKey: key,
-            companyName,
-            contactEmail: contactEmail || null,
-            status: 'active',
-            expiresAt: expiresAt ? new Date(expiresAt) : null,
-            price: parseInt(price) || 0,
-            notes: notes || null
-        });
-
-        // Envoyer la clé par email si contactEmail fourni
-        if (contactEmail && emailService.sendEmail) {
-            try {
-                await emailService.sendEmail({
-                    to: contactEmail,
-                    subject: `Votre licence ONDA RH Pro — ${companyName}`,
-                    html: `
-                        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                            <h2 style="color: #4f46e5;">🎉 Votre licence ONDA RH Pro est prête</h2>
-                            <p>Bonjour,</p>
-                            <p>Votre licence ONDA RH Pro pour <strong>${companyName}</strong> a été générée.</p>
-                            <div style="background: #f8fafc; border: 2px solid #4f46e5; border-radius: 12px; padding: 20px; margin: 20px 0; text-align: center;">
-                                <p style="margin: 0; color: #64748b; font-size: 0.85rem;">CLÉ DE LICENCE</p>
-                                <p style="margin: 8px 0; font-size: 1.5rem; font-weight: 800; letter-spacing: 0.1em; color: #1e293b;">${key}</p>
-                                ${expiresAt ? `<p style="margin: 0; color: #ef4444; font-size: 0.8rem;">Expire le : ${new Date(expiresAt).toLocaleDateString('fr-FR')}</p>` : '<p style="margin: 0; color: #10b981; font-size: 0.8rem;">✓ Licence sans expiration</p>'}
-                            </div>
-                            <p>Rendez-vous sur <a href="https://eonda.online" style="color: #4f46e5;">eonda.online</a> et saisissez cette clé dans votre espace client pour activer votre accès Entreprise.</p>
-                            <p style="color: #64748b; font-size: 0.85rem;">Support : info@eonda.online | WhatsApp : +225 151 144 337</p>
-                        </div>
-                    `
-                });
-            } catch (mailErr) {
-                console.warn('⚠️ Email licence non envoyé:', mailErr.message);
-            }
-        }
-
-        res.json({ license });
-    } catch (e) {
-        console.error('Erreur création licence:', e.message);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-/** PUT /api/admin/licenses/:id — Modifier / Révoquer / Réactiver une licence */
-app.put('/api/admin/licenses/:id', adminAuthMiddleware, async (req, res) => {
-    try {
-        const license = await License.findByPk(req.params.id);
-        if (!license) return res.status(404).json({ error: 'Licence introuvable' });
-        const allowed = ['status', 'expiresAt', 'companyName', 'contactEmail', 'price', 'notes'];
-        for (const key of allowed) {
-            if (req.body[key] !== undefined) {
-                license[key] = key === 'price' ? parseInt(req.body[key]) : req.body[key];
-            }
-        }
-        await license.save();
-        res.json({ license });
-    } catch (e) {
-        console.error('Erreur mise à jour licence:', e.message);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-/** DELETE /api/admin/licenses/:id */
-app.delete('/api/admin/licenses/:id', adminAuthMiddleware, async (req, res) => {
-    try {
-        const license = await License.findByPk(req.params.id);
-        if (!license) return res.status(404).json({ error: 'Licence introuvable' });
-        await license.destroy();
-        res.json({ success: true });
-    } catch (e) {
-        console.error('❌ Erreur sur DELETE /api/admin/licenses/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-/** GET /api/billing/plans — Plans publics (pour BillingModal côté client) */
-app.get('/api/billing/plans', async (req, res) => {
-    try {
-        const plans = await SubscriptionPlan.findAll({ where: { active: true }, order: [['price', 'ASC']] });
-        res.json({ plans });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/billing/plans :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// ═══════════════════════════════════════════════════════
 // ROUTES RH (EMPLOYÉS, ABSENCES, FORMATIONS, EVALUATIONS)
 // ═══════════════════════════════════════════════════════
 
@@ -2785,6 +1891,8 @@ const CHAMPS_EMPLOYE_SNAKE_VERS_CAMEL = {
     salaire_net: 'salaireNet',
     salaire_base: 'salaireBase',
     statut_salarie: 'statutSalarie',
+    zone_transport: 'zoneTransport',
+    mode_paiement: 'modePaiement',
     categorie_professionnelle: 'categorieProfessionnelle',
     cumul_brut_initial: 'cumulBrutInitial',
     cumul_net_imposable_initial: 'cumulNetImposableInitial',
@@ -2823,737 +1931,14 @@ function employeVersClient(emp) {
     return sortie;
 }
 
-app.get('/api/hr/employees', authMiddleware, async (req, res) => {
-    try {
-        const employees = await Employee.findAll({ where: { userId: req.user.id } });
-        res.json({ employees: employees.map(employeVersClient) });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/hr/employees :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-app.post('/api/hr/employees', authMiddleware, async (req, res) => {
-    try {
-        const emp = await Employee.create({ ...employeVersModele(req.body), userId: req.user.id });
-        res.json({ employee: employeVersClient(emp) });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/hr/employees :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-app.put('/api/hr/employees/:id', authMiddleware, async (req, res) => {
-    try {
-        const emp = await Employee.findOne({ where: { id: req.params.id, userId: req.user.id } });
-        if (!emp) return res.status(404).json({ error: 'Employé introuvable' });
-        await emp.update(employeVersModele(req.body));
-        res.json({ employee: employeVersClient(emp) });
-    } catch (e) {
-        console.error('❌ Erreur sur PUT /api/hr/employees/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-app.delete('/api/hr/employees/:id', authMiddleware, async (req, res) => {
-    try {
-        const emp = await Employee.findOne({ where: { id: req.params.id, userId: req.user.id } });
-        if (!emp) return res.status(404).json({ error: 'Employé introuvable' });
-        await emp.destroy();
-        res.json({ success: true });
-    } catch (e) {
-        console.error('❌ Erreur sur DELETE /api/hr/employees/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
+// Routes « rhDonnees » : server/routes/rhDonnees.js
+require('./routes/rhDonnees')(app, { Absence, Employee, Evaluation, Formation, Template, authMiddleware, differences, employeVersClient, employeVersModele, journaliser });
 
-// --- Modèles de documents ---
-// L'id est fourni par le client (créé côté frontend avant le premier
-// enregistrement) : on cherche donc la ligne existante avant de choisir entre
-// mise à jour et création, plutôt que d'exposer un POST/PUT séparés.
-app.get('/api/hr/templates', authMiddleware, async (req, res) => {
-    try {
-        const lignes = await Template.findAll({ where: { userId: req.user.id } });
-        const templates = lignes.map(l => JSON.parse(l.payload));
-        res.json({ templates });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/hr/templates :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-app.post('/api/hr/templates', authMiddleware, async (req, res) => {
-    try {
-        const templateId = req.body.id ? String(req.body.id) : ('tpl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
-        const template = { ...req.body, id: templateId };
-        const payload = JSON.stringify(template);
-        const existante = await Template.findOne({ where: { templateId, userId: req.user.id } });
-        if (existante) {
-            existante.payload = payload;
-            await existante.save();
-        } else {
-            await Template.create({ templateId, userId: req.user.id, payload });
-        }
-        res.json({ template });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/hr/templates :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-app.delete('/api/hr/templates/:id', authMiddleware, async (req, res) => {
-    try {
-        await Template.destroy({ where: { templateId: req.params.id, userId: req.user.id } });
-        res.json({ success: true });
-    } catch (e) {
-        console.error('❌ Erreur sur DELETE /api/hr/templates/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
+// Routes « ia » : server/routes/ia.js
+require('./routes/ia')(app, { aiService });
 
-// --- Absences / Congés ---
-// Le modèle Absence n'a pas de colonne `employeNom` — le nom vient de
-// l'employé lié (`include: [Employee]`), jamais dupliqué en stockage pour ne
-// pas diverger si la fiche est renommée. Sans cet aplatissement, le calendrier
-// (CongesManager.vue) recevait `employeNom: undefined` et plantait sur
-// `.split(' ')` dès que l'absence provenait du serveur plutôt que du repli
-// localStorage.
-function absenceVersClient(abs) {
-    const source = abs.toJSON ? abs.toJSON() : abs;
-    const emp = source.Employee;
-    const nomComplet = emp ? `${emp.prenom || ''} ${emp.nom || ''}`.trim() : '';
-    return { ...source, employeNom: nomComplet || 'Inconnu' };
-}
-
-app.get('/api/hr/absences', authMiddleware, async (req, res) => {
-    try {
-        const absences = await Absence.findAll({ where: { userId: req.user.id }, include: [Employee] });
-        res.json({ absences: absences.map(absenceVersClient) });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/hr/absences :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-app.post('/api/hr/absences', authMiddleware, async (req, res) => {
-    try {
-        const { employeNom, ...corps } = req.body; // ignoré : recalculé depuis l'employé lié
-        const created = await Absence.create({ ...corps, userId: req.user.id });
-        const abs = await Absence.findByPk(created.id, { include: [Employee] });
-        res.json({ absence: absenceVersClient(abs) });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/hr/absences :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-app.put('/api/hr/absences/:id', authMiddleware, async (req, res) => {
-    try {
-        const abs = await Absence.findOne({ where: { id: req.params.id, userId: req.user.id } });
-        if (!abs) return res.status(404).json({ error: 'Absence introuvable' });
-        const { employeNom, ...corps } = req.body;
-        await abs.update(corps);
-        const misAJour = await Absence.findByPk(abs.id, { include: [Employee] });
-        res.json({ absence: absenceVersClient(misAJour) });
-    } catch (e) {
-        console.error('❌ Erreur sur PUT /api/hr/absences/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-app.delete('/api/hr/absences/:id', authMiddleware, async (req, res) => {
-    try {
-        const abs = await Absence.findOne({ where: { id: req.params.id, userId: req.user.id } });
-        if (!abs) return res.status(404).json({ error: 'Absence introuvable' });
-        await abs.destroy();
-        res.json({ success: true });
-    } catch (e) {
-        console.error('❌ Erreur sur DELETE /api/hr/absences/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// --- Formations ---
-app.get('/api/hr/formations', authMiddleware, async (req, res) => {
-    try {
-        const formations = await Formation.findAll({ where: { userId: req.user.id }, include: [Employee] });
-        res.json({ formations });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/hr/formations :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-app.post('/api/hr/formations', authMiddleware, async (req, res) => {
-    try {
-        const form = await Formation.create({ ...req.body, userId: req.user.id });
-        res.json({ formation: form });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/hr/formations :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-app.put('/api/hr/formations/:id', authMiddleware, async (req, res) => {
-    try {
-        const form = await Formation.findOne({ where: { id: req.params.id, userId: req.user.id } });
-        if (!form) return res.status(404).json({ error: 'Formation introuvable' });
-        await form.update(req.body);
-        res.json({ formation: form });
-    } catch (e) {
-        console.error('❌ Erreur sur PUT /api/hr/formations/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-app.delete('/api/hr/formations/:id', authMiddleware, async (req, res) => {
-    try {
-        const form = await Formation.findOne({ where: { id: req.params.id, userId: req.user.id } });
-        if (!form) return res.status(404).json({ error: 'Formation introuvable' });
-        await form.destroy();
-        res.json({ success: true });
-    } catch (e) {
-        console.error('❌ Erreur sur DELETE /api/hr/formations/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// --- Evaluations ---
-app.get('/api/hr/evaluations', authMiddleware, async (req, res) => {
-    try {
-        const evaluations = await Evaluation.findAll({ where: { userId: req.user.id }, include: [Employee] });
-        res.json({ evaluations });
-    } catch (e) {
-        console.error('❌ Erreur sur GET /api/hr/evaluations :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-app.post('/api/hr/evaluations', authMiddleware, async (req, res) => {
-    try {
-        const eval = await Evaluation.create({ ...req.body, userId: req.user.id });
-        res.json({ evaluation: eval });
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/hr/evaluations :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-app.put('/api/hr/evaluations/:id', authMiddleware, async (req, res) => {
-    try {
-        const eval = await Evaluation.findOne({ where: { id: req.params.id, userId: req.user.id } });
-        if (!eval) return res.status(404).json({ error: 'Evaluation introuvable' });
-        await eval.update(req.body);
-        res.json({ evaluation: eval });
-    } catch (e) {
-        console.error('❌ Erreur sur PUT /api/hr/evaluations/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-app.delete('/api/hr/evaluations/:id', authMiddleware, async (req, res) => {
-    try {
-        const eval = await Evaluation.findOne({ where: { id: req.params.id, userId: req.user.id } });
-        if (!eval) return res.status(404).json({ error: 'Evaluation introuvable' });
-        await eval.destroy();
-        res.json({ success: true });
-    } catch (e) {
-        console.error('❌ Erreur sur DELETE /api/hr/evaluations/:id :', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-// ═══════════════════════════════════════════════════════
-// ROUTES IA - OpenRouter
-// ═══════════════════════════════════════════════════════
-
-// Ces deux routes sont volontairement publiques (simulateur fiscal, sans
-// compte à créer) — donc jamais protégées par des crédits. Sans aucun
-// garde-fou, elles restaient un robinet à appels IA totalement ouvert à
-// quiconque sur Internet. Limiteur mémoire minimal (par IP), suffisant pour
-// écarter le scraping/abus automatisé sans exiger de connexion.
-const aiRateLimitHits = new Map();
-const AI_RATE_LIMIT_MAX = 10;
-const AI_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 heure
-function limiterIaPublique(req, res, next) {
-    const ip = req.ip || req.connection?.remoteAddress || 'inconnu';
-    const now = Date.now();
-    const entry = aiRateLimitHits.get(ip);
-    if (!entry || now - entry.debut > AI_RATE_LIMIT_WINDOW_MS) {
-        aiRateLimitHits.set(ip, { debut: now, count: 1 });
-        return next();
-    }
-    if (entry.count >= AI_RATE_LIMIT_MAX) {
-        return res.status(429).json({ error: 'Trop de requêtes. Réessayez dans quelques minutes.' });
-    }
-    entry.count++;
-    next();
-}
-// Purge périodique pour ne pas laisser grossir la map indéfiniment.
-setInterval(() => {
-    const now = Date.now();
-    for (const [ip, entry] of aiRateLimitHits) {
-        if (now - entry.debut > AI_RATE_LIMIT_WINDOW_MS) aiRateLimitHits.delete(ip);
-    }
-}, AI_RATE_LIMIT_WINDOW_MS).unref();
-
-/**
- * POST /api/ai/analyse
- * Analyse complète de la situation financière d'une entreprise
- */
-app.post('/api/ai/analyse', limiterIaPublique, async (req, res) => {
-    try {
-        const { entreprise, resultats, projections } = req.body;
-        if (!entreprise || !entreprise.ca) {
-            return res.status(400).json({ error: 'Données entreprise manquantes' });
-        }
-        const analyse = await aiService.analyserEntreprise({ entreprise, resultats, projections });
-        res.json({ success: true, analyse });
-    } catch (e) {
-        console.error('Erreur IA analyse:', e.message);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-/**
- * POST /api/ai/chat
- * Réponse à une question spécifique du chef d'entreprise
- */
-app.post('/api/ai/chat', limiterIaPublique, async (req, res) => {
-    try {
-        const { question, contexte } = req.body;
-        if (!question) {
-            return res.status(400).json({ error: 'Question manquante' });
-        }
-        const reponse = await aiService.repondreQuestion(question, contexte || {});
-        res.json({ success: true, reponse });
-    } catch (e) {
-        console.error('Erreur IA chat:', e.message);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-/**
- * GET /api/ai/models
- * Retourne le modèle IA actuellement configuré
- */
-app.get('/api/ai/models', (req, res) => {
-    res.json({
-        current: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
-        available: [
-            { id: 'google/gemini-2.0-flash-exp:free', name: 'Gemini 2.0 Flash (Gratuit)' },
-            { id: 'anthropic/claude-3-haiku', name: 'Claude 3 Haiku (Équilibré)' },
-            { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini (OpenAI)' },
-            { id: 'meta-llama/llama-3.1-8b-instruct:free', name: 'Llama 3.1 8B (Gratuit)' },
-        ]
-    });
-});
-
-/**
- * POST /api/rh/analyze-pdf-template
- * Reconstruit le modèle uploadé par le client en gabarit HTML.
- *
- * Deux voies, dans cet ordre :
- *
- *  1. DÉTERMINISTE (docengine) — quand le PDF a une couche texte. On lit la
- *     géométrie réelle du fichier : runs de texte, filets, cadres, aplats. Le
- *     résultat est exact, reproductible, instantané et gratuit. L'IA n'intervient
- *     que pour nommer les variables que le lexique métier n'a pas tranchées.
- *
- *  2. VISION IA — repli pour les documents scannés, qui n'ont aucune couche
- *     exploitable. Le modèle lit l'image et reconstruit la mise en page, puis
- *     vérifie son propre rendu.
- *
- * Les deux voies peuvent appeler un modèle IA (nommage de variable, contrôle
- * de conformité, ou reconstruction complète en vision) : un abonnement payant
- * actif donne un accès illimité, sinon chaque appel consomme un crédit.
- */
-app.post('/api/rh/analyze-pdf-template', authMiddleware, async (req, res) => {
-    try {
-        if (!(await gateAiAccess(req, res))) return;
-    } catch (e) {
-        console.error('❌ Erreur sur POST /api/rh/analyze-pdf-template :', e);
-        return res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-    const { imageBase64, textItems, pageSize, refinePasses, docType, fileBase64, engine: forced } = req.body;
-
-    // ── Voie 1 : extraction déterministe ──
-    if (fileBase64 && forced !== 'ai') {
-        try {
-            const buffer = decodeDataUrl(fileBase64);
-            const result = await docEngine.buildTemplate(buffer, {
-                filename: req.body.filename || 'modele.pdf',
-                nature: natureFor(docType),
-                minConfidence: 0.6,
-                // Bulletin : aucune IA dans la détection des variables, même bornée à
-                // un catalogue fermé — demande explicite. Ce qui n'est pas reconnu
-                // par le lexique déterministe reste du texte fixe du modèle importé.
-                useAi: docType !== 'payslip'
-            });
-
-            if (result.ok) {
-                // Contrôle de conformité : on remet le gabarit produit face au
-                // document d'origine et le modèle relève les écarts. Il constate,
-                // il ne corrige pas — le gabarit reste le produit d'une chaîne
-                // déterministe, on y ajoute seulement un regard.
-                let conformity = null;
-                if (imageBase64 && req.body.checkConformity !== false) {
-                    conformity = await checkConformity({
-                        renderPng: (html) => templateEngine.renderTemplateToPng(html),
-                        askModel: (prompt, images) => aiService.callOpenRouter([{
-                            role: 'user',
-                            content: [
-                                { type: 'text', text: prompt },
-                                ...images.map(url => ({ type: 'image_url', image_url: { url } }))
-                            ]
-                        }], { maxTokens: 1200, temperature: 0 })
-                    }, {
-                        html: result.html,
-                        originalImage: imageBase64,
-                        variables: result.variables,
-                        unmapped: result.unmapped
-                    });
-                }
-
-                return res.json({
-                    success: true,
-                    engine: 'deterministic',
-                    conformity,
-                    engineVersion: result.engineVersion,
-                    htmlTemplate: result.html,
-                    nature: result.nature,
-                    variables: result.variables,
-                    // Emplacements repérés mais non rattachés au modèle de
-                    // données : l'interface peut proposer à l'utilisateur de leur
-                    // associer une donnée, plutôt que de les laisser vides.
-                    unmapped: result.unmapped,
-                    stats: result.stats,
-                    diagnostics: result.diagnostics
-                });
-            }
-            console.log(`Moteur déterministe indisponible (${result.reason}) : repli sur la vision IA.`);
-        } catch (e) {
-            // Un PDF exotique ne doit pas faire échouer la requête : on bascule.
-            console.warn('Extraction déterministe impossible, repli sur la vision IA :', e.message);
-        }
-    }
-
-    // ── Voie 2 : vision IA ──
-    try {
-        if (!imageBase64) return res.status(400).json({ error: 'Image manquante' });
-
-        let htmlTemplate = await aiService.rebuildDocumentTemplate(imageBase64, textItems, pageSize, docType);
-
-        // Boucle de vérification : on rend le HTML produit, on le remontre au modèle
-        // à côté de l'original, et il corrige ses propres écarts. C'est ce qui fait
-        // la différence entre "ressemblant" et "identique".
-        const requested = parseInt(refinePasses, 10);
-        const passes = Math.min(Number.isNaN(requested) ? 1 : Math.max(requested, 0), 3);
-        for (let i = 0; i < passes; i++) {
-            try {
-                const renderedImage = await templateEngine.renderTemplateToPng(htmlTemplate);
-                htmlTemplate = await aiService.refineDocumentTemplate(imageBase64, renderedImage, htmlTemplate, docType);
-            } catch (refineErr) {
-                // Le raffinage est un bonus : s'il échoue (Chrome absent, quota IA),
-                // on livre la première passe plutôt que de perdre tout le travail.
-                console.warn('Passe de raffinage ignorée:', refineErr.message);
-                break;
-            }
-        }
-
-        res.json({ success: true, engine: 'ai-vision', engineVersion: 0, htmlTemplate });
-    } catch (e) {
-        console.error('Erreur IA Auto-Mapping:', e.message);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-/** Data URL ou base64 nu → Buffer */
-function decodeDataUrl(value) {
-    const comma = value.indexOf(',');
-    const payload = value.startsWith('data:') && comma > 0 ? value.slice(comma + 1) : value;
-    return Buffer.from(payload, 'base64');
-}
-
-/** Le type de document de l'interface donne la stratégie de mise en page. */
-function natureFor(docType) {
-    if (docType === 'hr_document') return 'prose';
-    if (docType === 'payslip' || docType === 'form') return 'grid';
-    return 'auto';
-}
-
-/**
- * POST /api/rh/upload-template
- * Uploads a document (Word/Excel) and returns it as base64 so the frontend can save it to its LocalDb.
- */
-app.post('/api/rh/upload-template', authMiddleware, upload.single('file'), async (req, res) => {
-    try {
-        if (!req.file) return res.status(400).json({ error: 'Fichier manquant' });
-        
-        const fs = require('fs');
-        const buffer = fs.readFileSync(req.file.path);
-        
-        res.json({
-            success: true,
-            fileBase64: buffer.toString('base64'),
-            replacements: []
-        });
-    } catch (e) {
-        console.error('Erreur upload-template:', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    } finally {
-        if (req.file && require('fs').existsSync(req.file.path)) {
-            require('fs').unlinkSync(req.file.path);
-        }
-    }
-});
-
-/**
- * POST /api/rh/fill-docx
- * Reçoit le base64 d'un modèle Word et les données à injecter.
- * Retourne le document final en base64.
- */
-app.post('/api/rh/fill-docx', authMiddleware, async (req, res) => {
-    try {
-        const { fileBase64, docData } = req.body;
-        if (!fileBase64 || !docData) {
-            return res.status(400).json({ error: 'Données manquantes (fileBase64 ou docData)' });
-        }
-
-        const PizZip = require('pizzip');
-        const Docxtemplater = require('docxtemplater');
-
-        // Décoder le base64
-        const content = decodeDataUrl(fileBase64);
-        const zip = new PizZip(content);
-
-        // Configurer docxtemplater
-        const doc = new Docxtemplater(zip, {
-            paragraphLoop: true,
-            linebreaks: true,
-            nullGetter() {
-                // Si une variable n'existe pas, on laisse vide plutôt qu'un "undefined" moche.
-                return "";
-            }
-        });
-
-        // Rendre le document
-        doc.render(docData);
-
-        const buf = doc.getZip().generate({
-            type: 'nodebuffer',
-            compression: 'DEFLATE',
-        });
-
-        res.json({
-            success: true,
-            fileBase64: buf.toString('base64'),
-            filename: `document_genere_${Date.now()}.docx`
-        });
-    } catch (e) {
-        console.error('Erreur remplissage DOCX:', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-
-/**
- * POST /api/rh/generate-payroll-docx
- * Reçoit un modèle Word et un tableau de données employés.
- * Génère un bulletin Word pour chaque employé et renvoie un fichier ZIP contenant tous les bulletins.
- */
-app.post('/api/rh/generate-payroll-docx', authMiddleware, async (req, res) => {
-    try {
-        const { fileBase64, employeesData } = req.body;
-        if (!fileBase64 || !Array.isArray(employeesData) || employeesData.length === 0) {
-            return res.status(400).json({ error: 'Données manquantes (fileBase64 ou employeesData vide)' });
-        }
-
-        const PizZip = require('pizzip');
-        const Docxtemplater = require('docxtemplater');
-
-        // Créer un nouveau ZIP maître qui contiendra tous les bulletins DOCX
-        const masterZip = new PizZip();
-
-        // Décoder le modèle DOCX (qui est lui-même un zip)
-        const templateContent = decodeDataUrl(fileBase64);
-
-        employeesData.forEach((empData, index) => {
-            // À chaque itération, recréer l'instance PizZip à partir du modèle vierge
-            const zip = new PizZip(templateContent);
-            
-            const doc = new Docxtemplater(zip, {
-                paragraphLoop: true,
-                linebreaks: true,
-                nullGetter() { return ""; }
-            });
-
-            // Rendre le document avec les données de cet employé
-            doc.render(empData);
-
-            // Obtenir le buffer DOCX généré
-            const buf = doc.getZip().generate({
-                type: 'nodebuffer',
-                compression: 'DEFLATE',
-            });
-
-            // Déterminer le nom du fichier
-            const filename = empData._filename || `Bulletin_${empData.nomComplet || index}.docx`;
-            
-            // Ajouter le fichier DOCX généré dans le ZIP maître
-            masterZip.file(filename, buf);
-        });
-
-        // Générer le fichier ZIP maître
-        const masterZipBuffer = masterZip.generate({
-            type: 'nodebuffer',
-            compression: 'DEFLATE',
-        });
-
-        res.json({
-            success: true,
-            zipBase64: masterZipBuffer.toString('base64'),
-            filename: `Bulletins_de_Paie_${new Date().toISOString().slice(0, 7)}.zip`
-        });
-
-    } catch (e) {
-        console.error('Erreur génération ZIP DOCX:', e);
-        res.status(500).json({ error: "Une erreur interne est survenue. Veuillez réessayer plus tard." });
-    }
-});
-/**
- * ═══════════════════════════════════════════════════════
- * MODÈLES WORD ET EXCEL
- *
- * Trois routes, correspondant aux trois temps de la boucle de validation :
- *
- *   1. types      — la liste des types de documents, pour le sélecteur
- *   2. analyser   — le moteur PROPOSE les emplacements, sans rien modifier
- *   3. gabarit    — l'utilisateur ayant validé, on pose les variables
- *
- * Rien n'est appliqué au fichier du client tant qu'il n'a pas validé. Tant
- * qu'il n'a pas cliqué, son modèle est intact et il peut faire réanalyser.
- * ═══════════════════════════════════════════════════════
- */
-
-app.get('/api/rh/office/types', authMiddleware, (req, res) => {
-    res.json({ success: true, types: listerTypesDocuments() });
-});
-
-app.post('/api/rh/office/analyser', authMiddleware, async (req, res) => {
-    try {
-        if (!(await gateAiAccess(req, res))) return;
-        const { fileBase64, filename, docType } = req.body;
-        if (!fileBase64) return res.status(400).json({ error: 'Aucun fichier fourni.' });
-
-        const buffer = decodeDataUrl(fileBase64);
-        const extrait = extraireOffice(buffer, filename || '');
-        const analyse = analyserModele(extrait, docType || 'autre');
-
-        res.json({
-            success: true,
-            format: extrait.kind,
-            nature: analyse.nature,
-            typeDocument: analyse.typeDocument,
-            emplacements: analyse.emplacements,
-            variables: analyse.variables,
-            completude: analyse.completude,
-            resume: analyse.resume,
-            // Aperçu du document tel qu'il deviendra, variables apparentes :
-            // c'est ce que l'utilisateur regarde pour valider ou faire réanalyser.
-            apercu: construireApercu(extrait, analyse.emplacements)
-        });
-    } catch (e) {
-        console.error('Analyse du modèle Office :', e.message);
-        res.status(400).json({ error: "Requête invalide." });
-    }
-});
-
-app.post('/api/rh/office/gabarit', authMiddleware, async (req, res) => {
-    try {
-        const { fileBase64, filename, emplacements } = req.body;
-        if (!fileBase64) return res.status(400).json({ error: 'Aucun fichier fourni.' });
-        if (!Array.isArray(emplacements) || !emplacements.length) {
-            return res.status(400).json({ error: 'Aucun emplacement validé.' });
-        }
-
-        const buffer = decodeDataUrl(fileBase64);
-        const format = /\.xlsx$/i.test(filename || '') ? 'xlsx' : 'docx';
-        const resultat = poserVariables(buffer, emplacements, format);
-
-        res.json({
-            success: true,
-            format,
-            gabaritBase64: resultat.buffer.toString('base64'),
-            remplaces: resultat.remplaces ?? emplacements.length,
-            introuvables: resultat.introuvables || []
-        });
-    } catch (e) {
-        console.error('Génération du gabarit Office :', e.message);
-        res.status(400).json({ error: "Requête invalide." });
-    }
-});
-
-/**
- * POST /api/rh/office/remplir
- *
- * Generation depuis un gabarit valide : les {variables} recoivent les donnees
- * du salarie. Le fichier d'origine n'est pas reconstruit, donc la mise en page
- * du client est rendue a l'identique : c'est tout l'interet de cette voie.
- */
-app.post('/api/rh/office/remplir', authMiddleware, async (req, res) => {
-    try {
-        const { gabaritBase64, format, donnees } = req.body;
-        if (!gabaritBase64) return res.status(400).json({ error: 'Aucun gabarit fourni.' });
-        if (!donnees || typeof donnees !== 'object') {
-            return res.status(400).json({ error: 'Aucune donnee a injecter.' });
-        }
-
-        const buffer = decodeDataUrl(gabaritBase64);
-        const type = format === 'xlsx' ? 'xlsx' : 'docx';
-        const resultat = remplirOffice(buffer, donnees, type);
-
-        res.json({
-            success: true,
-            format: type,
-            fileBase64: resultat.buffer.toString('base64'),
-            // Les variables sans donnee sont laissees vides et signalees : sur un
-            // document officiel, un blanc vaut mieux qu'un montant invente.
-            nonResolues: resultat.nonResolues || []
-        });
-    } catch (e) {
-        console.error('Remplissage du gabarit Office :', e.message);
-        res.status(400).json({ error: "Requête invalide." });
-    }
-});
-
-/**
- * Aperçu textuel du document avec les variables en place.
- *
- * On ne rend pas le fichier — il n'a pas changé, et le rendre demanderait un
- * convertisseur. On montre son CONTENU tel qu'il sera, ce qui suffit pour juger
- * si les variables sont aux bons endroits.
- */
-function construireApercu(extrait, emplacements) {
-    const parTexte = new Map();
-    for (const e of emplacements || []) {
-        if (e && e.original && e.variable) parTexte.set(e.original, e.variable);
-    }
-    const marquer = (texte) => {
-        const t = String(texte || '').trim();
-        const variable = parTexte.get(t);
-        return variable ? { texte: `{${variable}}`, variable } : { texte: t, variable: null };
-    };
-
-    const lignes = [];
-    for (const element of extrait.elements || []) {
-        if (element.type === 'paragraphe') {
-            let texte = element.texte;
-            for (const [original, variable] of parTexte) {
-                if (texte.includes(original)) texte = texte.split(original).join(`{${variable}}`);
-            }
-            lignes.push({ type: 'paragraphe', gras: !!element.gras, texte });
-        } else if (element.type === 'tableau') {
-            const parLigne = new Map();
-            for (const cell of element.cells) {
-                if (!parLigne.has(cell.r)) parLigne.set(cell.r, []);
-                parLigne.get(cell.r).push(cell);
-            }
-            const rangs = [...parLigne.keys()].sort((a, b) => a - b).map(r =>
-                parLigne.get(r).sort((a, b) => a.c - b.c).map(cell => {
-                    const m = marquer(cell.texte);
-                    return { ...m, colSpan: cell.colSpan || 1, gras: !!cell.gras };
-                }));
-            lignes.push({ type: 'tableau', feuille: element.feuille || null, rangs });
-        }
-    }
-    return lignes;
-}
+// Routes « documents » : server/routes/documents.js
+require('./routes/documents')(app, { aiService, analyserModele, authMiddleware, checkConformity, decodeDataUrl, docEngine, extraireOffice, gateAiAccess, listerTypesDocuments, poserVariables, remplirOffice, templateEngine, upload });
 
 // SPA Fallback : Rediriger toutes les requêtes non-API vers l'index.html de Vue
 app.get('*', (req, res, next) => {

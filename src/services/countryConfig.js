@@ -1,3 +1,8 @@
+import { BAREMES_CI } from '../../server/moteur/paieCI.mjs'
+
+// Barème CI en vigueur : le moteur de paie fait foi, ces valeurs ne servent qu'à l'affichage.
+const B_CI = BAREMES_CI[BAREMES_CI.length - 1]
+
 // ══════════════════════════════════════════════════════════════════════════
 // RÈGLES FISCALES, SOCIALES ET TERMES OFFICIELS PAR PAYS (UEMOA & CEMAC)
 // ══════════════════════════════════════════════════════════════════════════
@@ -16,24 +21,24 @@ export const COUNTRIES_CONFIG = {
     smig: 75000,
     organismeRetraite: 'CNPS (RGR)',
     organismeSante: 'CMU',
-    plafondRetraite: 3375000,
-    plafondPF: 75000,
-    tauxRetraiteSal: 0.063,
-    tauxRetraitePat: 0.077,
-    tauxPFPat: 0.05,
-    tauxATPat: 0.02,
+    plafondRetraite: B_CI.cnps.plafondRetraite,
+    plafondPF: B_CI.cnps.plafondPfAtAm,
+    tauxRetraiteSal: B_CI.cnps.tauxRetraiteSal,
+    tauxRetraitePat: B_CI.cnps.tauxRetraitePat,
+    tauxPFPat: B_CI.cnps.tauxPF,
+    tauxATPat: B_CI.cnps.tauxATDefaut,
     // Indemnité de transport exonérée d'ITS et de CNPS dans la limite de
     // 30 000 FCFA/mois (Abidjan, arrêté du 30/01/2020) ; l'excédent est du salaire.
-    plafondTransportExonere: 30000,
+    plafondTransportExonere: B_CI.transportExonere.abidjan,
     // Charges fiscales patronales DISSOCIÉES (à ne jamais agréger) :
     //   CN — Contribution Nationale : 1,2 % du brut imposable, personnel local ET expatrié.
     //   CE — Contribution Employeur : 0 % pour le local, 9,2 % pour les expatriés.
     // Le « 10,4 % » expatrié = CE 9,2 % + CN 1,2 % (deux rubriques). Le « 12 % »
     // (= 9,2 + 1,2 + TA 0,4 + FPC 1,2) n'est PAS utilisé ici : TA et FPC (FDFP)
     // sont déjà calculées dans leurs propres rubriques.
-    tauxCnEmployeur: 0.012,
-    tauxCeEmployeurLocal: 0,
-    tauxCeEmployeurExpat: 0.092,
+    tauxCnEmployeur: B_CI.fiscalEmployeur.tauxCN,
+    tauxCeEmployeurLocal: B_CI.fiscalEmployeur.tauxCELocal,
+    tauxCeEmployeurExpat: B_CI.fiscalEmployeur.tauxCEExpat,
     // Conservés pour l'affichage agrégé (info-bulles, cartes pays) uniquement.
     tauxImpotEmployeurLocal: 0.012,
     tauxImpotEmployeurExpat: 0.104,

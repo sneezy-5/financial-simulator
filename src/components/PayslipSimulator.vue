@@ -2,6 +2,9 @@
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { getCountryRules } from '../services/countryConfig.js'
 import { calculatePayslip } from '../services/calculators/index.js'
+import { ZONES_TRANSPORT, BASE_JOURS_PAIE_DEFAUT } from '../../server/moteur/paieCI.mjs'
+import { expliquerBulletin } from '../services/explicationsBulletin.js'
+import { suivre } from '../services/entonnoir.js'
 import { user, fetchMe } from '../services/auth.js'
 import { prepareTemplateSource, requestTemplateReconstruction, fillTemplatePlaceholders, injectLogoSlot } from '../services/templateExtractor.js'
 
@@ -49,7 +52,8 @@ const emp = ref({
   statut_salarie: 'local', // 'local' ou 'expatrie'
   date_embauche: '',
   // Temps de travail (basé sur le modèle Excel)
-  jours_travailles: 30,   // Jours réellement travaillés ce mois (Standard 30j en CI)
+  base_jours_paie: BASE_JOURS_PAIE_DEFAUT, // 26 ouvrables ou 30 calendaires (paramètre entreprise)
+  jours_travailles: BASE_JOURS_PAIE_DEFAUT, // Base d'un mois complet, avant absences et congés
   absences_jours: 0,      // Jours d'absence (déduits automatiquement)
   heures_sup_nb: 0,       // Nombre d'heures supplémentaires
   heures_sup_coef: 1.15,  // Coefficient de majoration (1.15 = +15%, 1.50 = +50%...)
@@ -58,6 +62,7 @@ const emp = ref({
   salaire_base: 0,
   sursalaire: 0,
   prime_transport: 30000,
+  zone_transport: 'abidjan', // plafond d'exonération du transport (Abidjan / Bouaké / intérieur)
   prime_logement: 0,
   // Primes libres (imposables ou non)
   primes: [
@@ -74,7 +79,10 @@ const emp = ref({
   auto_anciennete: true,
   auto_conges: props.initialType === 'conges',
   date_dernier_conge: '',
-  prise_conges_mode: 'total', // 'total' | 'partiel'
+  // null = aucun congé pris sur ce bulletin. 'total' par défaut seulement pour
+  // un bulletin de congés : sur un bulletin normal, il faisait passer TOUS les
+  // droits acquis depuis l'embauche en congés pris ce mois.
+  prise_conges_mode: props.initialType === 'conges' ? 'total' : null, // null | 'total' | 'partiel'
   jours_conges_partiels: null,
   taux_at: 0.02,
   ayants_droit_cmu: 0,
@@ -91,6 +99,22 @@ const emp = ref({
 const countryRules = computed(() => {
   const p = emp.value.pays || props.country || 'CI'
   return getCountryRules(p)
+})
+
+// Réglages entreprise (Paramètres) : appliqués dès qu'ils changent — y compris
+// simulateur déjà ouvert — sauf si la valeur a été modifiée ici à la main.
+watch(
+  () => [user.value?.companyBaseJoursPaie, user.value?.companyZoneTransport],
+  ([base, zone], [ancienneBase, ancienneZone] = []) => {
+    if (base && emp.value.base_jours_paie === (+ancienneBase || BASE_JOURS_PAIE_DEFAUT)) emp.value.base_jours_paie = +base
+    if (zone && emp.value.zone_transport === (ancienneZone || 'abidjan')) emp.value.zone_transport = zone
+  },
+  { immediate: true }
+)
+
+// « Jours payés » suit la base tant que l'utilisateur ne l'a pas modifié à la main.
+watch(() => emp.value.base_jours_paie, (nouvelle, ancienne) => {
+  if (emp.value.jours_travailles === ancienne) emp.value.jours_travailles = nouvelle
 })
 
 watch(countryRules, (newRules) => {
@@ -110,6 +134,7 @@ const downloadUrl = ref(null)
 const errorMsg = ref(null)
 
 const isSimulatorMode = import.meta.env.VITE_APP_MODE === 'simulator'
+const PRO_URL = import.meta.env.VITE_PRO_URL || 'https://rh.eonda.online/'
 
 // Config : Activer ou désactiver certaines rubriques optionnelles
 const activeTab = ref('employe') // 'entreprise' | 'employe' | 'remuneration'
@@ -126,6 +151,7 @@ const goToTab = (tabId) => {
 const shareToast = ref(false)
 
 function shareSimulation() {
+  suivre('partage', { unique: true })
   try {
     // Sérialiser les champs clés de la simulation
     const shareData = {
@@ -138,6 +164,8 @@ function shareSimulation() {
       st: emp.value.statut_salarie,
       tc: emp.value.type_contrat,
       jt: emp.value.jours_travailles,
+      bj: emp.value.base_jours_paie,
+      zt: emp.value.zone_transport,
       aj: emp.value.absences_jours,
       hs: emp.value.heures_sup_nb,
       hc: emp.value.heures_sup_coef,
@@ -187,6 +215,8 @@ function loadFromUrlData() {
     if (d.sm) emp.value.situation_matrimoniale = d.sm
     if (d.st) emp.value.statut_salarie = d.st
     if (d.tc) emp.value.type_contrat = d.tc
+    if (d.bj !== undefined) emp.value.base_jours_paie = Number(d.bj)
+    if (d.zt) emp.value.zone_transport = d.zt
     if (d.jt !== undefined) emp.value.jours_travailles = Number(d.jt)
     if (d.aj !== undefined) emp.value.absences_jours = Number(d.aj)
     if (d.hs !== undefined) emp.value.heures_sup_nb = Number(d.hs)
@@ -374,6 +404,7 @@ const selectEmployeeCustom = (e) => {
   emp.value.situation_matrimoniale = e.situation_matrimoniale || 'celibataire'
   emp.value.nombre_enfants = e.nombre_enfants || 0
   emp.value.statut_salarie = e.statut_salarie || 'local'
+  emp.value.zone_transport = e.zone_transport || user.value?.companyZoneTransport || 'abidjan'
   emp.value.rib = e.rib || ''
 
   // Le contrat fait foi sur la rémunération, le poste et les dates : c'est la
@@ -541,7 +572,7 @@ const explanations = computed(() => {
     sante: {
       title: `${r.organismeSante} (Santé)`,
       text: r.hasCMU
-        ? `Cotisation de 1 000 FCFA par personne (vous et vos ayants droit). Elle permet d'accéder aux soins à prix réduit dans les centres conventionnés.`
+        ? `500 FCFA par personne couverte (vous et vos ayants droit) sont retenus sur le salaire, et l'employeur verse autant. Elle permet d'accéder aux soins à prix réduit dans les centres conventionnés.`
         : `Le régime de santé ${r.preposition} ${r.name} est géré par ${r.organismeSante}. Les modalités de cotisation varient selon le régime applicable.`
     },
     impot_employeur: {
@@ -566,166 +597,50 @@ const explanations = computed(() => {
 // ══════════════════════════════════════════════
 // CALCULS EN TEMPS RÉEL
 // ══════════════════════════════════════════════
-const calc = computed(() => {
-  const salaireBaseMensuel = +emp.value.salaire_base || 0
-  const joursDansLeMois = 30 
-  
-  // -- CALCUL CONGÉS : 100% automatique depuis date_dernier_conge --
-  // Aucune saisie manuelle : le module de congé calcule tout.
-  let joursConges = 0
-  let diffMoisConge = 0
-  const dateRef = emp.value.date_dernier_conge || emp.value.date_embauche
-  if (dateRef) {
-    const dRef = new Date(dateRef)
-    const dNow = new Date(emp.value.annee, emp.value.mois - 1, 1)
-    diffMoisConge = (dNow.getFullYear() - dRef.getFullYear()) * 12 + (dNow.getMonth() - dRef.getMonth())
-    if (diffMoisConge > 0 && (emp.value.bulletin_type === 'conges' || emp.value.auto_conges)) {
-      joursConges = Math.min(30, Math.floor(diffMoisConge * 2.2))
-    }
+const calc = computed(() => calculatePayslip(emp.value, countryRules.value))
+
+// Bulletin expliqué ligne par ligne (Côte d'Ivoire : moteur partagé).
+const lignesExpliquees = computed(() => countryRules.value.code === 'CI' ? expliquerBulletin(calc.value, emp.value) : [])
+const ligneOuverte = ref(null)
+const basculerExplication = (cle) => {
+  ligneOuverte.value = ligneOuverte.value === cle ? null : cle
+  if (ligneOuverte.value) suivre('explication', { source: cle, unique: true })
+}
+
+// Entonnoir : une « simulation » = un salaire saisi (une fois par visite).
+watch(() => emp.value.salaire_base, (v) => { if (+v > 0) suivre('simulation', { unique: true }) })
+
+// Calcul inversé (net → brut) : recherche par dichotomie sur le moteur de
+// paie lui-même, donc cohérente au franc près avec le bulletin affiché.
+const netPour = (champ, valeur) =>
+  calculatePayslip({ ...emp.value, [champ]: valeur }, countryRules.value).netAPayer
+
+const resoudreMontant = (champ, netCible) => {
+  let bas = 0
+  let haut = Math.max(100000, netCible * 3)
+  while (netPour(champ, haut) < netCible && haut < 1e10) haut *= 2
+  for (let i = 0; i < 60 && haut - bas > 0.5; i++) {
+    const milieu = (bas + haut) / 2
+    if (netPour(champ, milieu) < netCible) bas = milieu
+    else haut = milieu
   }
-  const joursAbsences = +emp.value.absences_jours || 0
-  const joursBasePaie = +emp.value.jours_travailles || 26
-  
-  // Les jours travaillés "réellement" sont ceux qui restent après congés et absences
-  const joursTrav = Math.max(0, joursBasePaie - joursAbsences - joursConges)
-  
-  const salaireBase = Math.round((salaireBaseMensuel / joursDansLeMois) * joursTrav)
-  const sursalaire = Math.round((+emp.value.sursalaire || 0) / joursDansLeMois * joursTrav)
-  
-  const primeTransportMensuel = +emp.value.prime_transport || 0
-  const primeLogement = +emp.value.prime_logement || 0
-  
-  // La prime de transport est liée à la présence effective (jours travaillés)
-  // En mode Bulletin de Congés, elle est strictement à 0.
-  const primeTransport = emp.value.bulletin_type === 'conges' 
-    ? 0 
-    : Math.round((primeTransportMensuel / joursBasePaie) * joursTrav)
-  
-  // Heures supplémentaires : taux horaire = salaire mensuel / 173.33h
-  // Montant HS = nb heures × taux horaire × coefficient majoration
-  const nbHeuresSup = +emp.value.heures_sup_nb || 0
-  const coefHS = +emp.value.heures_sup_coef || 1.15
-  const tauxHoraire = salaireBaseMensuel > 0 ? Math.round(salaireBaseMensuel / 173.33) : 0
-  const montantHeuresSup = Math.round(nbHeuresSup * tauxHoraire * coefHS)
+  return Math.ceil(haut)
+}
 
-  const primesImposables = emp.value.primes.filter(p => p.imposable).reduce((acc, p) => acc + (+p.montant || 0), 0)
-  const primesNonImposablesRub = emp.value.primes.filter(p => !p.imposable).reduce((acc, p) => acc + (+p.montant || 0), 0)
-  const gratification = 0
-  const preavisVal = 0
-  const indemLicenciement = 0
-  const indemTransac = 0
-  const fraisFuneraires = 0
-
-  // -- CALCUL AUTO ANCIENNETÉ --
-  let primeAnciennete = 0
-  let ansAnciennete = 0
-  let tauxAnciennete = 0
-  let ancienneteTxt = "0 ans 00 mois"
-  if (emp.value.auto_anciennete && emp.value.date_embauche) {
-    const embauche = new Date(emp.value.date_embauche)
-    const datePaie = new Date(emp.value.annee, emp.value.mois - 1, 1)
-    
-    let diffAns = datePaie.getFullYear() - embauche.getFullYear()
-    let diffMois = datePaie.getMonth() - embauche.getMonth()
-    if (diffMois < 0) {
-      diffAns--
-      diffMois += 12
-    }
-    ansAnciennete = Math.max(0, diffAns)
-    ancienneteTxt = `${ansAnciennete} ans ${String(Math.max(0, diffMois)).padStart(2, '0')} mois`
-    
-    // Taux: 2% après 2 ans, +1% par an, avec un plafond max de 25%
-    if (ansAnciennete >= 2) {
-      tauxAnciennete = Math.min(25, 2 + (ansAnciennete - 2))
-    }
-    primeAnciennete = Math.round(salaireBaseMensuel * (tauxAnciennete / 100))
-  }
-
-  // -- CALCUL ALLOOCATION CONGÉS PAYÉS --
-  let allocationConges = 0;
-  if (joursConges > 0) {
-     const baseCP = salaireBaseMensuel + (+emp.value.sursalaire || 0) + primeAnciennete
-     allocationConges = Math.round((baseCP / joursDansLeMois) * joursConges);
-  }
-
-  // Le brut imposable (Ordre LOGIPAIE)
-  // Inclut : Salaire base + Sursalaire + HS + Ancienneté + Congés + Primes Imposables + Gratif + Préavis
-  const salaireBrut = salaireBase + sursalaire + primeAnciennete + allocationConges + montantHeuresSup + primesImposables
-  return calculatePayslip(emp.value, countryRules.value)
-})
-
-// Calcul Inversé (Net à Brut) - Magie Mathématique
 const calculerBrutDepuisNet = () => {
-  const targetNet = prompt("Quel est le NET À PAYER que vous souhaitez atteindre ? (ex: 350000)")
-  if (!targetNet || isNaN(targetNet)) return
+  const saisie = prompt("Quel est le NET À PAYER que vous souhaitez atteindre ? (ex: 350000)")
+  if (!saisie || isNaN(saisie)) return
+  suivre('net_vers_brut')
+  const objectif = parseFloat(saisie)
 
-  const objectif = parseFloat(targetNet)
-  let brutTest = objectif
-  let ecart = 100000
-  let iterations = 0
-
-  // Recherche par dichotomie/approche progressive
-  while (Math.abs(ecart) > 1 && iterations < 100) {
-    // Simuler un calcul rapide pour ce brutTest
-    const baseCNPS = Math.min(brutTest, 3375000)
-    const cnpsSal = Math.round(baseCNPS * 0.063)
-    const cmuSal = calc.value.salarial.cmu // Utilisation de la vraie CMU calculée globalement
-    let impots = 0
-
-    let n = Math.min(Number(emp.value.nombre_enfants) || 0, 4)
-    let parts = 1
-    const sit = String(emp.value.situation_matrimoniale || '').toLowerCase()
-
-    if (sit.includes('mari')) {
-      parts = 2 + (n * 0.5)
-    } else if (sit.includes('veuf') || sit.includes('veuv')) {
-      parts = (n > 0) ? (2 + (n * 0.5)) : 1
-    } else {
-      parts = (n > 0) ? (1.5 + (n * 0.5)) : 1
-    }
-    parts = Math.min(parts, 5.0)
-
-    // ITS (impôt unique sur salaires, réforme fiscale 2024) — seul régime calculé.
-    const salImposable = Math.max(0, brutTest - cnpsSal - cmuSal)
-    const tranches = [
-      { plafond: 75000, taux: 0.00 },
-      { plafond: 240000, taux: 0.16 },
-      { plafond: 800000, taux: 0.21 },
-      { plafond: 2400000, taux: 0.24 },
-      { plafond: 8000000, taux: 0.28 },
-      { plafond: Infinity, taux: 0.32 }
-    ]
-
-    let impotBrut = 0
-    let prec = 0
-    for (const { plafond, taux } of tranches) {
-      if (salImposable <= prec) break
-      impotBrut += (Math.min(salImposable, plafond) - prec) * taux
-      prec = plafond
-    }
-
-    const itsBrut = Math.round(impotBrut)
-    let ricf = Math.max(0, (parts - 1) * 11000)
-    impots = Math.max(0, itsBrut - ricf)
-
-    const netTest = brutTest - (cnpsSal + impots + cmuSal) + emp.value.prime_transport + emp.value.primes_non_imposables - emp.value.autres_retenues
-
-    ecart = objectif - netTest
-    brutTest += ecart // Ajustement auto
-    iterations++
-  }
-
-  if (emp.value.sursalaire > 0 || String(emp.value.salaire_base) !== "0") {
-      const brutActuelHorsSursalaire = (+emp.value.salaire_base || 0) + (+emp.value.autres_primes || 0) + (+emp.value.montant_heures_sup || 0)
-      if (Math.round(brutTest) > brutActuelHorsSursalaire) {
-          emp.value.sursalaire = Math.round(brutTest) - brutActuelHorsSursalaire
-      } else {
-          emp.value.salaire_base = Math.round(brutTest)
-          emp.value.sursalaire = 0
-          emp.value.autres_primes = 0
-      }
+  // Un salaire de base déjà saisi est conservé : on ajuste le sursalaire.
+  // S'il donne déjà plus que l'objectif, on recalcule le salaire de base seul.
+  const base = +emp.value.salaire_base || 0
+  if (base > 0 && netPour('sursalaire', 0) <= objectif) {
+    emp.value.sursalaire = resoudreMontant('sursalaire', objectif)
   } else {
-      emp.value.salaire_base = Math.round(brutTest)
+    emp.value.sursalaire = 0
+    emp.value.salaire_base = resoudreMontant('salaire_base', objectif)
   }
 }
 
@@ -790,6 +705,7 @@ const generatePDF = async () => {
     const blob = await response.blob()
     downloadUrl.value = URL.createObjectURL(blob)
     generated.value = true
+    suivre('pdf_simulateur', { source: emp.value.bulletin_type || 'habituel' })
 
     // ── Traçabilité automatique dans le tableau des absences ──
     // Quand un bulletin de congé est généré, on crée automatiquement
@@ -1116,6 +1032,7 @@ const tabs = [
                   <span class="field-hint">Rémunération pour 173.33 h/mois.</span>
                 </label>
                 <input v-model.number="emp.salaire_base" type="number" min="0" step="1" placeholder="Ex: 200 000" />
+                <button type="button" class="btn-net-brut" @click="calculerBrutDepuisNet">Je connais le net → calculer le brut</button>
               </div>
               <div class="field-group">
                 <label>
@@ -1132,8 +1049,18 @@ const tabs = [
             <div class="field-row">
               <div class="field-group">
                 <label>
+                  Base de calcul
+                  <span class="field-hint">Proratisation des absences</span>
+                </label>
+                <select v-model.number="emp.base_jours_paie">
+                  <option :value="26">26 jours ouvrables</option>
+                  <option :value="30">30 jours calendaires</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label>
                   Jours payés (Base)
-                  <span class="field-hint">Standard mensuel = 30 jours</span>
+                  <span class="field-hint">Mois complet = {{ emp.base_jours_paie }} jours</span>
                 </label>
                 <input v-model.number="emp.jours_travailles" type="number" min="0" max="31" />
               </div>
@@ -1194,9 +1121,18 @@ const tabs = [
                   <div class="cpc-mode-label">Option de prise de congés pour ce bulletin :</div>
                   <div class="cpc-toggle-group">
                     <button
+                      v-if="emp.bulletin_type !== 'conges' && !emp.auto_conges"
                       type="button"
                       class="cpc-toggle-btn"
-                      :class="{ 'is-active': emp.prise_conges_mode !== 'partiel' }"
+                      :class="{ 'is-active': !emp.prise_conges_mode }"
+                      @click="emp.prise_conges_mode = null; emp.jours_conges_partiels = null; emp.jours_conges_pris = null"
+                    >
+                      <span>Aucun congé ce mois</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="cpc-toggle-btn"
+                      :class="{ 'is-active': emp.prise_conges_mode === 'total' || (!emp.prise_conges_mode && (emp.bulletin_type === 'conges' || emp.auto_conges)) }"
                       @click="emp.prise_conges_mode = 'total'; emp.jours_conges_partiels = null; emp.jours_conges_pris = null"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
@@ -1284,6 +1220,17 @@ const tabs = [
                 <label>Prime de Transport</label>
                 <input v-model.number="emp.prime_transport" type="number" min="0" placeholder="30 000" />
               </div>
+              <div class="field-group" v-if="countryRules.code === 'CI'">
+                <label>
+                  Zone de travail
+                  <span class="field-hint">Exonéré jusqu'à {{ fcfa(calc.plafondTransport) }} FCFA</span>
+                </label>
+                <select v-model="emp.zone_transport">
+                  <option v-for="z in ZONES_TRANSPORT" :key="z.code" :value="z.code">{{ z.libelle }}</option>
+                </select>
+              </div>
+            </div>
+            <div class="field-row" v-if="emp.bulletin_type !== 'conges'">
               <div class="field-group">
                 <label>Prime de Logement</label>
                 <input v-model.number="emp.prime_logement" type="number" min="0" placeholder="0" />
@@ -2081,6 +2028,31 @@ const tabs = [
           </div>
         </h3>
         <p class="edu-intro">Quelques clés pour mieux décrypter vos rubriques de paie {{ countryRules.preposition }} {{ countryRules.name }}</p>
+
+        <!-- Bulletin expliqué avec les chiffres saisis -->
+        <div v-if="lignesExpliquees.length && calc.salaireBaseMensuel > 0" class="expl-bloc">
+          <h4 class="expl-titre">Votre bulletin expliqué ligne par ligne</h4>
+          <div v-for="l in lignesExpliquees" :key="l.cle" class="expl-ligne" :class="'expl-' + l.sens">
+            <button type="button" class="expl-tete" @click="basculerExplication(l.cle)">
+              <span class="expl-libelle">{{ l.libelle }}</span>
+              <span class="expl-montant">{{ l.sens === 'retenue' ? '− ' : '' }}{{ fcfa(l.montant) }} FCFA</span>
+              <span class="expl-pourquoi">{{ ligneOuverte === l.cle ? 'Masquer' : 'Pourquoi ?' }}</span>
+            </button>
+            <div v-if="ligneOuverte === l.cle" class="expl-detail">
+              <ol><li v-for="(e, i) in l.etapes" :key="i">{{ e }}</li></ol>
+              <p class="expl-regle">📘 {{ l.regle }}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pont vers l'outil Pro -->
+        <div v-if="isSimulatorMode" class="pro-pont">
+          <div>
+            <strong>Vous gérez plusieurs salariés ?</strong>
+            <p>ONDA RH Pro calcule toute la paie d'un coup, prépare les déclarations CNPS, ITS, FDFP et DISA, et génère le journal comptable. Inscription gratuite.</p>
+          </div>
+          <a :href="PRO_URL + '?source=simulateur'" target="_blank" rel="noopener" class="pro-pont-btn" @click="suivre('clic_pro', { source: 'bulletin' })">Essayer ONDA RH Pro →</a>
+        </div>
         
         <div class="edu-grid">
           <div v-for="(edu, key) in explanations" :key="key" class="edu-card">
@@ -2616,6 +2588,38 @@ const tabs = [
   color: #334155;
   margin-bottom: 0.5rem;
 }
+.expl-bloc { margin: 0 0 24px; border: 1px solid #e2e8f0; border-radius: 14px; overflow: hidden; background: #fff; text-align: left; }
+.expl-titre { margin: 0; padding: 12px 16px; font-size: 0.95rem; color: #1e3a8a; background: #eff6ff; border-bottom: 1px solid #dbeafe; }
+.expl-ligne { border-bottom: 1px solid #f1f5f9; }
+.expl-ligne:last-child { border-bottom: none; }
+.expl-tete { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: none; border: none; cursor: pointer; text-align: left; font-size: 0.88rem; }
+.expl-tete:hover { background: #f8fafc; }
+.expl-libelle { flex: 1; color: #0f172a; font-weight: 500; }
+.expl-montant { font-variant-numeric: tabular-nums; font-weight: 700; color: #0f172a; }
+.expl-retenue .expl-montant { color: #b91c1c; }
+.expl-total .expl-libelle, .expl-total .expl-montant { color: #1e3a8a; font-weight: 800; }
+.expl-employeur .expl-montant { color: #7c3aed; }
+.expl-pourquoi { font-size: 0.75rem; color: #2563eb; font-weight: 600; min-width: 64px; text-align: right; }
+.expl-detail { padding: 4px 16px 12px 32px; font-size: 0.83rem; color: #334155; }
+.expl-detail ol { margin: 0 0 6px; padding-left: 18px; line-height: 1.6; }
+.expl-regle { margin: 0; color: #64748b; font-size: 0.78rem; }
+.pro-pont { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 0 0 24px; padding: 16px 18px; border-radius: 14px; background: #0f172a; color: #e2e8f0; text-align: left; }
+.pro-pont strong { color: #fff; }
+.pro-pont p { margin: 4px 0 0; font-size: 0.85rem; color: #cbd5e1; max-width: 560px; }
+.pro-pont-btn { background: #10b981; color: #fff; font-weight: 700; padding: 10px 18px; border-radius: 10px; text-decoration: none; white-space: nowrap; }
+.btn-net-brut {
+  margin-top: 6px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: #2563eb;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.btn-net-brut:hover { text-decoration: underline; }
+
 .cpc-toggle-group {
   display: grid;
   grid-template-columns: 1fr 1fr;

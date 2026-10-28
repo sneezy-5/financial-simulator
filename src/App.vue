@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { api, LABELS } from './services/mockData'
 import { isCountryActive, ACTIVE_COUNTRIES } from './services/countryConfig.js'
+import { suivre } from './services/entonnoir.js'
 import AdminDashboard from './components/AdminDashboard.vue'
 import HRPayroll from './components/HRPayroll.vue'
 import AppHome from './components/AppHome.vue'
@@ -722,7 +723,7 @@ function initDeeplink() {
       if (['habituel', 'conges'].includes(typeLower)) {
         hrInitialModule.value = 'simulation'
         hrInitialType.value = typeLower
-      } else if (['import', 'solde'].includes(typeLower)) {
+      } else if (['import', 'solde', 'cout_employeur'].includes(typeLower)) {
         hrInitialModule.value = typeLower
       }
     }
@@ -1120,7 +1121,7 @@ const toggleNotifMenu = () => {
                </div>
              </template>
              <template v-else>
-               <a :href="PRO_LANDING_URL" target="_blank" rel="noopener" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #ffffff; font-weight: 700; font-size: 0.75rem; padding: 0.5rem 1.25rem; border-radius: 9999px; display: flex; align-items: center; gap: 0.4rem; text-decoration: none; box-shadow: 0 4px 10px rgba(16,185,129,0.25);" title="Découvrir ONDA RH Pro">
+               <a :href="PRO_LANDING_URL" target="_blank" rel="noopener" @click="suivre('clic_pro', { source: 'entete' })" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #ffffff; font-weight: 700; font-size: 0.75rem; padding: 0.5rem 1.25rem; border-radius: 9999px; display: flex; align-items: center; gap: 0.4rem; text-decoration: none; box-shadow: 0 4px 10px rgba(16,185,129,0.25);" title="Découvrir ONDA RH Pro">
                  Version PRO
                </a>
              </template>

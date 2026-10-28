@@ -50,11 +50,23 @@ const nomFichierDepuis = (cd, fallback) => {
   return (m && m[1]) || fallback
 }
 
-const telecharger = async ({ type, format, periodIds, cle }) => {
+// Exercices disposant d'au moins une période, pour les états annuels.
+const annees = computed(() => {
+  const map = new Map()
+  for (const p of periods.value) {
+    if (!map.has(p.annee)) map.set(p.annee, { annee: p.annee, mois: [], bulletins: 0 })
+    const a = map.get(p.annee)
+    a.mois.push(p.mois)
+    a.bulletins += p.employeeCount || 0
+  }
+  return [...map.values()].sort((a, b) => b.annee - a.annee)
+})
+
+const telecharger = async ({ type, format, periodIds, annee, cle }) => {
   if (downloading.value) return
   downloading.value = cle
   try {
-    const qs = new URLSearchParams({ type, format, periodIds: periodIds.join(',') })
+    const qs = new URLSearchParams(annee ? { type, format, annee } : { type, format, periodIds: periodIds.join(',') })
     const res = await fetch(`/api/rh/declarations?${qs}`, { headers: { Authorization: `Bearer ${token()}` } })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
@@ -85,9 +97,26 @@ const FORMATS = [
   { format: 'xlsx', label: 'Excel' },
   { format: 'csv', label: 'CSV' }
 ]
-const DECLARATIONS = [
+// CNPS : mensuel ou trimestriel ; ITS et FDFP : toujours mensuels (DGI).
+const DECLARATIONS_CNPS = [
   { type: 'cnps', label: 'Bordereau CNPS' },
   { type: 'cnps-liste', label: 'Liste nominative CNPS' }
+]
+const DECLARATIONS = [
+  ...DECLARATIONS_CNPS,
+  { type: 'its', label: 'Déclaration ITS (DGI)' },
+  { type: 'fdfp', label: 'Déclaration FDFP (TA + TFC)' },
+  // Comptabilité : le format Sage n'existe que pour les écritures.
+  { type: 'journal-paie', label: 'Journal de paie (écritures)', sage: true },
+  { type: 'provision-conges', label: 'Provision congés payés', sage: true },
+  { type: 'ordre-virement', label: 'Ordre de virement' }
+]
+const formatsDe = (d) => d.sage ? [...FORMATS, { format: 'sage', label: 'Sage' }] : FORMATS
+const ETATS_ANNUELS = [
+  { type: 'disa', label: 'DISA (CNPS)' },
+  { type: 'livre-annuel', label: 'Livre de paie annuel' },
+  { type: 'recap-masse', label: 'Récap. masse salariale' },
+  { type: 'regul-fdfp', label: 'Régularisation FDFP' }
 ]
 </script>
 
@@ -104,7 +133,7 @@ const DECLARATIONS = [
         <p>
           Bordereaux générés à partir de vos périodes de paie déjà enregistrées.
           <b>Aide à la saisie sur e-CNPS / e-Impôts — ce ne sont pas des télédéclarations.</b>
-          Le taux Accident du Travail, le N° employeur et la périodicité de versement se règlent dans
+          Le taux Accident du Travail, le N° employeur, le service d'assiette des impôts et la périodicité de versement se règlent dans
           <em>Paramètres&nbsp;&rsaquo;&nbsp;Profil entreprise</em>.
         </p>
       </div>
@@ -121,6 +150,31 @@ const DECLARATIONS = [
     </div>
 
     <template v-else>
+      <!-- États annuels (un exercice = toutes ses périodes) -->
+      <section class="decl-section">
+        <h3>États annuels <span class="decl-hint">(DISA, livre de paie, masse salariale, régularisation FDFP)</span></h3>
+        <div v-for="a in annees" :key="a.annee" class="decl-card">
+          <div class="decl-card-head">
+            <strong>Exercice {{ a.annee }}</strong>
+            <span class="decl-sub">
+              {{ a.mois.length }} mois enregistré(s) · {{ a.bulletins }} bulletin(s)
+              <span v-if="a.mois.length < 12" class="decl-badge decl-badge-warn">exercice incomplet</span>
+            </span>
+          </div>
+          <div class="decl-actions">
+            <div v-for="d in ETATS_ANNUELS" :key="d.type" class="decl-line">
+              <span class="decl-line-label">{{ d.label }}</span>
+              <button v-for="f in FORMATS" :key="f.format"
+                class="decl-btn"
+                :disabled="!!downloading"
+                @click="telecharger({ type: d.type, format: f.format, annee: a.annee, cle: a.annee+d.type+f.format })">
+                {{ downloading === a.annee+d.type+f.format ? '…' : f.label }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Trimestres (versement CNPS trimestriel) -->
       <section v-if="trimestres.length" class="decl-section">
         <h3>Versement trimestriel CNPS <span class="decl-hint">(entreprises &lt; 20 salariés)</span></h3>
@@ -130,7 +184,7 @@ const DECLARATIONS = [
             <span class="decl-sub">{{ t.periods.map(p => MOIS[p.mois]).join(', ') }} · {{ t.periods.reduce((s,p)=>s+(p.employeeCount||0),0) }} bulletin(s)</span>
           </div>
           <div class="decl-actions">
-            <div v-for="d in DECLARATIONS" :key="d.type" class="decl-line">
+            <div v-for="d in DECLARATIONS_CNPS" :key="d.type" class="decl-line">
               <span class="decl-line-label">{{ d.label }}</span>
               <button v-for="f in FORMATS" :key="f.format"
                 class="decl-btn"
@@ -144,20 +198,22 @@ const DECLARATIONS = [
       </section>
 
       <!-- Périodes mensuelles -->
-      <section class="decl-section">
+      <section class="decl-section" data-mensuel>
         <h3>Périodes mensuelles</h3>
         <div v-for="p in periods" :key="p.id" class="decl-card">
           <div class="decl-card-head">
             <strong>{{ MOIS[p.mois] }} {{ p.annee }}</strong>
             <span class="decl-sub">
               {{ p.employeeCount || 0 }} bulletin(s)
-              <span v-if="p.status === 'validated'" class="decl-badge">validée</span>
+              <span v-if="p.status === 'closed'" class="decl-badge">clôturée</span>
+              <span v-else-if="p.status === 'validated'" class="decl-badge">validée</span>
+              <span v-else class="decl-badge decl-badge-warn">brouillon</span>
             </span>
           </div>
           <div class="decl-actions">
             <div v-for="d in DECLARATIONS" :key="d.type" class="decl-line">
               <span class="decl-line-label">{{ d.label }}</span>
-              <button v-for="f in FORMATS" :key="f.format"
+              <button v-for="f in formatsDe(d)" :key="f.format"
                 class="decl-btn"
                 :disabled="!!downloading"
                 @click="telecharger({ type: d.type, format: f.format, periodIds: [p.id], cle: p.id+d.type+f.format })">
@@ -186,6 +242,7 @@ const DECLARATIONS = [
 .decl-card-head strong { color: #0f172a; }
 .decl-sub { font-size: 0.8rem; color: #64748b; }
 .decl-badge { margin-left: 6px; font-size: 0.7rem; background: #ecfdf5; color: #059669; border: 1px solid #a7f3d0; border-radius: 999px; padding: 1px 7px; }
+.decl-badge-warn { background: #fffbeb; color: #b45309; border-color: #fde68a; }
 .decl-actions { display: flex; flex-direction: column; gap: 8px; }
 .decl-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .decl-line-label { font-size: 0.82rem; color: #475569; min-width: 170px; }

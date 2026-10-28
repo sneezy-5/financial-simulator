@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guides paie Côte d'Ivoire 2026</title>
+<meta name="description" content="Guides pratiques sur la paie en Côte d'Ivoire : ITS, prime de transport, coût employeur. Exemples chiffrés et simulateurs gratuits.">
+
+<style>
+  :root { --encre: #0f172a; --doux: #475569; --bleu: #1e3a8a; --vert: #047857; --fond: #f8fafc; --ligne: #e2e8f0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--encre); background: var(--fond); line-height: 1.6; }
+  main { max-width: 760px; margin: 0 auto; padding: 28px 16px 48px; }
+  .fil { font-size: .85rem; color: var(--doux); margin-bottom: 8px; }
+  .fil a { color: var(--bleu); }
+  h1 { font-size: 1.8rem; line-height: 1.25; margin: 0 0 12px; }
+  h2 { font-size: 1.2rem; margin: 32px 0 10px; color: var(--bleu); }
+  .chapo { font-size: 1.05rem; color: var(--doux); }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--ligne); border-radius: 10px; overflow: hidden; font-size: .95rem; }
+  th, td { padding: 9px 12px; border-bottom: 1px solid var(--ligne); text-align: left; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  th { background: #eff6ff; font-weight: 600; }
+  tr.total td { font-weight: 700; background: #f1f5f9; }
+  .encadre { background: #fff; border: 1px solid var(--ligne); border-left: 4px solid var(--bleu); border-radius: 10px; padding: 14px 16px; margin: 16px 0; }
+  .cta { display: block; margin: 28px 0; padding: 18px; border-radius: 14px; background: var(--encre); color: #e2e8f0; text-decoration: none; }
+  .cta strong { display: block; color: #fff; font-size: 1.05rem; }
+  .cta span.bouton { display: inline-block; margin-top: 10px; background: #10b981; color: #fff; font-weight: 700; padding: 9px 16px; border-radius: 10px; }
+  footer { margin-top: 40px; font-size: .8rem; color: var(--doux); border-top: 1px solid var(--ligne); padding-top: 12px; }
+  @media (max-width: 560px) { h1 { font-size: 1.45rem; } th, td { padding: 8px; font-size: .88rem; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="fil"><a href="/guides/">Guides paie Côte d'Ivoire</a></div>
+  <h1>Guides paie Côte d'Ivoire</h1>
+  <p class="chapo">Comprendre son bulletin et le coût d’un salarié, avec des exemples calculés.</p>
+  <ul><li><a href="/guides/prime-de-transport-cote-divoire.html">Prime de transport : jusqu’où elle est exonérée</a></li><li><a href="/guides/calcul-its-cote-divoire.html">Calcul de l’ITS : barème et exemples</a></li><li><a href="/guides/cout-salarie-employeur-cote-divoire.html">Combien coûte un salarié à l’employeur ?</a></li></ul>
+  <a class="cta" href="/?module=hr&type=habituel&country=CI&utm_source=guide"><strong>Simulateur de bulletin de paie</strong>Gratuit, sans inscription.<br><span class="bouton">Ouvrir le simulateur →</span></a>
+  <footer>
+    Calculs réalisés avec le moteur de paie ONDA, barème en vigueur depuis le 01/01/2024.
+    Page générée le 23/10/2026. Information générale, ne remplace pas un conseil personnalisé.
+  </footer>
+</main>
+<script>
+  // Mesure d'audience anonyme (aucune donnée personnelle).
+  try { fetch('/api/stats/evenement', { method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+    body: JSON.stringify({ evenement: 'guide_vu', source: "index", clientId: localStorage.getItem('onda_client_id') }) }) } catch (e) {}
+</script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prime de transport en Côte d'Ivoire : plafond exonéré 2026</title>
+<meta name="description" content="La prime de transport est exonérée d'ITS et de CNPS jusqu'à 30 000 FCFA par mois à Abidjan. Au-delà, l'excédent est imposé comme du salaire : exemple chiffré.">
+
+<style>
+  :root { --encre: #0f172a; --doux: #475569; --bleu: #1e3a8a; --vert: #047857; --fond: #f8fafc; --ligne: #e2e8f0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--encre); background: var(--fond); line-height: 1.6; }
+  main { max-width: 760px; margin: 0 auto; padding: 28px 16px 48px; }
+  .fil { font-size: .85rem; color: var(--doux); margin-bottom: 8px; }
+  .fil a { color: var(--bleu); }
+  h1 { font-size: 1.8rem; line-height: 1.25; margin: 0 0 12px; }
+  h2 { font-size: 1.2rem; margin: 32px 0 10px; color: var(--bleu); }
+  .chapo { font-size: 1.05rem; color: var(--doux); }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--ligne); border-radius: 10px; overflow: hidden; font-size: .95rem; }
+  th, td { padding: 9px 12px; border-bottom: 1px solid var(--ligne); text-align: left; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  th { background: #eff6ff; font-weight: 600; }
+  tr.total td { font-weight: 700; background: #f1f5f9; }
+  .encadre { background: #fff; border: 1px solid var(--ligne); border-left: 4px solid var(--bleu); border-radius: 10px; padding: 14px 16px; margin: 16px 0; }
+  .cta { display: block; margin: 28px 0; padding: 18px; border-radius: 14px; background: var(--encre); color: #e2e8f0; text-decoration: none; }
+  .cta strong { display: block; color: #fff; font-size: 1.05rem; }
+  .cta span.bouton { display: inline-block; margin-top: 10px; background: #10b981; color: #fff; font-weight: 700; padding: 9px 16px; border-radius: 10px; }
+  footer { margin-top: 40px; font-size: .8rem; color: var(--doux); border-top: 1px solid var(--ligne); padding-top: 12px; }
+  @media (max-width: 560px) { h1 { font-size: 1.45rem; } th, td { padding: 8px; font-size: .88rem; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="fil"><a href="/guides/">Guides paie Côte d'Ivoire</a></div>
+  <h1>Prime de transport : jusqu'où elle est exonérée</h1>
+  <p class="chapo">En Côte d'Ivoire, l'indemnité de transport n'est ni imposée ni soumise à la CNPS <b>jusqu'à 30 000 FCFA par mois à Abidjan</b>. Au-delà, l'excédent est traité comme du salaire.</p>
+  
+  <h2>La règle</h2>
+  <div class="encadre">Arrêté du 30 janvier 2020 (secteur privé) : à Abidjan, 30 000 FCFA par mois exonérés d'ITS et de cotisations CNPS. À Bouaké et dans les autres villes, le plafond est plus bas. Tout ce qui dépasse le plafond rejoint le <b>brut imposable</b>.</div>
+  <h2>Exemple : salarié à Abidjan, 400 000 FCFA de salaire, célibataire</h2>
+  <table>
+    <tr><th></th><th class="n">Transport 30 000</th><th class="n">Transport 50 000</th></tr>
+    <tr><td>Transport exonéré</td><td class="n">30 000</td><td class="n">30 000</td></tr>
+    <tr><td>Excédent imposable</td><td class="n">0</td><td class="n">20 000</td></tr>
+    <tr><td>Brut imposable</td><td class="n">400 000</td><td class="n">420 000</td></tr>
+    <tr><td>ITS</td><td class="n">60 000</td><td class="n">64 200</td></tr>
+    <tr><td>CNPS salarié</td><td class="n">25 200</td><td class="n">26 460</td></tr>
+    <tr class="total"><td>Net à payer</td><td class="n">344 300</td><td class="n">358 840</td></tr>
+  </table>
+  <p>Les 20 000 FCFA de transport en plus ne rapportent que <b>14 540 FCFA</b> net au salarié : la différence part en ITS et en CNPS.</p>
+  <h2>Pour l'employeur</h2>
+  <p>Au-delà du plafond, la prime de transport n'est plus un moyen « sans charges » d'augmenter un salarié : l'excédent coûte autant qu'une hausse de salaire. Le déclarer entièrement exonéré expose à un redressement fiscal et CNPS.</p>
+  <a class="cta" href="/?module=hr&type=habituel&country=CI&d=eyJzYiI6NDAwMDAwLCJwdCI6NTAwMDAsInp0IjoiYWJpZGphbiJ9&utm_source=guide"><strong>Faites le calcul avec votre salaire</strong>Le simulateur détaille chaque ligne du bulletin et explique chaque montant.<br><span class="bouton">Ouvrir le simulateur →</span></a>
+  <footer>
+    Calculs réalisés avec le moteur de paie ONDA, barème en vigueur depuis le 01/01/2024.
+    Page générée le 23/10/2026. Information générale, ne remplace pas un conseil personnalisé.
+  </footer>
+</main>
+<script>
+  // Mesure d'audience anonyme (aucune donnée personnelle).
+  try { fetch('/api/stats/evenement', { method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+    body: JSON.stringify({ evenement: 'guide_vu', source: "prime-de-transport-cote-divoire", clientId: localStorage.getItem('onda_client_id') }) }) } catch (e) {}
+</script>
+</body>
+</html>

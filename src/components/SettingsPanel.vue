@@ -6,7 +6,9 @@ import { showConfirm } from '../services/confirmModal.js'
 import { user, updateProfile } from '../services/auth.js'
 import { loadPdfJs, prepareTemplateSource, requestTemplateReconstruction, fillTemplatePlaceholders, wrapPreviewHtml, injectLogoSlot } from '../services/templateExtractor.js'
 import { isCountryActive, INACTIVE_LABEL } from '../services/countryConfig.js'
+import { ZONES_TRANSPORT, BAREMES_CI } from '../../server/moteur/paieCI.mjs'
 import OfficeTemplateWizard from './OfficeTemplateWizard.vue'
+import PlanComptableEditor from './hr/PlanComptableEditor.vue'
 import BulletinCanvasEditor from './BulletinCanvasEditor.vue'
 import { typeApplicatif, libelleModele } from '../services/officeTemplate.js'
 
@@ -72,8 +74,18 @@ const companyProfileForm = ref({
   companySignataireFonction: '',
   companyTauxAtMp: '',
   companyCnpsVersementMensuel: '',
+  companyBaseJoursPaie: 26,
+  companyZoneTransport: 'abidjan',
+  companyServiceAssiette: '',
   companyLogo: ''
 })
+
+// Zones de travail avec le plafond de transport exonéré du barème en vigueur.
+const plafondsTransport = BAREMES_CI[BAREMES_CI.length - 1].transportExonere
+const zonesTravail = ZONES_TRANSPORT.map(z => ({
+  ...z,
+  plafond: (plafondsTransport[z.code] || 0).toLocaleString('fr-FR')
+}))
 const companyProfileSaving = ref(false)
 const logoUploadError = ref('')
 
@@ -93,6 +105,9 @@ const syncCompanyProfile = () => {
     companyProfileForm.value.companyCnpsVersementMensuel =
       user.value.companyCnpsVersementMensuel === true ? 'mensuel'
         : user.value.companyCnpsVersementMensuel === false ? 'trimestriel' : ''
+    companyProfileForm.value.companyBaseJoursPaie = user.value.companyBaseJoursPaie || 26
+    companyProfileForm.value.companyZoneTransport = user.value.companyZoneTransport || 'abidjan'
+    companyProfileForm.value.companyServiceAssiette = user.value.companyServiceAssiette || ''
     companyProfileForm.value.companyLogo = user.value.companyLogo || ''
   }
 }
@@ -162,6 +177,9 @@ const saveCompanyProfile = async () => {
       companyTauxAtMp: companyProfileForm.value.companyTauxAtMp === '' ? null : parseFloat(companyProfileForm.value.companyTauxAtMp),
       companyCnpsVersementMensuel: companyProfileForm.value.companyCnpsVersementMensuel === 'mensuel' ? true
         : companyProfileForm.value.companyCnpsVersementMensuel === 'trimestriel' ? false : null,
+      companyBaseJoursPaie: companyProfileForm.value.companyBaseJoursPaie,
+      companyZoneTransport: companyProfileForm.value.companyZoneTransport,
+      companyServiceAssiette: companyProfileForm.value.companyServiceAssiette,
       companyLogo: companyProfileForm.value.companyLogo
     })
     showToast('Profil entreprise enregistré.', 'success')
@@ -608,6 +626,9 @@ const saveAllCumuls = async () => {
       <button @click="activeTab = 'cumuls'" :style="{ borderBottom: activeTab === 'cumuls' ? '2px solid #3b82f6' : 'none', color: activeTab === 'cumuls' ? '#0f172a' : '#64748b', fontWeight: activeTab === 'cumuls' ? '600' : '400', background: 'transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', padding: '12px 16px', cursor: 'pointer', fontSize: '1rem' }">
         Cumuls de Paie
       </button>
+      <button @click="activeTab = 'compta'" :style="{ borderBottom: activeTab === 'compta' ? '2px solid #3b82f6' : 'none', color: activeTab === 'compta' ? '#0f172a' : '#64748b', fontWeight: activeTab === 'compta' ? '600' : '400', background: 'transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', padding: '12px 16px', cursor: 'pointer', fontSize: '1rem' }">
+        Comptabilité
+      </button>
       <button @click="activeTab = 'schedule'" :style="{ borderBottom: activeTab === 'schedule' ? '2px solid #3b82f6' : 'none', color: activeTab === 'schedule' ? '#0f172a' : '#64748b', fontWeight: activeTab === 'schedule' ? '600' : '400', background: 'transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', padding: '12px 16px', cursor: 'pointer', fontSize: '1rem' }">
         Planification
       </button>
@@ -695,11 +716,28 @@ const saveAllCumuls = async () => {
             <input v-model="companyProfileForm.companyTauxAtMp" type="number" step="0.001" min="0.02" max="0.05" placeholder="ex. 0.02" style="width: 100%; padding: 0.75rem 1rem; border-radius: 10px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
           </div>
           <div class="form-group">
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 6px;">Service d'assiette des impôts <span style="font-weight: 400; color: #94a3b8;">(entête des déclarations ITS et FDFP)</span></label>
+            <input v-model="companyProfileForm.companyServiceAssiette" type="text" placeholder="ex. CME Saint Jean" style="width: 100%; padding: 0.75rem 1rem; border-radius: 10px; border: 1px solid #e2e8f0; box-sizing: border-box;" />
+          </div>
+          <div class="form-group">
             <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 6px;">Périodicité de versement CNPS</label>
             <select v-model="companyProfileForm.companyCnpsVersementMensuel" style="width: 100%; padding: 0.75rem 1rem; border-radius: 10px; border: 1px solid #e2e8f0; box-sizing: border-box;">
               <option value="">Automatique (selon l'effectif)</option>
               <option value="mensuel">Mensuel (≥ 20 salariés)</option>
               <option value="trimestriel">Trimestriel (&lt; 20 salariés)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 6px;">Base de calcul des absences <span style="font-weight: 400; color: #94a3b8;">(proratisation du salaire et du transport)</span></label>
+            <select v-model.number="companyProfileForm.companyBaseJoursPaie" style="width: 100%; padding: 0.75rem 1rem; border-radius: 10px; border: 1px solid #e2e8f0; box-sizing: border-box;">
+              <option :value="26">26 jours ouvrables (recommandé)</option>
+              <option :value="30">30 jours calendaires</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 6px;">Zone de travail par défaut <span style="font-weight: 400; color: #94a3b8;">(plafond de transport exonéré — la fiche salarié peut la modifier)</span></label>
+            <select v-model="companyProfileForm.companyZoneTransport" style="width: 100%; padding: 0.75rem 1rem; border-radius: 10px; border: 1px solid #e2e8f0; box-sizing: border-box;">
+              <option v-for="z in zonesTravail" :key="z.code" :value="z.code">{{ z.libelle }} — {{ z.plafond }} FCFA exonérés / mois</option>
             </select>
           </div>
           <div class="form-group">
@@ -1016,6 +1054,11 @@ const saveAllCumuls = async () => {
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- TAB: PLAN COMPTABLE DE PAIE -->
+    <div v-if="activeTab === 'compta'" class="animate-in">
+      <PlanComptableEditor />
     </div>
 
     <!-- TAB: CUMULS DE PAIE -->

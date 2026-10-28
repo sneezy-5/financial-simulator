@@ -2,6 +2,11 @@
 import { ref, onMounted, computed, watch } from 'vue'
 import { localDb } from '../services/localDatabase.js'
 import { getCountryRules } from '../services/countryConfig.js'
+import { ZONES_TRANSPORT } from '../../server/moteur/paieCI.mjs'
+import { user } from '../services/auth.js'
+const libelleZoneEntreprise = computed(() =>
+  (ZONES_TRANSPORT.find(z => z.code === user.value?.companyZoneTransport) || ZONES_TRANSPORT[0]).libelle
+)
 import { showToast } from '../services/toast.js'
 import { showConfirm } from '../services/confirmModal.js'
 
@@ -87,6 +92,9 @@ const deleteEmployee = async (id) => {
 const editEmployee = (emp) => {
   const clone = JSON.parse(JSON.stringify(emp)) // Clone
   if (!clone.statut_salarie) clone.statut_salarie = 'local'
+  // Vide = « comme l'entreprise » : la fiche suit alors les Paramètres, même s'ils changent.
+  if (!clone.zone_transport) clone.zone_transport = ''
+  if (!clone.mode_paiement) clone.mode_paiement = 'virement'
   selectedEmployee.value = clone
 }
 
@@ -490,6 +498,33 @@ const importExcel = async (e) => {
           </select>
           <small class="champ-aide">
             L'employeur paie une T.A.S.P plus élevée sur un salarié expatrié : ce statut sert au calcul du bulletin.
+          </small>
+        </div>
+        <div class="form-group">
+          <label>Mode de paiement</label>
+          <select v-model="selectedEmployee.mode_paiement">
+            <option value="virement">Virement bancaire</option>
+            <option value="especes">Espèces</option>
+            <option value="cheque">Chèque</option>
+          </select>
+        </div>
+        <div class="form-group" v-if="selectedEmployee.mode_paiement === 'virement'">
+          <label>Banque</label>
+          <input v-model="selectedEmployee.banque" type="text" placeholder="ex. SGBCI" />
+        </div>
+        <div class="form-group" v-if="selectedEmployee.mode_paiement === 'virement'">
+          <label>RIB</label>
+          <input v-model="selectedEmployee.rib" type="text" placeholder="ex. CI008 01234 012345678901 12" />
+          <small class="champ-aide">Alimente l'ordre de virement des salaires (module Déclarations).</small>
+        </div>
+        <div class="form-group">
+          <label>Zone de travail</label>
+          <select v-model="selectedEmployee.zone_transport">
+            <option value="">Comme l'entreprise ({{ libelleZoneEntreprise }})</option>
+            <option v-for="z in ZONES_TRANSPORT" :key="z.code" :value="z.code">{{ z.libelle }}</option>
+          </select>
+          <small class="champ-aide">
+            Fixe le plafond d'exonération de la prime de transport (30 000 FCFA à Abidjan) ; l'excédent est imposé.
           </small>
         </div>
 

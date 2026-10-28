@@ -11,7 +11,11 @@ node_modules
 dist
 dist-ssr
 dist_electron
+dev-dist
 node.exe
+
+# Classeurs de référence tiers (LOGIPAIE…) : gardés en local, jamais versionnés
+*.xlsm
 *.local
 
 # Editor directories and files

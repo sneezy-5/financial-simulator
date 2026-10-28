@@ -8,6 +8,8 @@ const activeTab = ref('analytics') // 'analytics' | 'users'
 
 const stats = ref(null)
 const countryStats = ref([])
+// Entonnoir simulateur → Pro (30 derniers jours)
+const entonnoir = ref(null)
 const users = ref([])
 const loading = ref(false)
 const usersLoading = ref(false)
@@ -538,6 +540,12 @@ const fetchStats = async () => {
         } catch (err) {
             console.warn("Analytics pays réservés aux admins")
         }
+        try {
+            const res = await fetch('/api/admin/analytics/entonnoir?jours=30', { headers })
+            if (res.ok) entonnoir.value = await res.json()
+        } catch (err) {
+            console.warn('Entonnoir indisponible')
+        }
     } catch (e) {
         error.value = e.message
     } finally {
@@ -827,6 +835,34 @@ onMounted(async () => {
               <div class="kpi-label">Comptes Inscrits</div>
             </div>
           </div>
+        </div>
+
+        <!-- Entonnoir simulateur → Pro -->
+        <div v-if="entonnoir" class="section-card">
+          <div class="section-header">
+            <h3>Entonnoir simulateur → Pro</h3>
+            <span class="subtext">{{ entonnoir.jours }} derniers jours · visiteurs uniques par étape</span>
+          </div>
+          <div class="country-list">
+            <div v-for="(e, i) in entonnoir.etapes" :key="e.etape" class="country-row">
+              <div class="country-info"><span class="country-name">{{ e.etape }}</span></div>
+              <div class="progress-bar-box">
+                <div class="progress-fill" :style="{ width: Math.max(3, (e.valeur / (entonnoir.etapes[0].valeur || 1)) * 100) + '%' }"></div>
+              </div>
+              <div class="country-count">
+                <strong>{{ e.valeur }}</strong>
+                <span v-if="i > 0" class="pct">({{ e.taux }} %)</span>
+              </div>
+            </div>
+          </div>
+          <p class="subtext" style="margin-top: 10px;">
+            Explications ouvertes : {{ entonnoir.evenements.explication?.uniques || 0 }} ·
+            Net → brut : {{ entonnoir.evenements.net_vers_brut?.uniques || 0 }} ·
+            Simulateur employeur : {{ entonnoir.evenements.cout_employeur?.uniques || 0 }} ·
+            Guides lus : {{ entonnoir.evenements.guide_vu?.total || 0 }} ·
+            Partages : {{ entonnoir.evenements.partage?.uniques || 0 }}.
+            Les inscriptions comptent tous les nouveaux comptes, quelle que soit leur origine.
+          </p>
         </div>
 
         <!-- Breakdown par Pays -->

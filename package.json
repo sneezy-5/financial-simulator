@@ -8,7 +8,10 @@
     "build": "vite build -c vite.config.mjs",
     "preview": "vite preview -c vite.config.mjs",
     "build:exe": "node build-exe.cjs",
-    "build:desktop": "npm run build && electron-builder --win"
+    "build:desktop": "npm run build && electron-builder --win",
+    "moteur:sync": "node scripts/sync-moteur.cjs",
+    "test:paie": "node tests/paie/moteur.test.cjs",
+    "guides": "node scripts/generer-guides.mjs"
   },
   "main": "electron-main.cjs",
   "dependencies": {

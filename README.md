@@ -1,78 +1,69 @@
-# 🏦 Simulateur de Prêt Bancaire - Financial Simulator
+# ONDA — Paie & RH (Côte d'Ivoire)
 
-Une application web moderne et interactive pour simuler des prêts bancaires, évaluer l'éligibilité des emprunteurs et analyser leur capacité de remboursement selon les normes financières en vigueur (zone UEMOA).
+Deux produits construits sur la même base de code :
 
-## ✨ Fonctionnalités Principales
+- **ONDA RH Pro** — logiciel de paie et RH pour PME et cabinets : bulletins, cycle de paie contrôlé et clôturé, journal d'audit, déclarations CNPS / ITS / FDFP / DISA, journal de paie SYSCOHADA, ordre de virement, provision pour congés.
+- **Le simulateur** (`VITE_APP_MODE=simulator`) — gratuit et sans compte : bulletin expliqué ligne par ligne, net → brut, coût employeur, solde de tout compte, guides publics.
 
-*   **Simulation Multi-Étapes Fluide** : Parcours utilisateur guidé en 3 étapes (Choix Banque/Prêt, Profil Emprunteur, Résultats).
-*   **Sélection Dynamique des Offres** :
-    *   Catalogue de banques et de types de prêts configurables.
-    *   Affichage des conditions spécifiques (taux, durée, montant, âge, etc.).
-*   **Calculs Financiers Précis** :
-    *   Mensualités, coût total du crédit, part des intérêts.
-    *   **Analyse de la Quotité** : Calcul automatique du taux d'endettement, de la quotité disponible et du reste à vivre.
-    *   **Scoring Crédit** : Algorithme d'évaluation du profil emprunteur (basé sur l'âge, les revenus, la stabilité de l'emploi, etc.).
-*   **Interface Utilisateur Premium** :
-    *   Design responsive et esthétique.
-    *   Retours visuels interactifs (Jauges de quotité, animations de score).
-    *   Système de notifications (Toasts) pour la validation des données.
-*   **Tableau d'Amortissement** : Visualisation détaillée de l'échéancier de remboursement.
-*   **Administration & Analytics** :
-    *   Backend Node.js/Express avec base de données SQLite.
-    *   Suivi des visites et statistiques.
-    *   **Accès Admin** : Tableau de bord caché accessible via le raccourci `Ctrl + Shift + A`.
+La feuille de route est dans [ROADMAP.md](ROADMAP.md), le déploiement dans [DEPLOY.md](DEPLOY.md).
 
-## 🛠️ Stack Technique
+## Démarrer
 
-*   **Framework** : [Vue.js 3](https://vuejs.org/) (Composition API, Script Setup).
-*   **Build Tool** : [Vite](https://vitejs.dev/).
-*   **Styling** : CSS natif avec design system personnalisé (variables CSS, flexbox/grid).
-*   **Données** : Service de mock pour simuler une API backend (`src/services/mockData.js`).
+Toujours utiliser le runtime embarqué `./node.exe` (Node 20.17), pas le Node du système.
 
-## 🚀 Installation et Démarrage
+```bash
+npm install                 # dépendances du front ; celles du serveur : cd server && npm install
+npm run dev                 # front Vite (http://localhost:5173)
+npm run server              # API Express (port défini dans server/.env, 3002 par défaut)
+```
 
-Pré-requis : Node.js installé sur votre machine.
+## Commandes utiles
 
-1.  **Cloner le projet** (ou télécharger les sources)
-    ```bash
-    git clone https://github.com/votre-repo/financial-simulator.git
-    cd financial-simulator
-    ```
+| Commande | Rôle |
+| --- | --- |
+| `npm run test:paie` | Tests du moteur de paie CI (bulletins de référence vérifiés à la main) |
+| `node tests/paie/declarations.test.cjs` | Déclarations ITS, FDFP, DISA, livre et récap annuels |
+| `node tests/paie/cycle.test.cjs` | Cycle de paie, contrôles avant clôture, audit |
+| `node tests/paie/compta.test.cjs` | Journal de paie, export Sage, virement, provision congés |
+| `node tests/paie/explications.test.mjs` | Explications ligne par ligne du simulateur |
+| `npm run moteur:sync` | Régénère `server/moteur/paieCI.cjs` après toute modification de `paieCI.mjs` |
+| `npm run guides` | Régénère les pages `public/guides/` (`SITE_URL=…` ajoute sitemap et robots.txt) |
+| `node scripts/apercu-bulletins.cjs [dossier]` | Un PDF par modèle de bulletin (`--empreinte f.json` : empreinte pour comparer avant / après une modification) |
+| `node scripts/lister-routes.cjs` | Liste les routes de l'API et signale les doublons |
+| `node server/scripts/auditTransport.js --detail` | Repère les bulletins anciens à vérifier (transport au-delà du plafond) |
 
-2.  **Installer les dépendances**
-    ```bash
-    npm install
-    ```
-
-3.  **Lancer le serveur de développement**
-    ```bash
-    npm run dev
-    ```
-
-4.  **Accéder à l'application**
-    Ouvrez votre navigateur sur `http://localhost:5173` (ou le port indiqué dans la console).
-
-## 📂 Structure du Projet
+## Architecture
 
 ```
+server/
+├── moteur/paieCI.mjs        Moteur de paie CI : SOURCE UNIQUE, lue par le simulateur (Vite)
+├── moteur/paieCI.cjs        Copie CommonJS générée pour le serveur (npm run moteur:sync)
+├── moteur/paieBenin.js      Moteurs Bénin et Togo
+├── moteur/paieTogo.js
+├── payrollService.js        Génération des bulletins (lot, individuel, solde de tout compte), instantanés
+├── bulletins/               Un fichier par modèle de bulletin pdfmake + outils.js communs
+├── declarations/            CNPS, ITS, FDFP, DISA, états annuels ; rendu PDF / Excel / CSV commun
+├── compta/                  Plan comptable SYSCOHADA, journal de paie et OD, provision, virement
+├── paie/                    Cycle de paie (statuts, contrôles) et journal d'audit
+├── routes/                  Routeurs par domaine : auth, admin, paieGouvernance, rhDonnees, documents, ia
+├── server.js                Démarrage, middlewares, génération de paie, téléchargements
+└── database.js              Modèles Sequelize et migrations additives
 src/
-├── assets/          # Images et logos des banques
-├── components/      # Composants Vue réutilisables
-│   ├── steps/       # Composants spécifiques aux étapes du simulateur
-│   └── ...
-├── services/        # Services (ex: mockData.js pour les données)
-├── App.vue          # Composant racine (Orchestration du simulateur)
-├── style.css        # Styles globaux
-└── main.js          # Point d'entrée
+├── components/HRPayroll.vue          Espace RH (modules)
+├── components/PayslipSimulator.vue   Bulletin, explications, net → brut
+├── components/CoutEmployeurSimulator.vue
+├── components/hr/                    Déclarations, cycle de paie, plan comptable…
+└── services/calculators/index.js     Bénin / Togo ; la Côte d'Ivoire appelle le moteur partagé
+tests/paie/                           Tests du moteur, des déclarations, du cycle et de la compta
+scripts/                              Outils (synchro moteur, guides, aperçu bulletins, routes)
 ```
 
-## 📝 Règles de Gestion (Simulation)
+Règles à connaître :
 
-*   **Quotité Max** : 35% des revenus.
-*   **Quotité Cessible** : 33.33% (Norme UEMOA).
-*   **Reste à vivre** : Minimum vital calculé en fonction du nombre de personnes à charge.
-*   **Scoring** : Système de points sur 100 basé sur la stabilité financière et personnelle.
+- **Barèmes datés** : un taux qui change = une nouvelle version dans `BAREMES_CI` (`paieCI.mjs`) avec sa date d'effet, jamais une modification de l'ancienne.
+- **Fiche / contrat** : la fiche dit qui est le salarié (situation, zone, banque), le contrat dit ce qu'il perçoit.
+- **Historique figé** : chaque bulletin généré enregistre un instantané (`PayslipRecord`, dont `detailPaie`) ; un champ absent sur un ancien bulletin vaut `null`, jamais 0, et rend le document « partiel ».
 
-## 👥 Auteur
-**Développé par Narcisse Adingra (alias Sneezy) - Équipe Djeli**
-Développé avec ❤️ pour simplifier l'accès à l'information financière.
+## Auteur
+
+Narcisse Adingra.

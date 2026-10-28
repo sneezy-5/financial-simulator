@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import PayslipSimulator from './PayslipSimulator.vue'
 import SoldeCompteSimulator from './SoldeCompteSimulator.vue'
+import CoutEmployeurSimulator from './CoutEmployeurSimulator.vue'
 import LocalDatabasePanel from './LocalDatabasePanel.vue'
 import EmployeeDirectory from './EmployeeDirectory.vue'
 import SettingsPanel from './SettingsPanel.vue'
@@ -13,6 +14,7 @@ import FormationsManager from './hr/FormationsManager.vue'
 import PlanningManager from './hr/PlanningManager.vue'
 import DashboardManager from './hr/DashboardManager.vue'
 import DeclarationsManager from './hr/DeclarationsManager.vue'
+import CyclePaieManager from './hr/CyclePaieManager.vue'
 import EmployeeSelect from './hr/EmployeeSelect.vue'
 import { getCountryRules } from '../services/countryConfig.js'
 import { localDb } from '../services/localDatabase.js'
@@ -63,7 +65,7 @@ const countryRules = computed(() => getCountryRules(props.country))
 const isElectron = /electron/i.test(navigator.userAgent);
 const isPro = computed(() => !!user.value || isElectron)
 const isSimulatorMode = import.meta.env.VITE_APP_MODE === 'simulator'
-const PRO_MODULES = ['simulation', 'simulation_habituel', 'simulation_conges', 'solde', 'import', 'local_db', 'directory', 'settings', 'saisie', 'stats', 'analytics_entreprise', 'conges', 'contrats', 'evaluations', 'formations', 'planning', 'dashboard', 'documents', 'declarations']
+const PRO_MODULES = ['simulation', 'simulation_habituel', 'simulation_conges', 'solde', 'import', 'local_db', 'directory', 'settings', 'saisie', 'stats', 'analytics_entreprise', 'conges', 'contrats', 'evaluations', 'formations', 'planning', 'dashboard', 'documents', 'declarations', 'cycle']
 // En build simulateur, seuls ces modules restent joignables — peu importe la
 // connexion (isPro) ou une manipulation d'URL/props (?type=import, etc.) : le
 // reste du RH Pro (annuaire, import, dashboard, paramètres...) reste verrouillé.
@@ -1266,6 +1268,18 @@ const modules = computed(() => {
     steps: ['Entreprise', 'Employé', 'Calcul']
   },
   {
+    id: 'cout_employeur',
+    title: 'Coût Employeur',
+    subtitle: 'Recrutement · Augmentation',
+    description: `Combien coûte réellement un salarié, ce que rapporte une augmentation au salarié, et quel salaire permet votre budget.`,
+    icon: `<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>`,
+    isPro: false,
+    color: '#7c3aed',
+    gradient: 'linear-gradient(135deg, #4c1d95 0%, #7c3aed 100%)',
+    badge: 'Gratuit',
+    steps: ['Poste', 'Coût']
+  },
+  {
     id: 'local_db',
     title: 'Base Locale & PWA',
     subtitle: 'Confidentialité Totale',
@@ -1348,11 +1362,23 @@ const modules = computed(() => {
     gradient: 'linear-gradient(135deg, #78350f 0%, #f59e0b 100%)',
     badge: 'Pro',
     steps: ['Période', 'Génération']
+  },
+  {
+    id: 'cycle',
+    title: 'Cycle de Paie',
+    subtitle: 'Contrôle · Clôture · Audit',
+    description: `Contrôlez chaque période (anomalies, écarts avec le mois précédent), validez puis clôturez-la, et retrouvez qui a modifié quoi dans le journal d'audit.`,
+    icon: `<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>`,
+    isPro: true,
+    color: '#1e3a8a',
+    gradient: 'linear-gradient(135deg, #172554 0%, #1e40af 100%)',
+    badge: 'Pro',
+    steps: ['Contrôle', 'Validation', 'Clôture']
   }
   ]
 
   if (isSimulatorMode) {
-    const allowed = ['simulation_habituel', 'simulation_conges', 'solde']
+    const allowed = ['simulation_habituel', 'simulation_conges', 'solde', 'cout_employeur']
     return allModules.filter(m => allowed.includes(m.id))
   }
   return allModules
@@ -1459,7 +1485,7 @@ const activeModuleDetails = computed(() => {
                   <div style="font-weight: 700;">{{ moisNoms[p.mois - 1] }} {{ p.annee }}</div>
                   <div style="opacity: 0.7; font-size: 0.7rem;">{{ p.employeeCount }} bulletin(s)</div>
                 </div>
-                <span style="background: #dcfce7; color: #15803d; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 700; font-size: 0.7rem;">Validée</span>
+                <span :style="{ background: { closed: '#e0e7ff', validated: '#dcfce7' }[p.status] || '#f1f5f9', color: { closed: '#3730a3', validated: '#15803d' }[p.status] || '#475569' }" style="padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 700; font-size: 0.7rem;">{{ { closed: 'Clôturée', validated: 'Validée' }[p.status] || 'Brouillon' }}</span>
               </div>
             </div>
           </div>
@@ -1991,6 +2017,7 @@ const activeModuleDetails = computed(() => {
               <h4>Bulletins générés !</h4>
               <p>{{ result.message }}</p>
               <p style="font-size: 0.82rem; color: #64748b; margin-top: 4px;">Le ZIP contient un bulletin PDF par salarié, plus un état de paie récapitulatif au format Excel.</p>
+              <p v-for="(a, i) in (result.avertissements || [])" :key="i" style="font-size: 0.82rem; color: #92400e; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 8px 10px; margin-top: 8px;">⚠️ {{ a }}</p>
             </div>
             <button type="button" class="btn-download" :disabled="downloadingZip" @click="downloadZip(result.zipUrl)">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -2019,6 +2046,11 @@ const activeModuleDetails = computed(() => {
       <!-- ════ MODULE SOLDE ════ -->
       <div v-if="activeModule === 'solde'" class="module-content hr-module-view no-pad animate-in">
         <SoldeCompteSimulator :country="country" />
+      </div>
+
+      <!-- ════ SIMULATEUR EMPLOYEUR (coût, augmentation, budget) ════ -->
+      <div v-if="activeModule === 'cout_employeur'" class="module-content hr-module-view no-pad animate-in">
+        <CoutEmployeurSimulator />
       </div>
 
       <!-- ════ MODULE SAISIE MENSUELLE ════ -->
@@ -2483,6 +2515,11 @@ const activeModuleDetails = computed(() => {
       <!-- ════ MODULE DÉCLARATIONS SOCIALES ════ -->
       <div v-if="activeModule === 'declarations'" class="module-content hr-module-view no-pad animate-in">
         <DeclarationsManager :country="props.country" />
+      </div>
+
+      <!-- ════ MODULE CYCLE DE PAIE (contrôle, clôture, audit) ════ -->
+      <div v-if="activeModule === 'cycle'" class="module-content hr-module-view no-pad animate-in">
+        <CyclePaieManager />
       </div>
 
       <!-- ════ MODULE ÉVALUATIONS ════ -->

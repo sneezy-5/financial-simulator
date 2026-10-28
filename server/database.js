@@ -180,6 +180,29 @@ const User = sequelize.define('User', {
         type: DataTypes.BOOLEAN,
         allowNull: true // true = versement mensuel (≥ 20 salariés), false = trimestriel. null → déduit de l'effectif.
     },
+    // Base de proratisation des absences : 26 (jours ouvrables) ou 30 (jours
+    // calendaires). null → 26, la valeur par défaut du moteur de paie.
+    companyBaseJoursPaie: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+    },
+    // Zone de travail par défaut des salariés (plafond d'exonération du
+    // transport) : 'abidjan' | 'bouake' | 'interieur'. La fiche salarié prime. null → Abidjan.
+    companyZoneTransport: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    // Service d'assiette des impôts (ex. « CME Saint Jean ») — entête des déclarations DGI.
+    companyServiceAssiette: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    // Plan comptable de paie personnalisé (JSON { cle: numeroDeCompte }) ;
+    // null → plan SYSCOHADA par défaut (server/compta/planComptable.js).
+    comptesPaie: {
+        type: DataTypes.TEXT,
+        allowNull: true
+    },
     // Lequel des modèles de bulletin ONDA intégrés (voir payrollService.js :
     // generatePdfDefinition / generatePdfDefinitionGrilleNumerotee) utiliser par
     // défaut. Absent (null), on retombe sur le modèle classique.
@@ -272,12 +295,38 @@ const PayrollPeriod = sequelize.define('PayrollPeriod', {
     },
     status: {
         type: DataTypes.STRING,
-        defaultValue: 'draft' // 'draft' ou 'validated'
+        // Cycle de paie : 'draft' (calculée, modifiable) → 'validated' (contrôlée)
+        // → 'closed' (clôturée : plus de régénération ni de bulletin sur ce mois).
+        defaultValue: 'draft'
     },
     validatedAt: {
         type: DataTypes.DATE,
         allowNull: true
+    },
+    closedAt: {
+        type: DataTypes.DATE,
+        allowNull: true
     }
+});
+
+// JOURNAL D'AUDIT — qui a fait quoi, quand, avec les valeurs avant / après.
+// Écrit seulement par l'application (jamais modifié ni supprimé par une route) :
+// c'est la trace qu'un cabinet ou un auditeur demande avant de confier la paie.
+const AuditLog = sequelize.define('AuditLog', {
+    // Compte entreprise concerné (périmètre de lecture du journal).
+    userId: { type: DataTypes.INTEGER, allowNull: false },
+    // Auteur de l'action : aujourd'hui le titulaire du compte ; distinct pour
+    // préparer les rôles (plusieurs utilisateurs par entreprise).
+    auteurId: { type: DataTypes.INTEGER, allowNull: true },
+    auteurEmail: { type: DataTypes.STRING, allowNull: true },
+    action: { type: DataTypes.STRING, allowNull: false },     // ex. 'periode.cloturee'
+    entite: { type: DataTypes.STRING, allowNull: false },     // 'periode' | 'salarie' | 'parametres' | 'bulletin'
+    entiteId: { type: DataTypes.STRING, allowNull: true },
+    libelle: { type: DataTypes.STRING, allowNull: true },     // phrase lisible : « Clôture de Octobre 2026 »
+    details: { type: DataTypes.TEXT, allowNull: true },       // JSON : { changements: { champ: { avant, apres } }, ... }
+    ip: { type: DataTypes.STRING, allowNull: true }
+}, {
+    indexes: [{ fields: ['userId', 'createdAt'] }]
 });
 
 // Modèle BULLETIN ENREGISTRÉ (Instantané par salarié au moment de la génération — ne suit pas
@@ -325,7 +374,11 @@ const PayslipRecord = sequelize.define('PayslipRecord', {
     typeSalarie: { type: DataTypes.STRING, allowNull: true },     // 'M' | 'J' | 'H' (CNPS)
     anneeNaissance: { type: DataTypes.INTEGER, allowNull: true },
     dateEmbauche: { type: DataTypes.STRING, allowNull: true },
-    dateDepart: { type: DataTypes.STRING, allowNull: true }
+    dateDepart: { type: DataTypes.STRING, allowNull: true },
+    // Détail de paie figé (JSON) : ventilation des gains et retenues, congés
+    // acquis, coordonnées de paiement. Alimente le journal comptable, l'ordre de
+    // virement et la provision pour congés. null sur les bulletins antérieurs.
+    detailPaie: { type: DataTypes.TEXT, allowNull: true }
 });
 
 // Modèles RH (Multi-tenant via userId)
@@ -352,6 +405,13 @@ const Employee = sequelize.define('Employee', {
     // src/services/countryConfig.js) : cette distinction n'était nulle part
     // dans la fiche employé jusqu'ici.
     statutSalarie: { type: DataTypes.STRING, allowNull: true, defaultValue: 'local' },
+    // Zone de travail : fixe le plafond d'exonération de l'indemnité de
+    // transport ('abidjan' | 'bouake' | 'interieur'). null → Abidjan.
+    zoneTransport: { type: DataTypes.STRING, allowNull: true },
+    // Coordonnées de paiement : alimentent l'ordre de virement des salaires.
+    banque: { type: DataTypes.STRING, allowNull: true },
+    rib: { type: DataTypes.STRING, allowNull: true },
+    modePaiement: { type: DataTypes.STRING, allowNull: true }, // 'virement' | 'especes' | 'cheque'
     // 'cadre' ou 'employe' — alimente la répartition Cadres/Employés des
     // indicateurs RH (inspiré de la feuille LOGIPAIE « INDICATEURS RH »).
     categorieProfessionnelle: { type: DataTypes.STRING, allowNull: true },
@@ -714,7 +774,8 @@ PayrollRequest.belongsTo(User);
 // échouer le DROP dès qu'une autre table référence celle-ci. On désactive donc les FK autour
 // du sync, comme le fait déjà Sequelize lui-même pour `dropAllTables`.
 const isSqlite = sequelize.getDialect() === 'sqlite';
-(isSqlite ? sequelize.query('PRAGMA foreign_keys = OFF') : Promise.resolve())
+// Exportée (`pret`) pour les scripts qui doivent attendre la fin des migrations.
+const pret = (isSqlite ? sequelize.query('PRAGMA foreign_keys = OFF') : Promise.resolve())
     .then(() => sequelize.sync({ alter: false }))
     .finally(() => (isSqlite ? sequelize.query('PRAGMA foreign_keys = ON') : Promise.resolve()))
     .then(async () => {
@@ -743,6 +804,22 @@ const isSqlite = sequelize.getDialect() === 'sqlite';
                 await sequelize.getQueryInterface().addColumn('Users', 'companyCnpsVersementMensuel', { type: DataTypes.BOOLEAN, allowNull: true });
                 console.log('🛠️  Colonne Users.companyCnpsVersementMensuel ajoutée.');
             }
+            if (!colonnesUsers.comptesPaie) {
+                await sequelize.getQueryInterface().addColumn('Users', 'comptesPaie', { type: DataTypes.TEXT, allowNull: true });
+                console.log('🛠️  Colonne Users.comptesPaie ajoutée.');
+            }
+            if (!colonnesUsers.companyServiceAssiette) {
+                await sequelize.getQueryInterface().addColumn('Users', 'companyServiceAssiette', { type: DataTypes.STRING, allowNull: true });
+                console.log('🛠️  Colonne Users.companyServiceAssiette ajoutée.');
+            }
+            if (!colonnesUsers.companyZoneTransport) {
+                await sequelize.getQueryInterface().addColumn('Users', 'companyZoneTransport', { type: DataTypes.STRING, allowNull: true });
+                console.log('🛠️  Colonne Users.companyZoneTransport ajoutée.');
+            }
+            if (!colonnesUsers.companyBaseJoursPaie) {
+                await sequelize.getQueryInterface().addColumn('Users', 'companyBaseJoursPaie', { type: DataTypes.INTEGER, allowNull: true });
+                console.log('🛠️  Colonne Users.companyBaseJoursPaie ajoutée.');
+            }
             if (!colonnesUsers.freeMonthlyUsed) {
                 await sequelize.getQueryInterface().addColumn('Users', 'freeMonthlyUsed', { type: DataTypes.INTEGER, defaultValue: 0 });
                 console.log('🛠️  Colonne Users.freeMonthlyUsed ajoutée.');
@@ -764,6 +841,16 @@ const isSqlite = sequelize.getDialect() === 'sqlite';
             if (!colonnesEmployees.statutSalarie) {
                 await sequelize.getQueryInterface().addColumn('Employees', 'statutSalarie', { type: DataTypes.STRING, allowNull: true, defaultValue: 'local' });
                 console.log('🛠️  Colonne Employees.statutSalarie ajoutée.');
+            }
+            for (const colonne of ['banque', 'rib', 'modePaiement']) {
+                if (!colonnesEmployees[colonne]) {
+                    await sequelize.getQueryInterface().addColumn('Employees', colonne, { type: DataTypes.STRING, allowNull: true });
+                    console.log(`🛠️  Colonne Employees.${colonne} ajoutée.`);
+                }
+            }
+            if (!colonnesEmployees.zoneTransport) {
+                await sequelize.getQueryInterface().addColumn('Employees', 'zoneTransport', { type: DataTypes.STRING, allowNull: true });
+                console.log('🛠️  Colonne Employees.zoneTransport ajoutée.');
             }
             if (!colonnesEmployees.categorieProfessionnelle) {
                 await sequelize.getQueryInterface().addColumn('Employees', 'categorieProfessionnelle', { type: DataTypes.STRING, allowNull: true });
@@ -827,6 +914,26 @@ const isSqlite = sequelize.getDialect() === 'sqlite';
         // montant déjà stocké (base = montant / taux). Tout le reste (statut
         // local/expatrié, CN/CE, FDFP, brut imposable exact...) reste `null` :
         // la donnée réglementaire de l'époque n'existe pas, on ne l'invente pas.
+        try {
+            const colPeriodes = await sequelize.getQueryInterface().describeTable('PayrollPeriods');
+            if (!colPeriodes.closedAt) {
+                await sequelize.getQueryInterface().addColumn('PayrollPeriods', 'closedAt', { type: DataTypes.DATE, allowNull: true });
+                console.log('🛠️  Colonne PayrollPeriods.closedAt ajoutée.');
+            }
+        } catch (e) {
+            console.warn('Migration PayrollPeriods.closedAt :', e.message);
+        }
+
+        try {
+            const colDetail = await sequelize.getQueryInterface().describeTable('PayslipRecords');
+            if (!colDetail.detailPaie) {
+                await sequelize.getQueryInterface().addColumn('PayslipRecords', 'detailPaie', { type: DataTypes.TEXT, allowNull: true });
+                console.log('🛠️  Colonne PayslipRecords.detailPaie ajoutée.');
+            }
+        } catch (e) {
+            console.warn('Migration PayslipRecords.detailPaie :', e.message);
+        }
+
         try {
             const colPayslip = await sequelize.getQueryInterface().describeTable('PayslipRecords');
             const aAjouter = {
@@ -1098,7 +1205,7 @@ const isSqlite = sequelize.getDialect() === 'sqlite';
         console.error('❌ Erreur de synchronisation de la base de données:', err);
     });
 
-module.exports = { sequelize, Visit, PayrollRequest, User, AdminUser, CreditPack, SubscriptionPlan, BankLoan, Transaction, Invoice, License, PayrollPeriod, PayslipRecord, Employee, Absence, Formation, Evaluation, Template, LocalSettings };
+module.exports = { sequelize, pret, AuditLog, Visit, PayrollRequest, User, AdminUser, CreditPack, SubscriptionPlan, BankLoan, Transaction, Invoice, License, PayrollPeriod, PayslipRecord, Employee, Absence, Formation, Evaluation, Template, LocalSettings };
 
 
 
